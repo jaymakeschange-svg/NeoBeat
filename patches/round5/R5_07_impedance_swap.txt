@@ -1,0 +1,36 @@
+# R5_07: physics-defying coupling: a struck plate coupled to an open tube; while
+# it rings the impedance swaps, so the plate's ring pours into the tube's tone.
+name = impedance swap
+numGroups = 2
+lowMonoHz = 200
+hardness = 0.7
+g0.kind = explicit
+g0.baseHz = 210
+g0.ratios = 1 2.5 4 5 6.5 8.5 9 10
+g0.ratioLevels = 0 -2 -4 -5 -7 -8 -9 -10
+g0.t60 = 2.0
+g0.decayTilt = 0.2
+g0.width = 0.5
+g0.phaseWidth = 0.6
+g1.kind = harmonic
+g1.baseHz = 210
+g1.count = 12
+g1.tilt = -5
+g1.t60 = 1.4
+g1.strike = 0
+g1.noise = 0
+g1.width = 0.3
+couple.a = 0
+couple.b = 1
+couple.rateHz = 15
+couple.endRateHz = 60
+couple.balance = 0.9
+couple.endBalance = -0.9
+couple.morphTime = 0.6
+couple.posB = 0.2
+couple.partnerDb = -6
+roomLevel = 0.2
+attack = 0.001
+maxLength = 2.5
+gainDb = 2
+variation = 0.2

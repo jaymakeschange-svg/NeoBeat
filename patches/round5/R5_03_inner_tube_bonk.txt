@@ -1,0 +1,51 @@
+# R5_03: IronHead Bonk "Rubbery" translated: the tightest tone, the lowest and
+# warmest pitch with the metal mixed out, the longest ring, half knock, half
+# sizzle. A loose partner skin is coupled slowly, so energy sloshes back and
+# forth (the inner-tube wobble).
+name = inner tube bonk
+numGroups = 2
+lowMonoHz = 250
+hardness = 0.45
+g0.kind = explicit
+g0.baseHz = 96
+g0.ratios = 1 1.59 2.14 2.65 3.16
+g0.ratioLevels = 0 -6 -10 -14 -18
+g0.t60 = 1.6
+g0.decayTilt = 1.2
+g0.strikePos = 0.12
+g0.positionDepth = 0.4
+g0.width = 0.1
+g1.kind = explicit
+g1.baseHz = 97.5
+g1.ratios = 1 1.59 2.14
+g1.ratioLevels = 0 -6 -10
+g1.t60 = 0.9
+g1.decayTilt = 1.0
+g1.strike = 0
+g1.noise = 0
+g1.width = 0.4
+g1.phaseWidth = 0.5
+couple.a = 0
+couple.b = 1
+couple.rateHz = 6
+couple.balance = -0.1
+couple.posB = 0.2
+couple.partnerDb = -1
+sweepSemis = 4
+sweepTime = 0.05
+sweepCurve = -2
+clickLevel = 0.25
+clickHz = 1800
+clickQ = 0.9
+clickT60 = 0.01
+fizzLevel = 0.05
+fizzHz = 6500
+fizzQ = 0.6
+fizzT60 = 0.12
+fizzWidth = 0.6
+attack = 0.001
+maxLength = 2.2
+gainDb = 2
+velBright = 0.35
+velPitch = 0.4
+variation = 0.3

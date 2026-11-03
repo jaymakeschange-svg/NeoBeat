@@ -1,0 +1,41 @@
+# R5_05: the metal network on its own terms: Bonk's "metallic" side turned up,
+# 6 lines with inverted cross-feeds, rattled by noise and driven by a short
+# thump body, with a bouncing stick.
+name = junkyard clank
+numGroups = 1
+lowMonoHz = 200
+hardness = 0.85
+g0.kind = harmonic
+g0.baseHz = 140
+g0.count = 6
+g0.stretch = 0.05
+g0.tilt = -6
+g0.t60 = 0.18
+g0.width = 0.2
+metal.amount = 0.9
+metal.duck = 0.6
+metal.lines = 6
+metal.baseHz = 310
+metal.spread = 1.4
+metal.t60 = 0.9
+metal.brightHz = 7500
+metal.noise = 0.35
+metal.noiseT60 = 0.015
+metal.feed = 0.5
+metal.width = 0.8
+sweepSemis = 3
+sweepTime = 0.03
+clickLevel = 0.2
+clickHz = 5000
+clickQ = 0.8
+clickT60 = 0.005
+rebound = 0.25
+reboundMs = 30
+bounces = 2
+restitution = 0.55
+roomLevel = 0.15
+attack = 0.0005
+maxLength = 1.6
+gainDb = -6
+velNoise = 0.6
+variation = 0.4
