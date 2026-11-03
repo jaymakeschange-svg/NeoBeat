@@ -8,6 +8,7 @@
 //   neobeat_cli preset <index> <out.wav> [bars] [kit]   render a sequencer preset
 //   neobeat_cli presets <outdir> [bars]          render all presets
 //   neobeat_cli bench                            real-time cost of the busiest preset
+//   neobeat_cli kittour <kit> <out.wav>          every pad of a kit, one after another
 #include "../Source/engine/Engine.h"
 #include "../Source/engine/Sequencer.h"
 #include "../Source/engine/Presets.h"
@@ -153,6 +154,24 @@ int main (int argc, char** argv)
         renderPad (e, ps, vel, secs, L, R);
         writeWav24 (argv[3], L, R);
         std::printf ("momentary max %.1f LUFS, rms %.4f\n", momentaryMaxDb (L, R), rmsOf (L, R));
+        return 0;
+    }
+    if (mode == "kittour" && argc >= 4)
+    {
+        nb::applyKit (e, nb::kits()[(size_t) std::atoi (argv[2])]);
+        const float gap = 0.7f;
+        const size_t n = (size_t) ((16 * gap + 3.0f) * kRate);
+        std::vector<float> L (n, 0.0f), R (n, 0.0f);
+        size_t pos = 0;
+        for (int p = 0; p < 16; ++p)
+        {
+            const size_t at = (size_t) ((float) p * gap * kRate);
+            e.render (L.data() + pos, R.data() + pos, (int) (at - pos));
+            pos = at;
+            e.trigger (p, 0.85f);
+        }
+        e.render (L.data() + pos, R.data() + pos, (int) (n - pos));
+        writeWav24 (argv[3], L, R);
         return 0;
     }
     if (mode == "r6" && argc >= 3)

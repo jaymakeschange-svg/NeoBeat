@@ -244,7 +244,7 @@ public:
 
     std::array<PadSettings, kPads> pads {};
     std::array<std::atomic<uint32_t>, kPads> hitCounter {};
-    float master = 0.5f;   // -6 dB: a full kit hitting at once stays clear of the knee
+    float master = 0.35f;  // -9 dB: kick, snare and hats landing together stay clear of the knee
 
 private:
     Library library;

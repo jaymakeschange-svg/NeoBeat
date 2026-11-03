@@ -102,7 +102,7 @@ bool NeoBeatProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void NeoBeatProcessor::readParameters() noexcept
 {
-    engine->master = 0.5f * juce::Decibels::decibelsToGain (masterParam->load());
+    engine->master = 0.35f * juce::Decibels::decibelsToGain (masterParam->load());
     const int numSounds = (int) engine->lib().sounds.size();
     for (int p = 0; p < kPads; ++p)
     {
