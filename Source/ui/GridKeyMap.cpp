@@ -499,7 +499,7 @@ public:
             {
                 if (juce::ModifierKeys::currentModifiers.isPopupMenu() || juce::ModifierKeys::currentModifiers.isAltDown())
                 { auto& L2 = ctx.P().keymap.layers; L2[(size_t) i].on = ! L2[(size_t) i].on; ctx.changed(); return; }
-                grid.layer = i; refresh();
+                grid.layer = i; ctx.refreshAll();   // deferred: this button is rebuilt by the refresh
             };
             addAndMakeVisible (b);
         }

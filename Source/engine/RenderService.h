@@ -114,7 +114,8 @@ public:
         stop();
         {
             std::lock_guard<std::mutex> lock (mutex);
-            if (sampleRate != sr) { cache.clear(); sr = sampleRate; engineReady = false; }
+            // a new rate: everything renders again for it, from the last inputs (the editor only resubmits on edits)
+            if (sampleRate != sr) { cache.clear(); sr = sampleRate; engineReady = false; if (current) dirty = true; }
             quit = false;
         }
         worker = std::thread ([this] { run(); });
@@ -153,7 +154,6 @@ private:
     // ------------------------------------------------------------------ thread
     void run()
     {
-        std::unique_ptr<RenderInputs> current;
         while (true)
         {
             {
@@ -904,6 +904,7 @@ private:
     mutable std::mutex mutex, labelMutex;
     std::condition_variable cv;
     std::unique_ptr<RenderInputs> next;
+    std::unique_ptr<RenderInputs> current;   // the inputs being (or last) rendered: the worker's, or start()'s while it is stopped
     bool quit = false, dirty = false;
     std::atomic<int> total { 0 }, done { 0 };
     std::atomic<bool> isBusy { false };

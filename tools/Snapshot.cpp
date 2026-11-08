@@ -66,11 +66,12 @@ int main (int argc, char** argv)
         { "08_keymap", [&] { ctx.room = 3; ctx.select ({ ui::Sel::Zone, 16 }, 0); } },
         { "09_friction", [&] { ctx.room = 0; ctx.select ({ ui::Sel::Pad, 2 }, 0); ctx.openWindow (true, 0); } },
         { "10_bounce", [&] { ctx.fsOpen = false; ctx.openWindow (false, 0); } },
-        { "11_routes", [&] { ctx.bdOpen = false; ctx.listOpen = true; ctx.refreshAll(); } },
+        { "11_routes", [&] { ctx.bdOpen = false; ctx.listOpen = true; ctx.refreshNow(); } },
     };
     for (auto& s : shots)
     {
         s.set();
+        ctx.refreshNow();
         pump (*proc, 1500);
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         auto f = outDir.getChildFile (juce::String (s.name) + ".png");

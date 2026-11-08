@@ -88,7 +88,11 @@ struct Ctx
     int winCell = -1;        // the windows edit this One Shot cell's effect instead of a slot
     int brush = 3;           // One Shot / Sample brush: an fxIndex
     int markBrush = 0;       // Sequencer view: 0 dot, 1 dash, 2 warble, 3 tick, 4 spray, 5 erase, 6 select
-    std::function<void()> refreshAll;      // rebuild the inspector, tree and rooms
+    // Rebuild the inspector, tree and rooms once the current event is over. A button or knob that
+    // calls this is usually inside the panel being rebuilt, so the rebuild never deletes it mid-callback;
+    // several requests in one event make one rebuild.
+    std::function<void()> refreshAll;
+    std::function<void()> refreshNow;      // the same, immediately (tools that draw right after a change)
     void changed (bool rebuild = true) { proc.projectChanged(); if (rebuild && refreshAll) refreshAll(); }
     void select (Sel s, int newTab = -1) { sel = s; if (s.kind == Sel::Pad) { pad = s.index; proc.selectedPad.store (s.index); } if (newTab >= 0) tab = newTab; if (refreshAll) refreshAll(); }
     void openWindow (bool fs, int slot, int cell = -1);
@@ -173,7 +177,7 @@ struct Part
     virtual void tick() {}
 };
 
-class Shell final : public juce::Component, public juce::DragAndDropContainer, private juce::Timer
+class Shell final : public juce::Component, public juce::DragAndDropContainer, private juce::Timer, private juce::AsyncUpdater
 {
 public:
     explicit Shell (NeoBeatProcessor&);
@@ -185,6 +189,7 @@ public:
 
 private:
     void timerCallback() override;
+    void handleAsyncUpdate() override { refresh(); }
     Look look;
     std::unique_ptr<juce::Component> header, tree, inspector, dock, routeList, fsWindow, bdWindow;
     std::array<std::unique_ptr<juce::Component>, 4> rooms;

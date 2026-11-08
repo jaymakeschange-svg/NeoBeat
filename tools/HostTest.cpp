@@ -120,14 +120,14 @@ int main (int argc, char** argv)
         {
             switch (host.rnd.nextInt (9))
             {
-                case 0: ctx.room = host.rnd.nextInt (4); ctx.refreshAll(); break;
+                case 0: ctx.room = host.rnd.nextInt (4); ctx.refreshNow(); break;
                 case 1: ctx.select ({ ui::Sel::Pad, host.rnd.nextInt (16) }, host.rnd.nextInt (3)); break;
                 case 2: ctx.room = 1; proc->project.matrix.view = host.rnd.nextInt (3); ctx.select ({ ui::Sel::None, 0 }, host.rnd.nextInt (3)); break;
                 case 3: if (! proc->project.matrix.oneShot.cells.empty()) { ctx.room = 1; proc->project.matrix.view = 1; ctx.select ({ ui::Sel::Cell, host.rnd.nextInt ((int) proc->project.matrix.oneShot.cells.size()) }, host.rnd.nextInt (3)); } break;
                 case 4: ctx.openWindow (host.rnd.nextBool(), host.rnd.nextInt (8)); break;
-                case 5: ctx.fsOpen = ctx.bdOpen = false; ctx.listOpen = host.rnd.nextBool(); ctx.refreshAll(); break;
+                case 5: ctx.fsOpen = ctx.bdOpen = false; ctx.listOpen = host.rnd.nextBool(); ctx.refreshNow(); break;
                 case 6: if (! proc->project.keymap.zones.empty()) { ctx.room = 3; ctx.select ({ ui::Sel::Zone, host.rnd.nextInt ((int) proc->project.keymap.zones.size()) }, host.rnd.nextInt (3)); } break;
-                case 7: randomEdit (*proc, host.rnd); ctx.refreshAll(); break;
+                case 7: randomEdit (*proc, host.rnd); ctx.refreshNow(); break;
                 default: ctx.dockSrc = (nb::ModSrc) host.rnd.nextInt ((int) nb::ModSrc::Count); ctx.room = 2; ctx.select ({ ui::Sel::Grid, 0 }, host.rnd.nextInt (3)); break;
             }
             host.run (0.08);
@@ -190,7 +190,7 @@ int main (int argc, char** argv)
         int events = 0;
         for (int it = 0; it < 900 && shell != nullptr; ++it)
         {
-            if (it % 60 == 0) { shell->ctx.room = it / 60 % 4; shell->ctx.refreshAll(); }
+            if (it % 60 == 0) { shell->ctx.room = it / 60 % 4; shell->ctx.refreshNow(); }
             std::vector<juce::Component*> all;
             std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
             {
@@ -228,6 +228,7 @@ int main (int argc, char** argv)
                 if (auto* b = dynamic_cast<juce::Button*> (safe.getComponent())) if (host.rnd.nextInt (3) == 0) b->triggerClick();
             }
             ++events;
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (1);   // the deferred rebuilds land here, as in a host
             host.run (0.02);
             if (it % 50 == 0) { auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.4f); juce::ignoreUnused (img); }
         }

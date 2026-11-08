@@ -420,11 +420,13 @@ void Knob::mouseDown (const juce::MouseEvent& e)
         juce::PopupMenu add;
         for (int s = 0; s < (int) nb::ModSrc::Count; ++s) add.addItem (2000 + s, nb::modSrcName ((nb::ModSrc) s));
         m.addSubMenu ("Add a source", add);
-        m.showMenuAsync (juce::PopupMenu::Options(), [this] (int r)
+        // the knob may be rebuilt away while the menu is open: only the copies below are used
+        m.showMenuAsync (juce::PopupMenu::Options(), [&c = ctx, d = dest] (int r)
         {
-            auto& rs = ctx.P().mod.routes;
-            if (r >= 1000 && r < 2000 && r - 1000 < (int) rs.size()) { rs.erase (rs.begin() + (r - 1000)); ctx.changed(); }
-            else if (r >= 2000) addRoute (ctx, (nb::ModSrc) (r - 2000), dest);
+            if (r <= 0) return;   // dismissed (also what an editor closing with the menu open sends)
+            auto& rs = c.P().mod.routes;
+            if (r >= 1000 && r < 2000 && r - 1000 < (int) rs.size()) { rs.erase (rs.begin() + (r - 1000)); c.changed(); }
+            else if (r >= 2000) addRoute (c, (nb::ModSrc) (r - 2000), d);
         });
         return;
     }

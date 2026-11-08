@@ -394,6 +394,21 @@ int main (int argc, char** argv)
         // the audio thread never waits on the worker (a lock or a render on the audio thread would take
         // hundreds of ms); the limit is loose so it also holds under the sanitizers, which run 5-15x slower
         CHECK (blocks.load() > 20 && longest.load() < 150.0, "the audio thread kept running, never waiting on the worker");
+
+        // a new sample rate, the way the plugin does it (prepare while the worker runs, then restart it):
+        // the worker renders the last inputs again for the new rate, with no new edit
+        w->prepare (96000.0f, BLOCK);
+        w->startRenderer();
+        bool rerendered = false;
+        for (int i = 0; i < 1200 && ! rerendered; ++i)   // up to 60 s (sanitizer builds are slow)
+        {
+            std::this_thread::sleep_for (std::chrono::milliseconds (50));
+            const RtState* st = w->publisher.peek();
+            rerendered = st != nullptr && st->sr == 96000.0f && ! w->render().busy();
+        }
+        CHECK (rerendered, "after a sample-rate change everything renders again at the new rate");
+        w->render().stop();
+        w->prepare (SR, BLOCK);
     }
 
     std::printf ("\n%s: %d failure(s), %.1f s\n", failures == 0 ? "PASS" : "FAIL", failures, ms() / 1000.0);

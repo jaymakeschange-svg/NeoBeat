@@ -286,6 +286,7 @@ public:
         m.addItem (31, "Clear");
         m.showMenuAsync (juce::PopupMenu::Options(), [this, t, s] (int r)
         {
+            if (r <= 0) return;   // dismissed (also what an editor closing with the menu open sends)
             auto st2 = ctx.proc.pattern.get (t, s);
             if (st2.vel == 0 && r > 0 && r < 30) st2.vel = 96;
             if (r >= 1 && r <= 5) st2.roll = (uint8_t) (r == 1 ? 0 : r);

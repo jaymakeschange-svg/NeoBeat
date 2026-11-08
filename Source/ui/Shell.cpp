@@ -494,7 +494,8 @@ Shell::Shell (NeoBeatProcessor& p) : ctx (p)
     for (auto* c : { fsWindow.get(), bdWindow.get(), routeList.get() }) addChildComponent (c);
     for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get(), rooms[0].get(), rooms[1].get(), rooms[2].get(), rooms[3].get(), fsWindow.get(), bdWindow.get(), routeList.get() })
         if (auto* part = dynamic_cast<Part*> (c)) parts.push_back (part);
-    ctx.refreshAll = [this] { refresh(); };
+    ctx.refreshAll = [this] { triggerAsyncUpdate(); };
+    ctx.refreshNow = [this] { cancelPendingUpdate(); refresh(); };
     setSize (1440, 900);
     refresh();
     startTimerHz (30);
@@ -503,7 +504,9 @@ Shell::Shell (NeoBeatProcessor& p) : ctx (p)
 Shell::~Shell()
 {
     stopTimer();
-    ctx.refreshAll = nullptr;
+    cancelPendingUpdate();
+    juce::PopupMenu::dismissAllActiveMenus();   // their callbacks get 0 and touch nothing
+    ctx.refreshAll = nullptr; ctx.refreshNow = nullptr;
     setLookAndFeel (nullptr);
 }
 
