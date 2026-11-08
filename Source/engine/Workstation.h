@@ -509,7 +509,7 @@ private:
     void gridColumn (int pi, int col, double ppq) noexcept
     {
         const RtState* rt = cur;
-        if (rt == nullptr || ! rt->grid || rt->gridSamples.empty()) return;
+        if (rt == nullptr || ! rt->grid || rt->gridSamples.empty() || (size_t) pi >= rt->grid->size()) return;
         const auto& pat = (*rt->grid)[(size_t) pi];
         const int ns = (int) rt->gridSamples.size();
         HitContext hc; hc.beats = ppq; hc.bpm = bpm;

@@ -203,7 +203,9 @@ struct GridState
     std::string folder;
     std::vector<std::string> files;   // one per row (row % count)
     bool useKit = true;               // rows play the kit's 16 pads (until a folder is loaded)
-    std::array<GridPattern, 16> patterns {};
+    // 16 patterns of 64 x 64 cells (256 KB) live on the heap, so a Project stays small enough for any
+    // thread's stack (Windows gives threads 1 MB). Always 16; copies are deep.
+    std::vector<GridPattern> patterns = std::vector<GridPattern> (16);
     int current = 0;
     bool play = false;
     float level = 0.8f;

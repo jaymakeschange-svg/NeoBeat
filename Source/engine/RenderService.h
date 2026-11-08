@@ -47,7 +47,7 @@ struct RtState
     std::vector<ZoneLayer> layers;
     std::vector<RtZone> zones;
     std::vector<std::array<PadSettings, kNumPads>> kitPads;
-    std::shared_ptr<const std::array<GridPattern, 16>> grid;
+    std::shared_ptr<const std::vector<GridPattern>> grid;
     std::vector<std::shared_ptr<const SampleData>> gridSamples;
     int gridCurrent = 0; bool gridPlay = false; float gridLevel = 0.8f;
     bool seqOn = true;
@@ -557,7 +557,7 @@ private:
         S.gridPlay = P.grid.play; S.gridLevel = P.grid.level;
         {
             Hasher gh; for (const auto& pat : P.grid.patterns) { gh.i (pat.length).i (pat.rate).f (pat.swing); gh.bytes (pat.cells.data(), pat.cells.size() * 4); }
-            if (! lastGrid || gh.h != lastGridHash) { lastGrid = std::make_shared<const std::array<GridPattern, 16>> (P.grid.patterns); lastGridHash = gh.h; }
+            if (! lastGrid || gh.h != lastGridHash) { lastGrid = std::make_shared<const std::vector<GridPattern>> (P.grid.patterns); lastGridHash = gh.h; }
             S.grid = lastGrid;
         }
         if (P.grid.useKit || P.grid.files.empty())
@@ -896,7 +896,7 @@ private:
     std::unordered_map<uint64_t, RenderedPtr> cache;
     struct Grave { std::shared_ptr<const void> p; std::chrono::steady_clock::time_point at; };
     std::deque<Grave> graveyard;
-    std::shared_ptr<const std::array<GridPattern, 16>> lastGrid; uint64_t lastGridHash = 0;
+    std::shared_ptr<const std::vector<GridPattern>> lastGrid; uint64_t lastGridHash = 0;
     std::unordered_map<uint64_t, std::shared_ptr<const SampleData>> converted;
     std::shared_ptr<const SampleData> sampleOut, grainData; uint64_t sampleOutKey = 0, grainKey = 0; float sampleOutRms = 0.05f;
 
