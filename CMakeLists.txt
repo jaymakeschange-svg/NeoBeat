@@ -7,7 +7,8 @@ set_property (GLOBAL PROPERTY USE_FOLDERS ON)
 
 # the sources are UTF-8 (comments use a few symbols); MSVC otherwise reads them in the local code page
 if (MSVC)
-    add_compile_options (/utf-8)
+    add_compile_options (/utf-8 /Z7)                # /Z7: debug info in the objects (no shared PDB while compiling in parallel)
+    add_link_options (/DEBUG /OPT:REF /OPT:ICF)     # a PDB beside each binary, for readable crash stacks; the code is unchanged
 endif()
 
 # JUCE: a local checkout (-DJUCE_DIR=...) or fetched at configure time.
