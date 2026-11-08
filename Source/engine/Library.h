@@ -16,6 +16,17 @@
 
 namespace nb
 {
+// Depth and fatness defaults for a sound (see dsp/Character.h).
+struct CharacterSpec
+{
+    float body = 0.4f, fat = 0.4f, space = 0.2f;   // macro defaults 0..1
+    float bodyT60 = 0.3f, bodyDampHz = 4000.0f;    // the resonant body network
+    float bodyMaxHz = 400.0f;                      // the body is tuned to the sound's pitch, folded down to this
+    float bodyHz = 0.0f;                           // > 0: tune the body here instead (hats: up in the shimmer)
+    bool waveLayer = true;                         // a Wave-style tone under the hit
+    float wavePos = 14.0f, waveSemis = 0.0f, waveDecay = 0.25f, waveCutoff = 600.0f;
+};
+
 struct SoundDef
 {
     std::string id, name, group;
@@ -23,11 +34,18 @@ struct SoundDef
     int patchIndex = -1;
     Recipe recipe = Recipe::HornBonk;
     HollowSpec hollow;
+    CharacterSpec character;
     float defaultHollow = 0.0f;
     float pitchHz = 200.0f;
     // calibration (tools/neobeat_cli calibrate): dry trim, extra trim for the
     // hollow path, and the dry hit's RMS before trimming (the shaper's reference)
-    float trimDb = 0.0f, hollowTrimDb = 0.0f, levelRms = 0.05f;
+    float trimDb = 0.0f, hollowTrimDb = 0.0f, levelRms = 0.05f, peakRef = 0.3f;
+    // MaterialLab sounds: which learned material, how it is played, where it is heard
+    int material = -1;
+    BodyPlay bodyPlay;
+    StretchPlay stretchPlay;
+    int defaultPlace = -1;     // -1: NeoBeat's own short room (character Space); 0..7: a MaterialLab place
+    float preroll = 0.0f;      // stretch sounds: seconds from note-on to the snap (the sequencer starts them early)
 };
 
 class Library
@@ -86,9 +104,104 @@ public:
         addPatch ("lab/ih_knock", "IronHead Knock", "IronHead", patchById ("lab/ih_knock"));
         addPatch ("lab/ih_ding", "IronHead Ding", "IronHead", patchById ("lab/ih_ding"));
 
+        addMaterialLab();
+
         for (auto& s : sounds)
             for (const auto& c : kCalibration)
-                if (s.id == c.id) { s.trimDb = c.trimDb; s.hollowTrimDb = c.hollowTrimDb; s.levelRms = c.levelRms; }
+                if (s.id == c.id) { s.trimDb = c.trimDb; s.hollowTrimDb = c.hollowTrimDb; s.levelRms = c.levelRms; s.peakRef = c.peakRef; }
+        for (auto& s : sounds) s.character = characterFor (s.id);
+    }
+
+    // MaterialLab (by Marbelite): the seven learned impacts with their variations, and the
+    // Stretch & Snap family built on the learned rubber (friction v2 with the stretched strip).
+    void addMaterialLab()
+    {
+        tables.bodies.clear(); tables.rubbers.clear();
+        std::vector<std::string> bodyIds, rubberIds;
+        for (int i = 0; i < kNumMaterialTexts; ++i)
+        {
+            const auto& mt = kMaterialTexts[i];
+            if (std::string (mt.kind) == "body")
+            {
+                Engine2Material m;
+                if (parseEngine2Material (mt.join(), m).empty()) { tables.bodies.push_back (std::move (m)); bodyIds.push_back (mt.id); }
+            }
+            else
+            {
+                FrictionMaterial m;
+                if (parseFrictionMaterial (mt.join(), m).empty()) { tables.rubbers.push_back (std::move (m)); rubberIds.push_back (mt.id); }
+            }
+        }
+        auto bodyIndex = [&] (const char* id) { for (size_t i = 0; i < bodyIds.size(); ++i) if (bodyIds[i] == id) return (int) i; return -1; };
+        auto rubberIndex = [&] (const char* id) { for (size_t i = 0; i < rubberIds.size(); ++i) if (rubberIds[i] == id) return (int) i; return -1; };
+        auto body = [&] (const char* id, const char* name, const char* mat, Variation v, float pitchHz, int place = 1)
+        {
+            const int mi = bodyIndex (mat);
+            if (mi < 0) return;
+            SoundDef d; d.id = id; d.name = name; d.group = "MaterialLab"; d.kind = HitSource::Kind::Body;
+            d.material = mi; d.bodyPlay.variation = v; d.pitchHz = pitchHz; d.defaultPlace = place;
+            d.hollow = mlHollow (pitchHz);
+            sounds.push_back (d);
+        };
+        body ("ml/clank", "Clank", "clank", Variation::AsLearned, 400.0f);
+        body ("ml/tube_clank", "Tube Clank", "tube_clank_01", Variation::AsLearned, 180.0f);
+        body ("ml/hollow_pan", "Hollow Pan", "pan_02_01", Variation::AsLearned, 95.0f);
+        body ("ml/tin_can", "Tin Can", "can_12_01", Variation::AsLearned, 370.0f);
+        body ("ml/pvc_pipe", "PVC Pipe", "pvc_pipe_01", Variation::AsLearned, 140.0f);
+        body ("ml/bucket", "Bucket", "bucket_03_01", Variation::AsLearned, 190.0f);
+        body ("ml/basketball", "Basketball", "basketball_a_02", Variation::AsLearned, 120.0f, 2);
+        for (int v = 1; v < (int) Variation::Count; ++v)
+        {
+            static const char* ids[] = { "", "higher", "bigger", "longer", "warble", "frozen", "bloom", "soft", "buoyant", "drop", "elsewhere" };
+            const std::string id = std::string ("ml/clank_") + ids[v];
+            const std::string nm = std::string ("Clank ") + variationName ((Variation) v);
+            body (id.c_str(), nm.c_str(), "clank", (Variation) v, 400.0f);
+        }
+        body ("ml/tin_can_warble", "Tin Can more warble", "can_12_01", Variation::MoreWarble, 370.0f);
+        body ("ml/tin_can_soft", "Tin Can soft striker", "can_12_01", Variation::SoftStriker, 370.0f);
+        body ("ml/bucket_bloom", "Bucket bloom", "bucket_03_01", Variation::Bloom, 190.0f);
+        body ("ml/basketball_soft", "Basketball soft striker", "basketball_a_02", Variation::SoftStriker, 120.0f, 2);
+        body ("ml/hollow_pan_bigger", "Hollow Pan bigger body", "pan_02_01", Variation::BiggerBody, 70.0f, 2);
+        body ("ml/tube_clank_higher", "Tube Clank higher", "tube_clank_01", Variation::Higher, 240.0f);
+        body ("ml/pvc_pipe_buoyant", "PVC Pipe buoyant rise", "pvc_pipe_01", Variation::BuoyantRise, 140.0f);
+
+        // Stretch & Snap: the learned pull, played whole, from part-way through, faster, slower, and with the learner's variations
+        auto rubber = [&] (const char* id, const char* name, const char* mat, StretchPlay play, int place = 1)
+        {
+            const int mi = rubberIndex (mat);
+            if (mi < 0) return;
+            SoundDef d; d.id = id; d.name = name; d.group = "Stretch & Snap"; d.kind = HitSource::Kind::Stretch;
+            d.material = mi; d.stretchPlay = play; d.pitchHz = 1240.0f; d.defaultPlace = place;
+            d.preroll = std::max (0.0f, stretchSnapSeconds (tables.rubbers[(size_t) mi], play));
+            d.hollow = mlHollow (300.0f);
+            sounds.push_back (d);
+        };
+        auto P = [] (float from, float speed = 1.0f) { StretchPlay p; p.from = from; p.speed = speed; return p; };
+        rubber ("snap/full", "Snap Full Pull", "rubber_tabs_01", P (0.0f));
+        rubber ("snap/half", "Snap Half Pull", "rubber_tabs_01", P (0.5f));
+        rubber ("snap/short", "Snap Short", "rubber_tabs_01", P (0.8f));
+        rubber ("snap/flick", "Snap Flick", "rubber_tabs_01", P (0.93f));
+        rubber ("snap/zip", "Snap Zip", "rubber_tabs_01", P (0.6f, 3.0f));
+        rubber ("snap/slow", "Snap Slow Pull", "rubber_tabs_01", P (0.6f, 0.6f));
+        { auto p = P (0.7f); p.tight = true; rubber ("snap/tight", "Snap Tight Rubber", "rubber_tabs_01", p); }
+        { auto p = P (0.6f); p.slack = true; rubber ("snap/slack", "Snap Slack Rubber", "rubber_tabs_01", p); }
+        { auto p = P (0.7f); p.oneContact = true; rubber ("snap/one", "Snap One Contact", "rubber_tabs_01", p); }
+        { auto p = P (0.7f); p.lightBody = true; rubber ("snap/squeal", "Snap Squeal (light body)", "rubber_tabs_01", p); }
+        { auto p = P (0.6f); p.climbs = true; rubber ("snap/climb", "Snap Climb (impossible)", "rubber_tabs_01", p); }
+        { auto p = P (0.75f); p.metalBody = true; rubber ("snap/metal", "Snap Metal Body (impossible)", "rubber_tabs_01", p); }
+        { auto p = P (0.93f); p.metalBody = true; rubber ("snap/metal_flick", "Snap Metal Flick (impossible)", "rubber_tabs_01", p); }
+        { auto p = P (0.55f); p.snap = false; rubber ("snap/held", "Stretch Held (no release)", "rubber_tabs_01", p); }
+        rubber ("snap/rub", "Rubber Rub", "rubber_tabs_05", P (0.6f));
+        rubber ("snap/rub_zip", "Rubber Rub Zip", "rubber_tabs_05", P (0.5f, 2.5f));
+    }
+
+    static HollowSpec mlHollow (float pitchHz)
+    {
+        HollowSpec hs;
+        hs.f0 = pitchHz; hs.length = 0.8f; hs.stretch = 0.35f; hs.resFb = 0.82f; hs.resMix = 0.6f;
+        hs.inv = Breakpoints::make ({ { 0.0f, 0.0f }, { 0.4f, 0.3f }, { 1.0f, 0.15f } });
+        hs.cut = Breakpoints::make ({ { 0.0f, 10000.0f }, { 1.0f, 3000.0f } });
+        return hs;
     }
 
     int find (const std::string& id) const noexcept
@@ -100,6 +213,36 @@ public:
     std::vector<SoundDef> sounds;
     std::vector<ls::Patch> patches;
     SharedTables tables;
+
+    // Family voicing: rubber gets a short dark body and a hollow Wave tone,
+    // metal a longer bright body and a glassy tone, hats only a whisper of body.
+    static CharacterSpec characterFor (const std::string& id)
+    {
+        CharacterSpec c;
+        auto has = [&] (const char* k) { return id.find (k) != std::string::npos; };
+        if (has ("ml/") || has ("snap/"))
+        {   // the learned bodies have their own depth and space: only a touch of Wave fatness
+            c.body = 0.0f; c.fat = has ("snap/") ? 0.1f : 0.15f; c.space = 0.0f; c.waveLayer = false;
+            return c;
+        }
+        if (has ("R5_02") || has ("R5_03") || has ("R5_04") || has ("R5_08"))
+        { c.body = 0.5f; c.fat = 0.5f; c.space = 0.2f; c.bodyT60 = 0.22f; c.bodyDampHz = 3000.0f; c.wavePos = 14.0f; c.waveDecay = 0.22f; c.waveCutoff = 500.0f; }
+        else if (has ("R5_09") || has ("R5_10"))
+        { c.body = 0.25f; c.fat = 0.3f; c.space = 0.25f; c.bodyT60 = 0.15f; c.bodyDampHz = 9000.0f; c.bodyMaxHz = 6000.0f; c.bodyHz = 3200.0f; c.waveLayer = false; }
+        else if (has ("round5/"))
+        { c.body = 0.45f; c.fat = 0.4f; c.space = 0.25f; c.bodyT60 = 0.45f; c.bodyDampHz = 6000.0f; c.bodyMaxHz = 1200.0f; c.wavePos = 42.0f; c.waveSemis = 12.0f; c.waveDecay = 0.3f; c.waveCutoff = 1200.0f; }
+        else if (has ("round4/A"))
+        { c.body = 0.5f; c.fat = 0.45f; c.space = 0.25f; c.bodyT60 = 0.35f; c.bodyDampHz = 4500.0f; c.wavePos = 28.0f; c.waveDecay = 0.3f; c.waveCutoff = 700.0f; }
+        else if (has ("round4/B"))
+        { c.body = 0.45f; c.fat = 0.4f; c.space = 0.25f; c.bodyT60 = 0.3f; c.bodyDampHz = 4000.0f; c.bodyMaxHz = 800.0f; c.wavePos = 0.0f; c.waveSemis = -12.0f; c.waveDecay = 0.35f; c.waveCutoff = 500.0f; }
+        else if (has ("round4/C"))
+        { c.body = 0.4f; c.fat = 0.35f; c.space = 0.3f; c.bodyT60 = 0.8f; c.bodyDampHz = 7000.0f; c.bodyMaxHz = 1200.0f; c.wavePos = 56.0f; c.waveDecay = 0.5f; c.waveCutoff = 1500.0f; }
+        else if (has ("r6/"))
+        { c.body = 0.35f; c.fat = 0.35f; c.space = 0.2f; c.bodyT60 = 0.3f; c.bodyDampHz = 4000.0f; c.bodyMaxHz = 600.0f; c.waveLayer = false; }
+        else
+        { c.body = 0.45f; c.fat = 0.4f; c.space = 0.2f; c.bodyT60 = 0.25f; c.bodyDampHz = 4000.0f; c.wavePos = 14.0f; c.waveDecay = 0.2f; c.waveCutoff = 800.0f; }
+        return c;
+    }
 
 private:
     void addPatch (const std::string& id, const std::string& name, const std::string& group, int index)

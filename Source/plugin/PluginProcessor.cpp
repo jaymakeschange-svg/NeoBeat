@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "ProjectIO.h"
 
 namespace
 {
@@ -56,8 +57,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeoBeatProcessor::createLayo
 
 NeoBeatProcessor::NeoBeatProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      engine (std::make_unique<nb::Engine>()),
-      apvts (*this, nullptr, "NEOBEAT", createLayout (engine->lib()))
+      ws (std::make_unique<nb::Workstation>()),
+      apvts (*this, nullptr, "NEOBEAT", createLayout (ws->kit().lib()))
 {
     formats.registerBasicFormats();
     masterParam = apvts.getRawParameterValue ("master");
@@ -70,29 +71,37 @@ NeoBeatProcessor::NeoBeatProcessor()
         auto get = [&] (const char* n) { return apvts.getRawParameterValue (paramId (p, n)); };
         padParams[(size_t) p] = { get ("sound"), get ("tune"), get ("decay"), get ("tone"), get ("drive"), get ("hollow"),
                                   get ("evolve"), get ("pan"), get ("level"), get ("choke"), get ("mute") };
-        pendingAudition[(size_t) p].store (0.0f);
         useSample[(size_t) p].store (false);
-        sampleRms[(size_t) p] = 0.05f;
+        sampleRms[(size_t) p].store (0.05f);
     }
     pattern.load (nb::presets()[0].pattern);
-    events.reserve (4096);
+    midiIn.reserve (1024);
+    midiOut.reserve (1024);
+    startTimer (60);
+}
+
+NeoBeatProcessor::~NeoBeatProcessor()
+{
+    stopTimer();
+    ws->render().stop();
 }
 
 const juce::String NeoBeatProcessor::getProgramName (int index)
 {
-    if (index < 0 || index >= nb::kNumPresets) return {};
-    return nb::presets()[(size_t) index].name;
+    if (index < 0 || index >= nb::numPatterns()) return {};
+    return nb::patternPreset (index).name;
 }
 
 void NeoBeatProcessor::prepareToPlay (double newSampleRate, int samplesPerBlock)
 {
     sampleRate = newSampleRate;
-    engine->prepare ((float) sampleRate);
-    sequencer.prepare ((float) sampleRate);
+    maxBlock = std::max (samplesPerBlock, 32);
+    ws->prepare ((float) sampleRate, std::max (maxBlock, 4096));
+    ws->startRenderer();
     seenVersion = 0;
-    tapScratch.assign ((size_t) std::max (samplesPerBlock, 1) * 2, 0.0f);
-    for (auto& o : pendingOffs) o = {};
-    heldKeys = 0;
+    tapScratch.assign ((size_t) std::max (maxBlock, 4096), 0.0f);
+    submittedHash = 0;   // render again for this sample rate
+    prepared = true;
 }
 
 bool NeoBeatProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -102,26 +111,40 @@ bool NeoBeatProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void NeoBeatProcessor::readParameters() noexcept
 {
-    engine->master = 0.35f * juce::Decibels::decibelsToGain (masterParam->load());
-    const int numSounds = (int) engine->lib().sounds.size();
+    auto& eng = ws->kit();
+    ws->masterBase = 0.35f * juce::Decibels::decibelsToGain (masterParam->load());
+    const int numSounds = (int) eng.lib().sounds.size();
     for (int p = 0; p < kPads; ++p)
     {
         auto& pp = padParams[(size_t) p];
-        auto& ps = engine->pads[(size_t) p];
+        auto& ps = eng.pads[(size_t) p];
         ps.sound = juce::jlimit (0, numSounds - 1, (int) pp.sound->load());
-        ps.tune = pp.tune->load();
-        ps.decay = pp.decay->load();
-        ps.tone = pp.tone->load();
-        ps.drive = pp.drive->load();
-        ps.hollow = pp.hollow->load();
-        ps.evolve = pp.evolve->load();
-        ps.pan = pp.pan->load();
-        ps.levelDb = pp.level->load();
+        ps.tune = pp.tune->load(); ps.decay = pp.decay->load(); ps.tone = pp.tone->load(); ps.drive = pp.drive->load();
+        ps.hollow = pp.hollow->load(); ps.evolve = pp.evolve->load(); ps.pan = pp.pan->load(); ps.levelDb = pp.level->load();
         ps.choke = (int) pp.choke->load();
         ps.useSample = useSample[(size_t) p].load();
         ps.sample = ps.useSample ? std::atomic_load (&liveSamples[(size_t) p]) : nullptr;
-        ps.sampleRms = sampleRms[(size_t) p];
+        ps.sampleRms = sampleRms[(size_t) p].load();
     }
+}
+
+std::array<nb::PadSettings, NeoBeatProcessor::kPads> NeoBeatProcessor::padSettingsNow() const
+{
+    std::array<nb::PadSettings, kPads> a {};
+    const int numSounds = (int) ws->kit().lib().sounds.size();
+    for (int p = 0; p < kPads; ++p)
+    {
+        const auto& pp = padParams[(size_t) p];
+        auto& ps = a[(size_t) p];
+        ps.sound = juce::jlimit (0, numSounds - 1, (int) pp.sound->load());
+        ps.tune = pp.tune->load(); ps.decay = pp.decay->load(); ps.tone = pp.tone->load(); ps.drive = pp.drive->load();
+        ps.hollow = pp.hollow->load(); ps.evolve = pp.evolve->load(); ps.pan = pp.pan->load(); ps.levelDb = pp.level->load();
+        ps.choke = (int) pp.choke->load();
+        ps.useSample = useSample[(size_t) p].load() && samples[(size_t) p] != nullptr;
+        ps.sample = ps.useSample ? samples[(size_t) p] : nullptr;
+        ps.sampleRms = sampleRms[(size_t) p].load();
+    }
+    return a;
 }
 
 void NeoBeatProcessor::pushTap (const float* data, int n) noexcept
@@ -136,192 +159,172 @@ void NeoBeatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     buffer.clear();
-    if (n <= 0) return;
+    if (n <= 0 || buffer.getNumChannels() < 2) { midi.clear(); return; }
+    if (! prepared) { midi.clear(); return; }
     readParameters();
 
     const uint32_t v = pattern.version.load (std::memory_order_acquire);
-    if (v != seenVersion)
-    {
-        pattern.snapshot (patternCopy);
-        sequencer.setPattern (patternCopy);
-        seenVersion = v;
-    }
+    if (v != seenVersion) { pattern.snapshot (patternCopy); ws->setPattern (patternCopy); seenVersion = v; }
 
-    // Transport
-    double bpm = tempoParam->load(), hostPpq = 0.0;
-    bool hostPlaying = false;
+    nb::Transport tr;
+    tr.bpm = tempoParam->load();
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
-            if (auto b = pos->getBpm()) bpm = *b;
-            if (auto q = pos->getPpqPosition()) { hostPpq = *q; hostPlaying = pos->getIsPlaying(); }
+            if (auto b = pos->getBpm()) tr.bpm = *b;
+            if (auto q = pos->getPpqPosition()) { tr.hostPpq = *q; tr.hostPlaying = pos->getIsPlaying(); tr.hostHasPpq = true; }
         }
-    hostSynced.store (hostPlaying);
-    displayBpm.store (bpm);
-    const int mode = (int) modeParam->load();
-    const bool run = runParam->load() > 0.5f;
-    const float swing = swingParam->load();
+    if (! (tr.bpm > 1.0 && tr.bpm < 1000.0)) tr.bpm = 120.0;
+    hostSynced.store (tr.hostPlaying);
+    displayBpm.store (tr.bpm);
 
-    // MIDI in: pads, key-transpose, panic
-    struct Trigger { int offset; int pad; float velocity; float semis; bool fromSequencer; };
-    std::array<Trigger, 512> triggers;
-    int numTriggers = 0;
-    const bool keysWereHeld = heldKeys > 0;
+    nb::BlockParams bp;
+    bp.mode = (int) modeParam->load();
+    bp.run = runParam->load() > 0.5f;
+    bp.swing = swingParam->load();
+    bp.tapPad = selectedPad.load();
+    for (int p = 0; p < kPads; ++p) bp.mute[(size_t) p] = padParams[(size_t) p].mute->load() > 0.5f;
+
+    midiIn.clear();
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
-        const int at = juce::jlimit (0, n - 1, meta.samplePosition);
-        if (m.isNoteOn())
-        {
-            const int note = m.getNoteNumber();
-            if (note >= kPadNoteBase && note < kPadNoteBase + kPads && numTriggers < (int) triggers.size())
-                triggers[(size_t) numTriggers++] = { at, note - kPadNoteBase, m.getFloatVelocity(), 0.0f, false };
-            else if (note >= kKeyRoot && mode == 1)
-            {
-                ++heldKeys;
-                keySemis = note - kKeyRoot;
-            }
-        }
-        else if (m.isNoteOff())
-        {
-            if (m.getNoteNumber() >= kKeyRoot && mode == 1) heldKeys = std::max (0, heldKeys - 1);
-        }
-        else if (m.isAllNotesOff() || m.isAllSoundOff())
-        {
-            heldKeys = 0;
-            engine->allNotesOff();
-        }
+        if (midiIn.size() >= midiIn.capacity()) break;
+        if (m.isNoteOn()) midiIn.push_back ({ meta.samplePosition, 0, m.getNoteNumber(), m.getFloatVelocity() });
+        else if (m.isNoteOff()) midiIn.push_back ({ meta.samplePosition, 1, m.getNoteNumber(), 0.0f });
+        else if (m.isAllNotesOff() || m.isAllSoundOff()) midiIn.push_back ({ meta.samplePosition, 2, 0, 0.0f });
     }
     midi.clear();
-    if (mode == 1 && heldKeys > 0 && ! keysWereHeld) keyPpq = 0.0;   // a fresh key press starts the pattern from the top
-
-    for (int p = 0; p < kPads; ++p)
-    {
-        const float a = pendingAudition[(size_t) p].exchange (0.0f);
-        if (a > 0.0f && numTriggers < (int) triggers.size()) triggers[(size_t) numTriggers++] = { 0, p, a, 0.0f, false };
-    }
-
-    // Sequencer
-    events.clear();
-    bool seqOn = false;
-    double ppq0 = 0.0;
-    float semis = 0.0f;
-    if (mode == 0)
-    {
-        if (hostPlaying) { seqOn = true; ppq0 = hostPpq; }
-        else if (run) { seqOn = true; ppq0 = internalPpq; }
-    }
-    else if (mode == 1 && heldKeys > 0)
-    {
-        seqOn = true;
-        ppq0 = hostPlaying ? hostPpq : keyPpq;
-        semis = (float) keySemis;
-    }
-    if (seqOn) sequencer.collect (ppq0, bpm, n, true, swing, semis, events);
-    const double ppqPerBlock = bpm / 60.0 * n / sampleRate;
-    if (mode == 0 && ! hostPlaying && run) internalPpq += ppqPerBlock;
-    else if (! run) internalPpq = 0.0;
-    if (mode == 1 && heldKeys > 0 && ! hostPlaying) keyPpq += ppqPerBlock;
-    playStep.store (seqOn ? sequencer.stepAt (ppq0) : -1);
-
-    for (const auto& e : events)
-        if (numTriggers < (int) triggers.size())
-            triggers[(size_t) numTriggers++] = { e.offset, e.pad, e.velocity, semis, true };
-    std::stable_sort (triggers.begin(), triggers.begin() + numTriggers, [] (const Trigger& a, const Trigger& b) { return a.offset < b.offset; });
-
-    // Render in segments between hits
+    midiOut.clear();
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getWritePointer (1);
-    if ((int) tapScratch.size() < n) return;   // host broke its promised block size; stay silent rather than allocate
-    const int tapPad = selectedPad.load();
-    int done = 0;
-    for (int i = 0; i < numTriggers; ++i)
-    {
-        const auto& t = triggers[(size_t) i];
-        if (t.offset > done)
-        {
-            engine->render (L + done, R + done, t.offset - done, tapScratch.data() + done, tapPad);
-            done = t.offset;
-        }
-        if (t.fromSequencer && padParams[(size_t) t.pad].mute->load() > 0.5f) continue;
-        engine->trigger (t.pad, t.velocity, t.semis);
-        if (t.fromSequencer)
-        {
-            const int note = kPadNoteBase + t.pad;
-            midi.addEvent (juce::MidiMessage::noteOn (10, note, (juce::uint8) juce::jlimit (1, 127, juce::roundToInt (t.velocity * 127.0f))), t.offset);
-            for (auto& o : pendingOffs)
-                if (o.note < 0) { o.note = note; o.samplesLeft = t.offset + (int) (0.06 * sampleRate); break; }
-        }
-    }
-    if (n > done) engine->render (L + done, R + done, n - done, tapScratch.data() + done, tapPad);
-    for (auto& o : pendingOffs)
-    {
-        if (o.note < 0) continue;
-        if (o.samplesLeft < n) { midi.addEvent (juce::MidiMessage::noteOff (10, o.note), std::max (0, o.samplesLeft)); o.note = -1; }
-        else o.samplesLeft -= n;
-    }
+    if ((int) tapScratch.size() < n) return;
+    ws->process (L, R, n, tr, bp, midiIn.data(), (int) midiIn.size(), midiOut, tapScratch.data());
+    for (const auto& o : midiOut)
+        midi.addEvent (o.on ? juce::MidiMessage::noteOn (10, o.note, (juce::uint8) o.velocity) : juce::MidiMessage::noteOff (10, o.note), juce::jlimit (0, n - 1, o.offset));
+    playStep.store (ws->playStep.load());
     pushTap (tapScratch.data(), n);
+}
+
+// ------------------------------------------------------------------ the render inputs
+
+void NeoBeatProcessor::timerCallback()
+{
+    if (! prepared) return;
+    // what the renders depend on: pads, pattern, tempo, swing, the project, the files
+    nb::Hasher h;
+    for (int p = 0; p < kPads; ++p)
+    {
+        const auto& pp = padParams[(size_t) p];
+        for (auto* a : { pp.sound, pp.tune, pp.decay, pp.tone, pp.drive, pp.hollow, pp.evolve, pp.choke }) h.f (a->load());
+        h.i (useSample[(size_t) p].load()).p (samples[(size_t) p].get());
+    }
+    h.u (pattern.version.load()).d (std::round (displayBpm.load() * 10.0)).f (swingParam->load()).u (projectVersion.load()).i ((int64_t) files.size());
+    const juce::uint32 now = juce::Time::getMillisecondCounter();
+    if (h.h == submittedHash) return;
+    if (h.h != pendingHash) { pendingHash = h.h; pendingSince = now; return; }
+    if (now - pendingSince < 140) return;
+    auto in = std::make_unique<nb::RenderInputs>();
+    in->project = project;
+    in->pads = padSettingsNow();
+    pattern.snapshot (in->pattern);
+    in->bpm = displayBpm.load();
+    in->swing = swingParam->load();
+    in->files = files;
+    ws->render().submit (std::move (in));
+    submittedHash = h.h;
 }
 
 // ------------------------------------------------------------------ editor actions
 
+void NeoBeatProcessor::setParam (const juce::String& id, float value)
+{
+    if (auto* prm = apvts.getParameter (id)) prm->setValueNotifyingHost (prm->convertTo0to1 (value));
+}
+
 void NeoBeatProcessor::loadPreset (int index)
 {
-    if (index < 0 || index >= nb::kNumPresets) return;
-    const auto& p = nb::presets()[(size_t) index];
+    if (index < 0 || index >= nb::numPatterns()) return;
+    const auto p = nb::patternPreset (index);
     pattern.load (p.pattern);
-    if (auto* s = apvts.getParameter ("swing")) s->setValueNotifyingHost (s->convertTo0to1 (p.swing));
-    if (auto* t = apvts.getParameter ("tempo")) t->setValueNotifyingHost (t->convertTo0to1 (p.tempo));
+    setParam ("swing", p.swing);
+    setParam ("tempo", p.tempo);
     currentPreset.store (index);
 }
 
 void NeoBeatProcessor::loadKit (int index)
 {
     if (index < 0 || index >= (int) nb::kits().size()) return;
-    const auto& kit = nb::kits()[(size_t) index];
-    const auto& lib = engine->lib();
+    const auto& lib = ws->kit().lib();
     for (int p = 0; p < kPads; ++p)
     {
-        const auto& kp = kit.pads[(size_t) p];
-        const int si = std::max (0, lib.find (kp.sound));
-        auto set = [&] (const char* name, float value)
-        {
-            if (auto* prm = apvts.getParameter (paramId (p, name))) prm->setValueNotifyingHost (prm->convertTo0to1 (value));
-        };
-        set ("sound", (float) si);
-        set ("tune", kp.tune); set ("decay", kp.decay); set ("tone", kp.tone); set ("drive", kp.drive);
-        set ("hollow", kp.hollow >= 0.0f ? kp.hollow : lib.sounds[(size_t) si].defaultHollow);
-        set ("evolve", kp.evolve); set ("pan", kp.pan); set ("level", kp.levelDb); set ("choke", (float) kp.choke);
+        const auto ps = nb::kitPadSettings (lib, index, p);
+        setParam (paramId (p, "sound"), (float) ps.sound);
+        setParam (paramId (p, "tune"), ps.tune); setParam (paramId (p, "decay"), ps.decay); setParam (paramId (p, "tone"), ps.tone);
+        setParam (paramId (p, "drive"), ps.drive); setParam (paramId (p, "hollow"), ps.hollow); setParam (paramId (p, "evolve"), ps.evolve);
+        setParam (paramId (p, "pan"), ps.pan); setParam (paramId (p, "level"), ps.levelDb); setParam (paramId (p, "choke"), (float) ps.choke);
         clearSample (p);
     }
     currentKit.store (index);
 }
 
-bool NeoBeatProcessor::loadSample (int pad, const juce::File& file)
+std::shared_ptr<const nb::SampleData> NeoBeatProcessor::loadFile (const juce::File& file)
 {
+    const std::string key = file.getFullPathName().toStdString();
+    if (auto it = files.find (key); it != files.end()) return it->second;
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
-    if (reader == nullptr || reader->lengthInSamples <= 0) return false;
-    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 20.0));
+    if (reader == nullptr || reader->lengthInSamples <= 0 || reader->sampleRate <= 0.0) return nullptr;
+    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 30.0));
     juce::AudioBuffer<float> b ((int) std::max (1u, reader->numChannels), len);
     reader->read (&b, 0, len, 0, true, true);
     auto data = std::make_shared<nb::SampleData>();
     data->sampleRate = (float) reader->sampleRate;
-    data->path = file.getFullPathName().toStdString();
+    data->path = key;
     data->left.assign (b.getReadPointer (0), b.getReadPointer (0) + len);
     const float* right = b.getNumChannels() > 1 ? b.getReadPointer (1) : b.getReadPointer (0);
     data->right.assign (right, right + len);
+    for (auto* ch : { &data->left, &data->right }) for (auto& x : *ch) if (! std::isfinite (x)) x = 0.0f;
+    std::shared_ptr<const nb::SampleData> ptr = data;
+    files[key] = ptr;
+    keepAlive.push_back (ptr);
+    return ptr;
+}
+
+int NeoBeatProcessor::loadGridFolder (const juce::File& folder)
+{
+    if (! folder.isDirectory()) return 0;
+    auto found = folder.findChildFiles (juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+    found.sort();
+    std::vector<std::string> paths;
+    for (const auto& f : found)
+    {
+        if ((int) paths.size() >= nb::GridPattern::kSize) break;
+        if (loadFile (f)) paths.push_back (f.getFullPathName().toStdString());
+    }
+    if (paths.empty()) return 0;
+    project.grid.folder = folder.getFullPathName().toStdString();
+    project.grid.files = paths;
+    project.grid.useKit = false;
+    projectChanged();
+    return (int) paths.size();
+}
+
+bool NeoBeatProcessor::loadSample (int pad, const juce::File& file)
+{
+    auto ptr = loadFile (file);
+    if (! ptr) return false;
     double sum = 0.0; int last = 1;
+    const int len = (int) ptr->left.size();
     for (int i = 0; i < len; ++i)
     {
-        sum += 0.5 * ((double) data->left[(size_t) i] * data->left[(size_t) i] + (double) data->right[(size_t) i] * data->right[(size_t) i]);
-        if (std::fabs (data->left[(size_t) i]) > 1.0e-4f) last = i + 1;
+        sum += 0.5 * ((double) ptr->left[(size_t) i] * ptr->left[(size_t) i] + (double) ptr->right[(size_t) i] * ptr->right[(size_t) i]);
+        if (std::fabs (ptr->left[(size_t) i]) > 1.0e-4f) last = i + 1;
     }
-    sampleRms[(size_t) pad] = (float) std::sqrt (sum / std::max (last, 1));
-    std::shared_ptr<const nb::SampleData> ptr = data;
-    keepAlive.push_back (ptr);
+    sampleRms[(size_t) pad].store ((float) std::sqrt (sum / std::max (last, 1)));
     samples[(size_t) pad] = ptr;
     std::atomic_store (&liveSamples[(size_t) pad], ptr);
     useSample[(size_t) pad].store (true);
+    projectChanged();
     return true;
 }
 
@@ -330,20 +333,156 @@ void NeoBeatProcessor::clearSample (int pad)
     useSample[(size_t) pad].store (false);
     std::atomic_store (&liveSamples[(size_t) pad], std::shared_ptr<const nb::SampleData>());
     samples[(size_t) pad].reset();
+    projectChanged();
 }
 
 juce::String NeoBeatProcessor::padName (int pad) const
 {
     if (useSample[(size_t) pad].load() && samples[(size_t) pad]) return juce::File (samples[(size_t) pad]->path).getFileNameWithoutExtension();
-    const int si = juce::jlimit (0, (int) engine->lib().sounds.size() - 1, (int) padParams[(size_t) pad].sound->load());
-    return engine->lib().sounds[(size_t) si].name;
+    const int si = juce::jlimit (0, (int) ws->kit().lib().sounds.size() - 1, (int) padParams[(size_t) pad].sound->load());
+    return ws->kit().lib().sounds[(size_t) si].name;
 }
 
 juce::String NeoBeatProcessor::padGroup (int pad) const
 {
     if (useSample[(size_t) pad].load()) return "Sample";
-    const int si = juce::jlimit (0, (int) engine->lib().sounds.size() - 1, (int) padParams[(size_t) pad].sound->load());
-    return engine->lib().sounds[(size_t) si].group;
+    const int si = juce::jlimit (0, (int) ws->kit().lib().sounds.size() - 1, (int) padParams[(size_t) pad].sound->load());
+    return ws->kit().lib().sounds[(size_t) si].group;
+}
+
+void NeoBeatProcessor::reloadProjectFiles()
+{
+    for (const auto& f : project.grid.files) loadFile (juce::File (f));
+    for (const auto& z : project.keymap.zones) if (! z.file.empty()) loadFile (juce::File (z.file));
+    if (! project.matrix.sample.file.empty()) loadFile (juce::File (project.matrix.sample.file));
+}
+
+// ------------------------------------------------------------------ user presets
+
+juce::File NeoBeatProcessor::userRoot()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Marbelite").getChildFile ("NeoBeat").getChildFile ("Presets");
+}
+
+juce::StringArray NeoBeatProcessor::userPresets (const juce::String& section) const
+{
+    juce::StringArray names;
+    for (const auto& f : userRoot().getChildFile (section).findChildFiles (juce::File::findFiles, false, "*.nbp"))
+        names.add (f.getFileNameWithoutExtension());
+    names.sortNatural();
+    return names;
+}
+
+std::unique_ptr<juce::XmlElement> NeoBeatProcessor::sectionXml (const juce::String& section)
+{
+    auto e = std::make_unique<juce::XmlElement> ("NEOBEAT_PRESET");
+    e->setAttribute ("section", section);
+    if (section == "OneShot") io::writeOneShot (*e->createNewChildElement ("ONESHOT"), project.matrix.oneShot);
+    else if (section == "Sample") io::writeSample (*e->createNewChildElement ("SAMPLE"), project.matrix.sample);
+    else if (section == "Sequencer") io::writeSeq (*e->createNewChildElement ("SEQ"), project.matrix.seq);
+    else if (section == "Grid") io::writeGrid (*e->createNewChildElement ("GRID"), project.grid);
+    else if (section == "KeyMap") io::writeKeyMap (*e->createNewChildElement ("KEYMAP"), project.keymap);
+    else if (section == "Mod") io::writeMod (*e->createNewChildElement ("MOD"), project.mod);
+    else if (section == "Pattern")
+    {
+        nb::Pattern p; pattern.snapshot (p);
+        auto* pe = e->createNewChildElement ("PATTERN"); io::writePattern (*pe, p);
+        pe->setAttribute ("swing", (double) swingParam->load()); pe->setAttribute ("tempo", (double) tempoParam->load());
+    }
+    else if (section == "Kit")
+    {
+        auto* ke = e->createNewChildElement ("KIT");
+        auto state = apvts.copyState();
+        for (int i = 0; i < state.getNumChildren(); ++i)
+        {
+            auto c = state.getChild (i);
+            const auto id = c.getProperty ("id").toString();
+            if (id.startsWith ("p")) ke->setAttribute (id, (double) c.getProperty ("value"));
+        }
+        for (int p = 0; p < kPads; ++p) if (useSample[(size_t) p].load() && samples[(size_t) p]) ke->setAttribute ("sample" + juce::String (p), juce::String (samples[(size_t) p]->path));
+    }
+    return e;
+}
+
+void NeoBeatProcessor::applySectionXml (const juce::String& section, const juce::XmlElement& e)
+{
+    if (section == "OneShot") { if (auto* c = e.getChildByName ("ONESHOT")) io::readOneShot (*c, project.matrix.oneShot); }
+    else if (section == "Sample") { if (auto* c = e.getChildByName ("SAMPLE")) io::readSample (*c, project.matrix.sample); }
+    else if (section == "Sequencer") { if (auto* c = e.getChildByName ("SEQ")) io::readSeq (*c, project.matrix.seq); }
+    else if (section == "Grid") { if (auto* c = e.getChildByName ("GRID")) io::readGrid (*c, project.grid); }
+    else if (section == "KeyMap") { if (auto* c = e.getChildByName ("KEYMAP")) io::readKeyMap (*c, project.keymap); }
+    else if (section == "Mod") { if (auto* c = e.getChildByName ("MOD")) io::readMod (*c, project.mod); }
+    else if (section == "Pattern")
+    {
+        if (auto* c = e.getChildByName ("PATTERN"))
+        {
+            nb::Pattern p; io::readPattern (*c, p); pattern.load (p);
+            setParam ("swing", (float) c->getDoubleAttribute ("swing", 0.62)); setParam ("tempo", (float) c->getDoubleAttribute ("tempo", 120.0));
+        }
+    }
+    else if (section == "Kit")
+    {
+        if (auto* c = e.getChildByName ("KIT"))
+        {
+            for (int i = 0; i < c->getNumAttributes(); ++i)
+            {
+                const auto name = c->getAttributeName (i);
+                if (name.startsWith ("sample")) continue;
+                setParam (name, (float) c->getDoubleAttribute (name));
+            }
+            for (int p = 0; p < kPads; ++p)
+            {
+                const auto path = c->getStringAttribute ("sample" + juce::String (p));
+                if (path.isNotEmpty() && juce::File (path).existsAsFile()) loadSample (p, juce::File (path));
+                else clearSample (p);
+            }
+        }
+    }
+    reloadProjectFiles();
+    projectChanged();
+}
+
+bool NeoBeatProcessor::saveUserPreset (const juce::String& section, const juce::String& name)
+{
+    const auto dir = userRoot().getChildFile (section);
+    if (! dir.createDirectory()) return false;
+    const auto safe = juce::File::createLegalFileName (name.trim().isEmpty() ? "Untitled" : name.trim());
+    // keep the samples: copy every referenced file next to the presets
+    const auto smpDir = userRoot().getChildFile ("Samples");
+    smpDir.createDirectory();
+    auto keepFile = [&] (std::string& path)
+    {
+        if (path.empty()) return;
+        const juce::File f (path);
+        if (! f.existsAsFile() || f.isAChildOf (smpDir)) return;
+        const auto dst = smpDir.getChildFile (f.getFileName());
+        if (! dst.existsAsFile()) f.copyFileTo (dst);
+        if (dst.existsAsFile()) { files[dst.getFullPathName().toStdString()] = files[path]; path = dst.getFullPathName().toStdString(); }
+    };
+    if (section == "Sample") keepFile (project.matrix.sample.file);
+    if (section == "Grid") for (auto& f : project.grid.files) keepFile (f);
+    if (section == "KeyMap") for (auto& z : project.keymap.zones) keepFile (z.file);
+    auto e = sectionXml (section);
+    if (section == "Kit")
+        if (auto* k = e->getChildByName ("KIT"))
+            for (int p = 0; p < kPads; ++p)
+            {
+                const auto attr = "sample" + juce::String (p);
+                if (! k->hasAttribute (attr)) continue;
+                std::string path = k->getStringAttribute (attr).toStdString();
+                keepFile (path);
+                k->setAttribute (attr, juce::String (path));
+            }
+    return e->writeTo (dir.getChildFile (safe + ".nbp"));
+}
+
+bool NeoBeatProcessor::loadUserPreset (const juce::String& section, const juce::String& name)
+{
+    const auto f = userRoot().getChildFile (section).getChildFile (name + ".nbp");
+    auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! xml->hasTagName ("NEOBEAT_PRESET")) return false;
+    applySectionXml (section, *xml);
+    return true;
 }
 
 // ------------------------------------------------------------------ state
@@ -352,22 +491,16 @@ void NeoBeatProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    auto* pat = xml->createNewChildElement ("PATTERN");
-    pat->setAttribute ("length", pattern.length.load());
-    for (int t = 0; t < nb::Pattern::kTracks; ++t)
-    {
-        juce::String row;
-        for (int s = 0; s < nb::Pattern::kMaxSteps; ++s)
-            row << juce::String::toHexString ((int) PatternStore::pack (pattern.get (t, s))) << (s + 1 < nb::Pattern::kMaxSteps ? " " : "");
-        pat->setAttribute ("t" + juce::String (t), row);
-    }
+    nb::Pattern p; pattern.snapshot (p);
+    io::writePattern (*xml->createNewChildElement ("PATTERN"), p);
     auto* meta = xml->createNewChildElement ("META");
     meta->setAttribute ("preset", currentPreset.load());
     meta->setAttribute ("kit", currentKit.load());
-    meta->setAttribute ("version", "0.1.0");
+    meta->setAttribute ("version", "2.0.0");
     auto* smp = xml->createNewChildElement ("SAMPLES");
-    for (int p = 0; p < kPads; ++p)
-        if (useSample[(size_t) p].load() && samples[(size_t) p]) smp->setAttribute ("p" + juce::String (p), juce::String (samples[(size_t) p]->path));
+    for (int pad = 0; pad < kPads; ++pad)
+        if (useSample[(size_t) pad].load() && samples[(size_t) pad]) smp->setAttribute ("p" + juce::String (pad), juce::String (samples[(size_t) pad]->path));
+    xml->addChildElement (io::toXml (project).release());
     copyXmlToBinary (*xml, destData);
 }
 
@@ -375,28 +508,18 @@ void NeoBeatProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
-    nb::Pattern p;
-    if (auto* pat = xml->getChildByName ("PATTERN"))
-    {
-        p.length = juce::jlimit (1, nb::Pattern::kMaxSteps, pat->getIntAttribute ("length", 32));
-        for (int t = 0; t < nb::Pattern::kTracks; ++t)
-        {
-            juce::StringArray cells = juce::StringArray::fromTokens (pat->getStringAttribute ("t" + juce::String (t)), " ", "");
-            for (int s = 0; s < nb::Pattern::kMaxSteps && s < cells.size(); ++s)
-                p.steps[(size_t) t][(size_t) s] = PatternStore::unpack ((uint32_t) cells[s].getHexValue32());
-        }
-        pattern.load (p);
-    }
+    if (auto* pat = xml->getChildByName ("PATTERN")) { nb::Pattern p; io::readPattern (*pat, p); pattern.load (p); }
     if (auto* meta = xml->getChildByName ("META"))
     {
-        currentPreset.store (meta->getIntAttribute ("preset", 0));
-        currentKit.store (meta->getIntAttribute ("kit", 0));
+        currentPreset.store (juce::jlimit (0, nb::numPatterns() - 1, meta->getIntAttribute ("preset", 0)));
+        currentKit.store (juce::jlimit (0, (int) nb::kits().size() - 1, meta->getIntAttribute ("kit", 0)));
     }
+    if (auto* pr = xml->getChildByName ("PROJECT")) io::fromXml (*pr, project);
+    else project = nb::Project();
     std::unique_ptr<juce::XmlElement> smpCopy;
     if (auto* smp = xml->getChildByName ("SAMPLES")) smpCopy = std::make_unique<juce::XmlElement> (*smp);
-    // strip our own children before handing the tree to the parameter state
-    for (auto* name : { "PATTERN", "META", "SAMPLES" })
-        if (auto* c = xml->getChildByName (name)) xml->removeChildElement (c, true);
+    for (auto* name : { "PATTERN", "META", "SAMPLES", "PROJECT" })
+        while (auto* c = xml->getChildByName (name)) xml->removeChildElement (c, true);
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
     for (int pad = 0; pad < kPads; ++pad)
     {
@@ -407,6 +530,8 @@ void NeoBeatProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (f.existsAsFile()) loadSample (pad, f);
         }
     }
+    reloadProjectFiles();
+    projectChanged();
 }
 
 juce::AudioProcessorEditor* NeoBeatProcessor::createEditor() { return new NeoBeatEditor (*this); }

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "Engine.h"
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -44,39 +45,57 @@ inline const std::vector<Kit>& kits()
             { "r6/bell_clank", 0, 1, 0, 0, -1, 0.5f, 0.25f, -7.0f },
             { "r6/train_door", 0, 1, 0, 0, -1, 0.5f, -0.25f, -5.0f } } } },
         { "Clank Yard", { {
-            { "round5/R5_02_rubber_drumhead_kick", -2.0f },
-            { "round4/A0_round3_core", 0, 0.8f },
-            { "round4/A3_tight", 5.0f, 0.8f, 0.2f },
-            { "round4/A5_bounce", 3.0f, 0.8f, 0.2f, 0, -1, 0.5f, 0.1f, -2.0f },
-            { "round4/C2_short", 7.0f, 0.3f, 0.3f, 0, -1, 0.5f, 0.15f, -4.0f, 1 },
-            { "round4/C3_bright", 5.0f, 0.6f, 0.2f, 0, -1, 0.5f, 0.15f, -5.0f, 1 },
-            { "round4/C8_cluster_hit", 12.0f, 0.5f, 0, 0, -1, 0.5f, -0.25f, -5.0f },
-            { "lab/ih_knock", 7.0f, 1, 0, 0, -1, 0.5f, -0.2f, -3.0f },
-            { "round4/A4_float", -5.0f, 1, 0, 0, -1, 0.5f, 0.0f, -3.0f },
-            { "round4/A1_buoyant_core", 0, 1, 0, 0, -1, 0.5f, 0.2f, -5.0f },
-            { "round4/A6_spring", 0, 1, 0, 0, -1, 0.5f, -0.3f, -5.0f },
-            { "round4/A2_long_ring", 0, 1, 0, 0, -1, 0.5f, 0.3f, -6.0f },
-            { "round4/A7_big_room", 0, 1, 0, 0, -1, 0.5f, -0.1f, -6.0f },
-            { "round4/C1_core", 0, 0.7f, 0, 0, -1, 0.5f, 0.1f, -7.0f },
-            { "round4/C4_dark_bell", 0, 1, 0, 0, -1, 0.5f, 0.25f, -7.0f },
-            { "round4/C7_gong", -5.0f, 1, 0, 0, -1, 0.5f, -0.25f, -8.0f } } } },
+            { "round5/R5_02_rubber_drumhead_kick" },
+            { "round4/A0_round3_core" },
+            { "round4/A3_tight", 0, 1, 0, 0, -1, 0.5f, 0.0f, 0.0f },
+            { "round4/A5_bounce", 0, 1, 0, 0, -1, 0.5f, 0.1f, -1.0f },
+            { "round4/C2_short", 0, 1, 0, 0, -1, 0.5f, 0.15f, -3.0f, 1 },
+            { "round4/C3_bright", 0, 1, 0, 0, -1, 0.5f, 0.15f, -4.0f, 1 },
+            { "round4/C8_cluster_hit", 0, 1, 0, 0, -1, 0.5f, -0.25f, -3.0f },
+            { "lab/ih_knock", 0, 1, 0, 0, -1, 0.5f, -0.2f, -2.0f },
+            { "round4/A4_float", 0, 1, 0, 0, -1, 0.5f, 0.0f, -2.0f },
+            { "round4/A1_buoyant_core", 0, 1, 0, 0, -1, 0.5f, 0.2f, -3.0f },
+            { "round4/A6_spring", 0, 1, 0, 0, -1, 0.5f, -0.3f, -3.0f },
+            { "round4/A2_long_ring", 0, 1, 0, 0, -1, 0.5f, 0.3f, -4.0f },
+            { "round4/A7_big_room", 0, 1, 0, 0, -1, 0.5f, -0.1f, -4.0f },
+            { "round4/C1_core", 0, 1, 0, 0, -1, 0.5f, 0.1f, -5.0f },
+            { "round4/C4_dark_bell", 0, 1, 0, 0, -1, 0.5f, 0.25f, -5.0f },
+            { "round4/C7_gong", 0, 1, 0, 0, -1, 0.5f, -0.25f, -6.0f } } } },
         { "Latex Float", { {
-            { "round5/R5_02_rubber_drumhead_kick", 1.0f },
-            { "round4/B3_deep", -19.0f, 0.6f },
-            { "round5/R5_08_rubber_snare", 2.0f },
-            { "round4/B2_snap", -7.0f, 1, 0, 0, -1, 0.5f, 0.1f, -2.0f },
-            { "round4/C5_pure_metal", 7.0f, 0.3f, 0.3f, 0, -1, 0.5f, 0.15f, -5.0f, 1 },
-            { "round4/C6_shimmer", 5.0f, 0.6f, 0.2f, 0, -1, 0.5f, 0.15f, -6.0f, 1 },
-            { "round4/B8_stutter", 0, 0.6f, 0.2f, 0, -1, 0.5f, -0.25f, -5.0f },
-            { "lab/ih_ding", 0, 1, 0, 0, -1, 0.5f, -0.2f, -5.0f },
-            { "round4/B6_drop", -12.0f, 0.8f, 0, 0, -1, 0.5f, 0.0f, -3.0f },
-            { "round5/R5_07_impedance_swap", 0, 1, 0, 0, -1, 0.5f, 0.2f, -5.0f },
-            { "round4/B1_core", -5.0f, 0.8f, 0, 0, -1, 0.5f, -0.3f, -5.0f },
-            { "round4/B4_liquid", -3.0f, 0.8f, 0, 0, -1, 0.5f, 0.3f, -5.0f },
-            { "round4/B5_pure", -7.0f, 0.8f, 0, 0, -1, 0.5f, -0.1f, -6.0f },
-            { "round4/B7_bounce", -2.0f, 0.8f, 0, 0, -1, 0.5f, 0.1f, -6.0f },
-            { "r6/bell_clank", 0, 1, 0, 0, -1, 0.5f, 0.25f, -7.0f },
-            { "r6/jet_riser", 0, 1, 0, 0, -1, 0.5f, 0.0f, -7.0f } } } },
+            { "round5/R5_02_rubber_drumhead_kick" },
+            { "round4/B3_deep", 0, 1, 0, 0, -1, 0.5f, 0.0f, -1.0f },
+            { "round5/R5_08_rubber_snare", 0, 1, 0, 0, -1, 0.5f, 0.0f, 3.0f },
+            { "round4/B2_snap", 0, 1, 0, 0, -1, 0.5f, 0.1f, -1.0f },
+            { "round4/C5_pure_metal", 0, 1, 0, 0, -1, 0.5f, 0.15f, -4.0f, 1 },
+            { "round4/C6_shimmer", 0, 1, 0, 0, -1, 0.5f, 0.15f, -5.0f, 1 },
+            { "round4/B8_stutter", 0, 1, 0, 0, -1, 0.5f, -0.25f, -3.0f },
+            { "lab/ih_ding", 0, 1, 0, 0, -1, 0.5f, -0.2f, -3.0f },
+            { "round4/B6_drop", 0, 1, 0, 0, -1, 0.5f, 0.0f, -2.0f },
+            { "round5/R5_07_impedance_swap", 0, 1, 0, 0, -1, 0.5f, 0.2f, -3.0f },
+            { "round4/B1_core", 0, 1, 0, 0, -1, 0.5f, -0.3f, -3.0f },
+            { "round4/B4_liquid", 0, 1, 0, 0, -1, 0.5f, 0.3f, -3.0f },
+            { "round4/B5_pure", 0, 1, 0, 0, -1, 0.5f, -0.1f, -4.0f },
+            { "round4/B7_bounce", 0, 1, 0, 0, -1, 0.5f, 0.1f, -4.0f },
+            { "r6/bell_clank", 0, 1, 0, 0, -1, 0.5f, 0.25f, -6.0f },
+            { "r6/jet_riser", 0, 1, 0, 0, -1, 0.5f, 0.0f, -6.0f } } } },
+        // MaterialLab (by Marbelite): the learned impacts, same pad roles
+        { "MaterialLab", { {
+            { "ml/basketball", -5.0f, 1.0f, 0.0f, 0.0f, -1, 0.5f, 0.0f, 0.0f },
+            { "ml/hollow_pan_bigger", 0, 1, 0, 0, -1, 0.5f, 0.0f, -1.0f },
+            { "ml/tin_can", 0, 1, 0, 0, -1, 0.5f, 0.0f, 0.0f },
+            { "ml/bucket", 0, 1, 0, 0, -1, 0.5f, 0.05f, 0.0f },
+            { "ml/clank_higher", 7.0f, 0.3f, 0.0f, 0.0f, -1, 0.5f, 0.15f, -6.0f, 1 },
+            { "ml/clank", 7.0f, 0.8f, 0.0f, 0.0f, -1, 0.5f, 0.15f, -6.0f, 1 },
+            { "ml/tube_clank_higher", 5.0f, 0.4f, 0.0f, 0.0f, -1, 0.5f, -0.25f, -6.0f },
+            { "ml/pvc_pipe", 0, 1, 0, 0, -1, 0.5f, -0.2f, -3.0f },
+            { "ml/basketball_soft", 0, 1, 0, 0, -1, 0.5f, 0.0f, -2.0f },
+            { "ml/clank", 0, 1, 0, 0, -1, 0.5f, 0.2f, -4.0f },
+            { "ml/tube_clank", 0, 1, 0, 0, -1, 0.5f, -0.3f, -4.0f },
+            { "ml/clank_drop", 0, 1, 0, 0, -1, 0.5f, 0.3f, -4.0f },
+            { "ml/hollow_pan", 0, 1, 0, 0, -1, 0.5f, -0.1f, -4.0f },
+            { "snap/short", 0, 1, 0, 0, -1, 0.5f, 0.1f, -4.0f },
+            { "ml/clank_longer", 0, 1, 0, 0, -1, 0.5f, 0.25f, -6.0f },
+            { "snap/full", 0, 1, 0, 0, -1, 0.5f, 0.0f, -4.0f } } } },
     };
     return k;
 }
@@ -93,6 +112,7 @@ inline void applyKit (Engine& e, const Kit& kit)
         ps.tune = kp.tune; ps.decay = kp.decay; ps.tone = kp.tone; ps.drive = kp.drive;
         ps.hollow = kp.hollow >= 0.0f ? kp.hollow : e.lib().sounds[(size_t) ps.sound].defaultHollow;
         ps.evolve = kp.evolve; ps.pan = kp.pan; ps.levelDb = kp.levelDb; ps.choke = kp.choke;
+        if (const char* c = std::getenv ("NB_CHAR")) ps.character = std::atoi (c) != 0;
     }
 }
 } // namespace nb

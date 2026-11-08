@@ -40,6 +40,8 @@ struct SeqEvent
     int offset = 0;      // sample offset inside the block
     int pad = 0;
     float velocity = 0.0f;
+    int step = 0, sub = 0;   // the step it came from, and which hit of a roll
+    double ppq = 0.0;        // where it lands in the song
 };
 
 class Sequencer
@@ -68,12 +70,17 @@ public:
                     e.frac = (float) h / (float) hits;
                     e.nudge = (float) st.nudge / 100.0f;
                     e.pad = tr;
+                    e.sub = h;
                     e.velocity = hits == 1 ? v : v * (0.55f + 0.45f * (float) (h + 1) / (float) hits);
                 }
             }
     }
 
     int patternLength() const noexcept { return length; }
+
+    // Pads whose sound needs time before its hit (a stretched rubber reaching its snap) are
+    // started this many seconds early, so the snap lands on the step.
+    void setPreroll (int pad, double seconds) noexcept { if (pad >= 0 && pad < Pattern::kTracks) preroll[(size_t) pad] = std::max (0.0, seconds); }
 
     // Collect the hits inside [ppqStart, ppqStart + block). `semis` is carried
     // through for the key-transpose mode.
@@ -88,7 +95,7 @@ public:
         for (int i = 0; i < count; ++i)
         {
             const auto& e = grid[(size_t) i];
-            const double p = position (e.step, e.span, e.frac, e.nudge, swing);
+            const double p = position (e.step, e.span, e.frac, e.nudge, swing) - preroll[(size_t) e.pad] * bpm / 60.0;
             const double k = std::ceil ((ppqStart - p) / loop - 1.0e-9);
             const double at = p + k * loop;
             if (at < ppqStart - 1.0e-9 || at >= ppqEnd) continue;
@@ -96,6 +103,7 @@ public:
             ev.offset = std::max (0, std::min (numSamples - 1, (int) std::floor ((at - ppqStart) / ppqPerSample)));
             ev.pad = e.pad;
             ev.velocity = e.velocity;
+            ev.step = e.step; ev.sub = e.sub; ev.ppq = at;
             if (out.size() < out.capacity()) out.push_back (ev);
         }
         // stable sort by offset (few events per block: insertion sort)
@@ -118,7 +126,7 @@ public:
     }
 
 private:
-    struct GridEvent { int step = 0, span = 1; float frac = 0.0f, nudge = 0.0f; int pad = 0; float velocity = 0.0f; };
+    struct GridEvent { int step = 0, span = 1; float frac = 0.0f, nudge = 0.0f; int pad = 0; float velocity = 0.0f; int sub = 0; };
     static constexpr int kMaxEvents = Pattern::kTracks * Pattern::kMaxSteps * 4;
 
     // Start of step s with swing (in quarter notes); a hit sits a fraction of
@@ -136,6 +144,7 @@ private:
     }
 
     std::array<GridEvent, kMaxEvents> grid {};
+    std::array<double, Pattern::kTracks> preroll {};
     int count = 0, length = 32;
     float sr = 48000.0f;
 };

@@ -1,9 +1,14 @@
 cmake_minimum_required (VERSION 3.22)
-project (NeoBeat VERSION 0.1.0 LANGUAGES C CXX)
+project (NeoBeat VERSION 2.0.0 LANGUAGES C CXX)
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property (GLOBAL PROPERTY USE_FOLDERS ON)
+
+# the sources are UTF-8 (comments use a few symbols); MSVC otherwise reads them in the local code page
+if (MSVC)
+    add_compile_options (/utf-8)
+endif()
 
 # JUCE: a local checkout (-DJUCE_DIR=...) or fetched at configure time.
 if (DEFINED JUCE_DIR)
@@ -32,9 +37,19 @@ juce_add_plugin (NeoBeat
     COPY_PLUGIN_AFTER_BUILD FALSE
     VST3_CATEGORIES Instrument Drum)
 
+set (NEOBEAT_UI_SOURCES
+    Source/ui/Look.cpp
+    Source/ui/Shell.cpp
+    Source/ui/KitRoom.cpp
+    Source/ui/Inspector.cpp
+    Source/ui/MatrixRoom.cpp
+    Source/ui/GridKeyMap.cpp
+    Source/ui/Windows.cpp)
+
 target_sources (NeoBeat PRIVATE
     Source/plugin/PluginProcessor.cpp
-    Source/plugin/PluginEditor.cpp)
+    Source/plugin/PluginEditor.cpp
+    ${NEOBEAT_UI_SOURCES})
 
 target_compile_definitions (NeoBeat PUBLIC
     JUCE_WEB_BROWSER=0
@@ -55,11 +70,18 @@ target_link_libraries (NeoBeat
 # exact engine the plugin uses.
 add_executable (neobeat_cli tools/neobeat_cli.cpp)
 add_executable (test_sequencer tools/test_sequencer.cpp)
+add_executable (test_workstation tools/test_workstation.cpp)
+find_package (Threads REQUIRED)
+target_link_libraries (test_workstation PRIVATE Threads::Threads)
 
 # Linux only: render the editor to a PNG (UI check without a display server).
 if (UNIX AND NOT APPLE AND NEOBEAT_SNAPSHOT)
     juce_add_console_app (NeoBeatSnapshot PRODUCT_NAME "NeoBeatSnapshot")
-    target_sources (NeoBeatSnapshot PRIVATE tools/Snapshot.cpp Source/plugin/PluginProcessor.cpp Source/plugin/PluginEditor.cpp)
+    target_sources (NeoBeatSnapshot PRIVATE tools/Snapshot.cpp Source/plugin/PluginProcessor.cpp Source/plugin/PluginEditor.cpp ${NEOBEAT_UI_SOURCES})
     target_compile_definitions (NeoBeatSnapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries (NeoBeatSnapshot PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    juce_add_console_app (NeoBeatHostTest PRODUCT_NAME "NeoBeatHostTest")
+    target_sources (NeoBeatHostTest PRIVATE tools/HostTest.cpp Source/plugin/PluginProcessor.cpp Source/plugin/PluginEditor.cpp ${NEOBEAT_UI_SOURCES})
+    target_compile_definitions (NeoBeatHostTest PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+    target_link_libraries (NeoBeatHostTest PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()

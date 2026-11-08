@@ -1,4 +1,4 @@
-// NeoBeat — 50 new jack swing patterns, all original, 118-126 BPM.
+// NeoBeat — 50 new jack swing patterns, all original, 112-126 BPM.
 //
 // Written as step strings, one character per 16th ('|' marks the bar line):
 //   .  rest      x  hit (100)     X  accent (124)     o  ghost (64)    g  soft ghost (42)

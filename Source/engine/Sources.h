@@ -10,6 +10,9 @@
 #include "../dsp/CycleVoice.h"
 #include "../dsp/Modal.h"
 #include "../dsp/Hollow.h"
+#include "../dsp/MaterialBody.h"
+#include "../dsp/Friction2.h"
+#include "MaterialData.h"
 #include <memory>
 #include <vector>
 
@@ -54,12 +57,17 @@ struct SharedTables
 {
     WaveTable hollow, city;
     ls::Patch innerTubeBonk, junkyardClank, metalHat, rubberSnare, drumheadKick, thudRubber, ding;
+    // MaterialLab: the learned bodies and rubbers, and the shared band noise of the living body
+    std::vector<Engine2Material> bodies;
+    std::vector<FrictionMaterial> rubbers;
+    std::vector<StretchPrep> rubberPrep;   // per rubber, at the engine's rate (Engine::prepare)
+    std::shared_ptr<MaterialNoise> materialNoise = std::make_shared<MaterialNoise>();
 };
 
 class HitSource final : public StereoSource
 {
 public:
-    enum class Kind { None, Patch, Recipe, Sample };
+    enum class Kind { None, Patch, Recipe, Sample, Body, Stretch };
 
     void prepare (float sampleRate)
     {
@@ -69,7 +77,21 @@ public:
         wave.prepare (sr);
         cycle.prepare (sr);
         modal.prepare (sr);
+        stretch.prepare (sr);
         kind = Kind::None;
+    }
+
+    // MaterialLab: a learned body struck (engine v3), or a rubber pulled off it (friction v2 + stretch)
+    void startBody (const Engine2Material& m, const BodyPlay& play, std::shared_ptr<const MaterialNoise> noise)
+    {
+        if (bodyNoise != noise) { body.prepare (sr, noise); bodyNoise = noise; }
+        kind = Kind::Body;
+        body.start (m, play);
+    }
+    void startStretch (const FrictionMaterial& m, const StretchPlay& play, const StretchPrep* prep = nullptr)
+    {
+        kind = Kind::Stretch;
+        stretch.start (m, play, prep);
     }
 
     // --- start one hit ------------------------------------------------------
@@ -206,6 +228,8 @@ public:
             case Kind::Patch: return voice.isActive();
             case Kind::Sample: return sample != nullptr && pos < std::min (len, fadeStart + fadeLen);
             case Kind::Recipe: return (float) n / sr < recipeLen;
+            case Kind::Body: return body.isActive();
+            case Kind::Stretch: return stretch.isActive();
             default: return false;
         }
     }
@@ -218,6 +242,8 @@ public:
             case Kind::Patch: voice.render (l, r); break;
             case Kind::Sample: renderSample (l, r); break;
             case Kind::Recipe: renderRecipe (l, r); break;
+            case Kind::Body: body.process (l, r); break;
+            case Kind::Stretch: stretch.process (l, r); break;
             default: break;
         }
     }
@@ -300,6 +326,8 @@ private:
     bool jetOn = false, hissOn = false, waveOn = false, cycleOn = false, modalOn = false;
     Horn horn; Bell bell; Drill drill; TireScreech screech; DogBark bark; BrakeSqueal brake; Jet jet; DoorHiss hiss;
     WaveVoice wave; CycleVoice cycle; ModalBody modal;
+    MaterialBody body; StretchVoice stretch;
+    std::shared_ptr<const MaterialNoise> bodyNoise;
     float hornMix = 0, hornL = 0, hornR = 0, bellMix = 0, bellL = 0, bellR = 0, drillMix = 0, drillL = 0, drillR = 0;
     float screechMix = 0, screechL = 0, screechR = 0, barkMix = 0, barkL = 0, barkR = 0, brakeMix = 0, brakeL = 0, brakeR = 0;
     float jetMix = 0, hissL = 0, hissR = 0, waveMix = 0, waveL = 0, waveR = 0, cycleMix = 0, modalMix = 0;
