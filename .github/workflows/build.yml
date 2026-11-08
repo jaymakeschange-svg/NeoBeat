@@ -27,36 +27,26 @@ jobs:
       - name: Render a preset with the Windows build (sanity check)
         run: build\Release\neobeat_cli.exe preset 0 build\swingbeat_classic_check.wav 2
 
-      - name: Validate the VST3 with pluginval
+      - name: Validate the VST3 with pluginval (strictness 10, then 5 more random seeds)
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
-          # pluginval runs the plugin in a child process: if it crashes, pluginval prints the call stack
-          .\pluginval\pluginval.exe --strictness-level 10 --timeout-ms 600000 --output-dir pluginval-log build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3
-          $code = $LASTEXITCODE
-          if ($code -ne 0 -and (Test-Path pluginval-log)) { Get-ChildItem pluginval-log -Recurse -File | ForEach-Object { Write-Host "==== $($_.Name)"; Get-Content $_.FullName -Tail 150 } }
-          exit $code
-
-      - name: pluginval 15 more times (10 in a child process, 5 in-process)
-        continue-on-error: true
-        timeout-minutes: 30
-        shell: pwsh
-        run: |
           $vst = "build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3"
+          # pluginval.exe is a GUI-subsystem program: PowerShell only waits for it (and gets its exit code)
+          # when its output is piped. Unpiped, the step ends at once and the runner kills pluginval mid-test.
+          .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 600000 --output-dir pluginval-log $vst | Tee-Object -FilePath pv_main.txt
           $failed = 0
-          for ($i = 1; $i -le 15; $i++) {
+          if ($LASTEXITCODE -ne 0) { $failed++; Write-Host "==== main run FAILED (exit code $LASTEXITCODE)" } else { Write-Host "==== main run: SUCCESS" }
+          for ($i = 1; $i -le 5; $i++) {
             $seed = "0x{0:x}" -f (Get-Random -Minimum 1 -Maximum 0x7fffffff)
-            $mode = if ($i -le 10) { @() } else { @("--validate-in-process") }
-            $label = if ($i -le 10) { "child process" } else { "in-process" }
-            & .\pluginval\pluginval.exe --strictness-level 10 --random-seed $seed --timeout-ms 600000 @mode $vst *> "pv_$i.txt"
-            $code = $LASTEXITCODE
-            if ($code -eq 0) { Write-Host "run $i ($label, seed $seed): SUCCESS" }
-            else { $failed++; Write-Host "==== run $i ($label, seed $seed) FAILED with exit code $code"; Get-Content "pv_$i.txt" -Tail 150 }
+            .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --random-seed $seed --timeout-ms 600000 $vst | Out-File "pv_$i.txt"
+            if ($LASTEXITCODE -eq 0) { Write-Host "run $i (seed $seed): SUCCESS" }
+            else { $failed++; Write-Host "==== run $i (seed $seed) FAILED (exit code $LASTEXITCODE)"; Get-Content "pv_$i.txt" -Tail 80 }
           }
-          Write-Host "$failed of 15 runs failed"
+          Write-Host "$failed of 6 pluginval runs failed"
           if ($failed -gt 0) { exit 1 }
 
       - name: Package

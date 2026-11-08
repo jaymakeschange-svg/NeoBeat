@@ -242,6 +242,36 @@ int main (int argc, char** argv)
         juce::MemoryBlock st; proc->getStateInformation (st);
         CHECK (st.getSize() > 100, "the state still saves");
     }
+    std::printf ("7. rapid sample-rate and block-size changes while the renderer works (pluginval's audio test, 150 times)\n");
+    {
+        const double rates[] = { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 };
+        const int sizes[] = { 32, 64, 128, 256, 512, 1024, 2048 };
+        juce::Random r (99);
+        host.playing = false;
+        for (int it = 0; it < 150; ++it)
+        {
+            if (r.nextBool()) proc->releaseResources();
+            host.prepare (rates[r.nextInt (5)], sizes[r.nextInt (7)]);
+            if (it % 3 == 0) randomEdit (*proc, r);   // new inputs, so the worker is busy at the next change
+            const int blocks = 2 + r.nextInt (12);
+            const int ch = 1 + r.nextInt (16), note = r.nextInt (128);
+            for (int b = 0; b < blocks; ++b)
+            {
+                juce::AudioBuffer<float> buf (2, host.block);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < host.block; ++i) buf.setSample (c, i, r.nextFloat() * 2.0f - 1.0f);   // hosts may hand over junk
+                juce::MidiBuffer m;
+                if (b == 0) m.addEvent (juce::MidiMessage::noteOn (ch, note, (juce::uint8) 100), juce::jmin (10, host.block - 1));
+                if (b == blocks - 1) m.addEvent (juce::MidiMessage::noteOff (ch, note), 0);
+                proc->processBlock (buf, m);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < host.block; ++i) if (! std::isfinite (buf.getSample (c, i))) host.bad = true;
+            }
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (r.nextInt (3) == 0 ? 160 : 1);   // sometimes long enough for the timer to submit
+        }
+        host.playing = true;
+        host.prepare (48000.0, 512); host.run (0.5);
+        CHECK (! host.bad, "finite through 150 rate and block changes");
+    }
+
     proc2.reset();
     proc.reset();
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
