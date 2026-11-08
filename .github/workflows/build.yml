@@ -34,35 +34,29 @@ jobs:
         run: |
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
-          .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 600000 --output-dir pluginval-log build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3
+          # pluginval runs the plugin in a child process: if it crashes, pluginval prints the call stack
+          .\pluginval\pluginval.exe --strictness-level 10 --timeout-ms 600000 --output-dir pluginval-log build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and (Test-Path pluginval-log)) { Get-ChildItem pluginval-log -Recurse -File | ForEach-Object { Write-Host "==== $($_.Name)"; Get-Content $_.FullName -Tail 150 } }
+          exit $code
 
-      - name: pluginval with 12 seeds under the debugger (prints the call stack of any crash)
+      - name: pluginval 15 more times (10 in a child process, 5 in-process)
         continue-on-error: true
         timeout-minutes: 30
         shell: pwsh
         run: |
           $vst = "build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3"
-          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1
-          if (-not $cdb) { Write-Host "cdb.exe not found"; exit 1 }
-          @(
-            'sxe -c "r;kP 40;q" av',
-            'sxe -c "r;kP 40;q" sov',
-            'sxe -c "r;kP 40;q" c0000409',
-            'sxe -c2 "kP 40;q" eh',
-            'g'
-          ) | Set-Content -Encoding ascii cdbcmds.txt
-          New-Item -ItemType File -Force empty.txt | Out-Null
-          $seeds = @("0x25a66bb") + (1..11 | ForEach-Object { "0x{0:x}" -f (Get-Random -Minimum 1 -Maximum 0x7fffffff) })
           $failed = 0
-          foreach ($seed in $seeds) {
-            $p = Start-Process -FilePath $cdb.FullName -NoNewWindow -PassThru -RedirectStandardInput empty.txt -RedirectStandardOutput "cdb_$seed.txt" `
-                   -ArgumentList "-G -lines -cf cdbcmds.txt .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --random-seed $seed --timeout-ms 600000 $vst"
-            if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force; Write-Host "seed ${seed}: timed out" }
-            $out = Get-Content "cdb_$seed.txt" -Raw
-            if ($out -match "(?m)^SUCCESS") { Write-Host "seed ${seed}: SUCCESS" }
-            else { $failed++; Write-Host "==== seed $seed FAILED"; Get-Content "cdb_$seed.txt" -Tail 120 }
+          for ($i = 1; $i -le 15; $i++) {
+            $seed = "0x{0:x}" -f (Get-Random -Minimum 1 -Maximum 0x7fffffff)
+            $mode = if ($i -le 10) { @() } else { @("--validate-in-process") }
+            $label = if ($i -le 10) { "child process" } else { "in-process" }
+            & .\pluginval\pluginval.exe --strictness-level 10 --random-seed $seed --timeout-ms 600000 @mode $vst *> "pv_$i.txt"
+            $code = $LASTEXITCODE
+            if ($code -eq 0) { Write-Host "run $i ($label, seed $seed): SUCCESS" }
+            else { $failed++; Write-Host "==== run $i ($label, seed $seed) FAILED with exit code $code"; Get-Content "pv_$i.txt" -Tail 150 }
           }
-          Write-Host "$failed of $($seeds.Count) seeded runs failed"
+          Write-Host "$failed of 15 runs failed"
           if ($failed -gt 0) { exit 1 }
 
       - name: Package
