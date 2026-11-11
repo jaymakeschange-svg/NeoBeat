@@ -84,6 +84,30 @@ Plus the two big ones, each with its own window and 8 slots:
 A slot listens to a pad, a grid row or a One Shot cell. **REPLACES** puts the effect in place of the
 hit (an accent); **ADDS** keeps the hit and adds the effect.
 
+## The two effects on their own
+
+`Friction Stretch.vst3` and `Bounce Delay.vst3` are the same two effects as separate audio-effect
+plugins (each also comes as a standalone `.exe`), for testing them away from NeoBeat. Copy them to
+`C:\Program Files\Common Files\VST3\` like NeoBeat; they appear under Plug-ins → Marbelite.
+
+Each works on one whole hit at a time, and has two ways of getting one:
+
+* **LOAD A HIT**: load or drop a sample of up to 4 s (a built-in clank is there to start with). It
+  re-renders in the background whenever you move a knob. **PLAY**, a MIDI note, or **LOOP** (every
+  1, 2 or 4 bars while the host runs) plays it. **KEYTRACK** makes MIDI keys transpose it (C3 = as it
+  is). To send MIDI in Ableton, set a MIDI track's *MIDI To* to the track holding the plugin and pick
+  the plugin in the second chooser.
+* **CATCH HITS**: put it on a drum track. Every hit that rises over the white line on the meter is
+  caught (LENGTH sets how much of it), rendered, and joined in where it would be by then, so the yanks
+  and bounces still land on the song's swung grid. Bounce Delay keeps up live. A long Friction Stretch
+  takes a moment to render, so you hear it from a little way in. **KEEP LAST HIT** turns the last caught
+  hit into the loaded hit.
+
+**CHOKE** makes a new hit cut the one before. **SAVE WAV** writes what the display shows. The preset
+box holds six starting points for each. Every knob is a host parameter (automation works); the loaded
+hit and Friction Stretch's lines are saved with the project. In Bounce Delay the ROOM knob is live here
+(small room, studio or large hall).
+
 ## Modulation
 
 Sources: LFO 1, LFO 2 (draw its shape), Envelope, Random, Velocity, Key, Height, Step, XY X, XY Y.
@@ -136,4 +160,5 @@ cmake --build build --config Release --target NeoBeat_VST3 NeoBeat_Standalone
 ```
 
 `tools/neobeat_cli` renders any sound or preset offline (`neobeat_cli preset 0 out.wav 4`),
-`tools/test_sequencer` checks the timing and `tools/test_workstation` runs the 2.0 engine tests.
+`tools/test_sequencer` checks the timing, `tools/test_workstation` runs the 2.0 engine tests and
+`tools/test_fx` the stand-alone effects' engine.

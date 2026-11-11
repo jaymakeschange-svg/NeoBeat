@@ -23,6 +23,7 @@ struct PlayRequest
     int bus = 0;            // 0 kit, 1 grid, 2 slots (level groups)
     const PadAlgo* algo = nullptr; float algoOffset = 0.0f; float pitchHz = 200.0f;
     float fadeInMs = 0.0f;
+    double startPos = 0.0;   // start this many source samples in (a render joined late)
     VoiceMod mod;            // continuous modulation lanes (state/frame pointers set by the caller)
 };
 
@@ -43,7 +44,7 @@ public:
         if (len <= 1) { active = false; return; }
         sr = engineSr; pad = r.pad; choke = r.choke; bus = r.bus; order = ord;
         baseInc = (double) srcRate / sr * std::exp2 (r.semis / 12.0);
-        pos = 0.0; gain = r.gain; basePan = r.pan;
+        pos = std::max (0.0, std::min (r.startPos, (double) (len - 2))); gain = r.gain; basePan = r.pan;
         chokeGain = 1.0f; choking = false; chokeStep = 1.0f / std::max (1.0f, 0.006f * sr);
         fade = r.fadeInMs > 0.0f ? 0.0f : 1.0f; fadeStep = r.fadeInMs > 0.0f ? 1.0f / (r.fadeInMs * 0.001f * sr) : 1.0f;
         algoOn = false;

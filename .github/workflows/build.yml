@@ -2,7 +2,7 @@ name: Build NeoBeat (Windows)
 
 on:
   push:
-    branches: [ main, neobeat-2.0 ]
+    branches: [ main, neobeat-2.0, fx-standalone ]
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build plugin, standalone and tools
-        run: cmake --build build --config Release --parallel --target NeoBeat_VST3 NeoBeat_Standalone neobeat_cli test_sequencer test_workstation
+        run: cmake --build build --config Release --parallel --target NeoBeat_VST3 NeoBeat_Standalone NeoBeatFriction_VST3 NeoBeatFriction_Standalone NeoBeatBounce_VST3 NeoBeatBounce_Standalone neobeat_cli test_sequencer test_workstation test_fx
 
       - name: Sequencer timing test
         run: build\Release\test_sequencer.exe
@@ -24,29 +24,35 @@ jobs:
       - name: Workstation tests (Matrixxxer, grid, key map, modulation, threads)
         run: build\Release\test_workstation.exe
 
+      - name: Effect plugin tests (Friction Stretch and Bounce Delay on their own)
+        run: build\Release\test_fx.exe
+
       - name: Render a preset with the Windows build (sanity check)
         run: build\Release\neobeat_cli.exe preset 0 build\swingbeat_classic_check.wav 2
 
-      - name: Validate the VST3 with pluginval (strictness 10, then 5 more random seeds)
+      - name: Validate the three VST3s with pluginval (strictness 10, 3 random seeds each)
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 30
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
-          $vst = "build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3"
           # pluginval.exe is a GUI-subsystem program: PowerShell only waits for it (and gets its exit code)
           # when its output is piped. Unpiped, the step ends at once and the runner kills pluginval mid-test.
-          .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 600000 --output-dir pluginval-log $vst | Tee-Object -FilePath pv_main.txt
-          $failed = 0
-          if ($LASTEXITCODE -ne 0) { $failed++; Write-Host "==== main run FAILED (exit code $LASTEXITCODE)" } else { Write-Host "==== main run: SUCCESS" }
-          for ($i = 1; $i -le 5; $i++) {
-            $seed = "0x{0:x}" -f (Get-Random -Minimum 1 -Maximum 0x7fffffff)
-            .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --random-seed $seed --timeout-ms 600000 $vst | Out-File "pv_$i.txt"
-            if ($LASTEXITCODE -eq 0) { Write-Host "run $i (seed $seed): SUCCESS" }
-            else { $failed++; Write-Host "==== run $i (seed $seed) FAILED (exit code $LASTEXITCODE)"; Get-Content "pv_$i.txt" -Tail 80 }
+          $plugins = @("build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3",
+                       "build\NeoBeatFriction_artefacts\Release\VST3\Friction Stretch.vst3",
+                       "build\NeoBeatBounce_artefacts\Release\VST3\Bounce Delay.vst3")
+          $failed = 0; $runs = 0
+          foreach ($vst in $plugins) {
+            for ($i = 0; $i -le 2; $i++) {
+              $seed = "0x{0:x}" -f (Get-Random -Minimum 1 -Maximum 0x7fffffff)
+              $log = "pv_$runs.txt"; $runs++
+              .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --random-seed $seed --timeout-ms 600000 --output-dir pluginval-log $vst | Out-File $log
+              if ($LASTEXITCODE -eq 0) { Write-Host "$vst (seed $seed): SUCCESS" }
+              else { $failed++; Write-Host "==== $vst (seed $seed) FAILED (exit code $LASTEXITCODE)"; Get-Content $log -Tail 80 }
+            }
           }
-          Write-Host "$failed of 6 pluginval runs failed"
+          Write-Host "$failed of $runs pluginval runs failed"
           if ($failed -gt 0) { exit 1 }
 
       - name: Package
@@ -55,6 +61,10 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item -Recurse "build\NeoBeat_artefacts\Release\VST3\NeoBeat.vst3" dist\
           Copy-Item "build\NeoBeat_artefacts\Release\Standalone\NeoBeat.exe" dist\
+          Copy-Item -Recurse "build\NeoBeatFriction_artefacts\Release\VST3\Friction Stretch.vst3" dist\
+          Copy-Item -Recurse "build\NeoBeatBounce_artefacts\Release\VST3\Bounce Delay.vst3" dist\
+          Copy-Item "build\NeoBeatFriction_artefacts\Release\Standalone\Friction Stretch.exe" dist\
+          Copy-Item "build\NeoBeatBounce_artefacts\Release\Standalone\Bounce Delay.exe" dist\
           Copy-Item README.md dist\
           if (Test-Path pluginval-log) { Copy-Item -Recurse pluginval-log dist\ }
 
