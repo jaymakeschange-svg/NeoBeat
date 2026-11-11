@@ -11,6 +11,9 @@ static int failures = 0;
 
 static const float SR = 48000.0f;
 static const int BLOCK = 256;
+#ifndef NB_TEST_SLEEP_US
+ #define NB_TEST_SLEEP_US 300
+#endif
 
 static void writeWav (const std::string& path, const std::vector<float>& l, const std::vector<float>& r, float sr)
 {
@@ -232,11 +235,12 @@ int main (int argc, char** argv)
             while (! stop.load())
             {
                 const int b = blocks.load();
-                live.mode = (b / 600) % 2 == 0 ? Mode::Load : Mode::Capture;
-                live.loopBars = 1; live.threshold = 0.05f; live.captureMs = 120.0f; live.choke = (b / 300) % 2 == 1;
+                // modes swap every 40 blocks, so both run however coarse the platform's sleep is (15 ms on Windows)
+                live.mode = (b / 40) % 2 == 0 ? Mode::Load : Mode::Capture;
+                live.loopBars = 1; live.threshold = 0.05f; live.captureMs = 120.0f; live.choke = (b / 125) % 2 == 1;
                 for (int i = 0; i < BLOCK; ++i, ++t)
                 {
-                    const int ph = (int) (t % 9600);   // a click five times a second
+                    const int ph = (int) (t % 4800);   // a click ten times a second
                     rng = rng * 1664525u + 1013904223u;
                     il[(size_t) i] = ph < 600 ? 0.6f * ((rng >> 8) / 8388608.0f - 1.0f) * std::exp (-ph / 120.0f) : 0.0f;
                 }
@@ -249,7 +253,7 @@ int main (int argc, char** argv)
                 for (int i = 0; i < BLOCK; ++i) if (! std::isfinite (ol[(size_t) i]) || ! std::isfinite (orr[(size_t) i])) bad = true;
                 ppq += 2.0 * BLOCK / SR;
                 blocks.fetch_add (1);
-                std::this_thread::sleep_for (std::chrono::microseconds (300));
+                std::this_thread::sleep_for (std::chrono::microseconds (NB_TEST_SLEEP_US));
             }
         });
         Settings s;
