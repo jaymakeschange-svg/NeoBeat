@@ -45,7 +45,8 @@ parts overlap by 2 s and each event belongs to one part.
 
 Every recording is split into four layers: **Background** (the steady noise), **Tone** (what rings),
 **Transient** (the attacks) and **Noise** (the rest of a hit). Each can be muted, soloed and set in level, and what
-you hear is what is exported: mute the background to export clean hits.
+you hear is what is exported: mute the background to export clean hits. Everything under 30 Hz (DC offset,
+subsonic rumble, wind buffeting) belongs to the background, so muting it also cleans that away.
 
 Select areas on the spectrogram with **Box**, **Brush**, **Lasso** or the **Magic wand** (keys 1 to 4; Shift adds to
 the selection, Alt takes away; Alt + wheel sets the brush size or the wand's tolerance). Then **Erase**, make the
@@ -88,7 +89,9 @@ input back.
 
 * Onsets: spectral flux in the style of SuperFlux (Böck and Widmer, DAFx 2013), each band whitened by a quantile
   noise floor (Stahl et al., ICASSP 2000) and by its recent background, as per-channel energy normalisation does
-  (Wang et al. 2017; Lostanlen et al., IEEE SPL 2019), so wind and passing traffic do not read as events.
+  (Wang et al. 2017; Lostanlen et al., IEEE SPL 2019), so wind and passing traffic do not read as events. Each band's
+  vote counts by how many independent frequency bins it holds, so the narrow lowest bands, which swing most by
+  chance, cannot make an event out of rumble.
   Starts are placed to about 1 ms with a second, short analysis window; strikes closer than the main window
   resolves (the last bounces of a ball) are found on that short window too.
 * Layers: median-filter harmonic/percussive separation with a residual (Fitzgerald, DAFx 2010; Driedger et al.,
@@ -100,7 +103,9 @@ input back.
 
 ## Tested
 
-* `test_engine`: detection on recordings with known starts (bounces under noise, ticks in traffic rumble, a dense
+* `test_engine`: run on 20 different noise draws as well as the default one (`BC_SEED`), so nothing is tuned to one
+  lucky recording; the test recordings use platform-independent noise, so Windows and Linux test the same sound.
+  Detection on recordings with known starts (bounces under noise, ticks in traffic rumble, a dense
   drum loop: 64 of 64 found, starts within 2 ms), layers (an untouched recording comes back to -139 dB), edits,
   export, the preview player, the BS.1770 meter against the Recommendation's tables and reference tone.
 * `bench_detect`: harder field scenes (gusty wind, passing cars, talking, rain, a hall, bounce trains).

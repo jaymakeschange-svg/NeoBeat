@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <random>
+#include "Portable.h"
 #include <cstdlib>
 
 using namespace bc;
@@ -24,11 +25,10 @@ static void writeWav (const std::string& path, const std::vector<float>& l, doub
 
 struct Rng
 {
-    std::mt19937 r;
+    PortableRandom r;
     explicit Rng (unsigned s) : r (s) {}
-    float white() { return nd (r); }
-    double uni (double a, double b) { return std::uniform_real_distribution<double> (a, b) (r); }
-    std::normal_distribution<float> nd;
+    float white() { return r.gauss(); }
+    double uni (double a, double b) { return r.uni (a, b); }
 };
 
 static float rmsOf (const std::vector<float>& x) { double e = 0; for (float v : x) e += (double) v * v; return (float) std::sqrt (e / std::max<size_t> (1, x.size())); }
@@ -250,11 +250,10 @@ static Scene rainScene (Rng& g)
     while (t < 43.5) { const float amp = (float) std::pow (10.0, g.uni (-24, -10) / 20.0); tap (s.a.l, (size_t) (t * SR), amp, g); addTruth (s, t, amp); t += g.uni (1.0, 2.4); }
     std::vector<float> rain (n, 0.0f);
     double tt = 0;
-    std::lognormal_distribution<float> ln (0.0f, 0.6f);
     while (tt < 45.0)
     {
         tt += -std::log (std::max (1e-9, g.uni (0, 1))) / 150.0;
-        const size_t at = (size_t) (tt * SR); const double f = g.uni (1800, 7500), dec = g.uni (300, 900); const float a = 0.02f * ln (g.r);
+        const size_t at = (size_t) (tt * SR); const double f = g.uni (1800, 7500), dec = g.uni (300, 900); const float a = 0.02f * std::exp (0.6f * g.white());
         for (size_t i = 0; i < (size_t) (0.012 * SR) && at + i < n; ++i) { const double u = (double) i / SR; rain[at + i] += (float) (a * std::exp (-dec * u) * std::sin (6.283185307 * f * u)); }
     }
     auto hiss = pink (n, g); scaleTo (hiss, 0.004f); mixIn (rain, hiss);

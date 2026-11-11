@@ -17,6 +17,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -167,11 +169,14 @@ struct Analysis
     double sr = 48000.0; int64_t length = 0; int frames = 0;
     Tables tab;
     int noiseHop = 1, noiseBlocks = 0; std::vector<float> noise;   // blocks x kBands: the mean noise density
+    int lowBins = 0;           // the bins under kFMin (DC, subsonic rumble): always background
     std::vector<float> S;      // frames x kDet: log (1 + energy / noise)
     float sig[kDet] {};        // each band's spread of S in noise (low bands with few bins fluctuate far more)
     std::vector<float> D;      // frames x kDet: S again, but over the background of the last 0.8 s where that is
                                // louder than the long floor (wind gusts, a passing car): what onsets are found in
     float sigD[kDet] {};
+    float dofW[kDet] {};       // how much a band's rise can be trusted: bands one or two bins wide (the lowest) swing far
+                               // more by chance than wide ones, so their vote counts less (1 from about 3 independent bins)
     std::vector<float> F;      // frames x kDet: foreground energy density
     std::vector<float> T, P;   // frames x kDet: the tone and transient layers' energy density
     int pool = 1, cols = 0; std::vector<uint8_t> grid[kAuto];   // cols x kRows, dB: 0 = -120 .. 255 = 0
@@ -240,7 +245,7 @@ inline void computeRegion (const Audio& a, const Analysis& an, int f0, int f1, R
         const float* m = rg.power (i);
         const float* s0 = &fs[(size_t) i * kBins]; const float* s1 = s0 + kBins; const float* s2 = s1 + kBins;
         float* m0 = &rg.mask[0][(size_t) i * kBins]; float* m1 = &rg.mask[1][(size_t) i * kBins]; float* m2 = &rg.mask[2][(size_t) i * kBins]; float* m3 = &rg.mask[3][(size_t) i * kBins];
-        for (int k = 0; k < kBins; ++k)
+        for (int k = an.lowBins; k < kBins; ++k)   // under kFMin: background (a 30 Hz high-pass when it is muted)
         {
             const float snr = (s0[k] + s1[k] + s2[k]) * (1.0f / 9.0f) / nd[k];
             if (snr <= 1.5f) continue;
@@ -287,6 +292,8 @@ inline std::shared_ptr<Analysis> analyze (const Audio& a, const std::function<bo
     // ---- pass A: every 4th frame, the band densities the noise floor is read from
     const int cA = (frames + 3) / 4;
     std::vector<float> pa ((size_t) cA * kBands);
+    // the bins under the lowest band (DC, subsonic rumble, wind buffeting) are in no band and are never part of an event
+    an->lowBins = 0; while (an->lowBins < kBins && (double) an->lowBins * a.sr / kN < kFMin) ++an->lowBins;
     parallel (cA, 1, [&] (int i0, int i1)
     {
         std::vector<float> buf ((size_t) 2 * kN), m ((size_t) kBins);
@@ -448,6 +455,7 @@ inline std::shared_ptr<Analysis> analyze (const Audio& a, const std::function<bo
                 spread = p50 - p16;
             }
             an->sigD[b] = std::max (theory, std::min (spread, 4.0f * theory));
+            an->dofW[b] = std::min (1.0f, std::sqrt (std::max (0.0f, (float) bins / 1.5f) / 3.0f));
         }
     }
     {
@@ -532,7 +540,7 @@ inline int64_t refineOnset (const Audio& a, const Analysis& an, int n, const flo
         const float y = bandY ((float) (j * a.sr / FN));
         const float p = std::max (0.0f, std::min ((float) kBands - 1.0f, y * kBands - 0.5f)); const int b0 = (int) p;
         nd[j] = nb[b0] + (nb[std::min (b0 + 1, kBands - 1)] - nb[b0]) * (p - (float) b0);
-        wk[j] = j == 0 ? 0.0f : w48[std::min (kDet - 1, (int) (y * kDet))]; wsum += wk[j];
+        wk[j] = (double) j * a.sr / FN < kFMin ? 0.0f : w48[std::min (kDet - 1, (int) (y * kDet))]; wsum += wk[j];   // no DC or subsonic rumble
     }
     if (wsum <= 0) { for (int j = 1; j < FB; ++j) wk[j] = 1.0f; wsum = (float) (FB - 1); }
     std::vector<float> L ((size_t) mF), buf ((size_t) 2 * FN);
@@ -572,7 +580,7 @@ inline void fineLevel (const Audio& a, const Analysis& an, int noiseFrame, const
         const float y = bandY ((float) (j * a.sr / FN));
         const float p = std::max (0.0f, std::min ((float) kBands - 1.0f, y * kBands - 0.5f)); const int b0 = (int) p;
         nd[(size_t) j] = nb[b0] + (nb[std::min (b0 + 1, kBands - 1)] - nb[b0]) * (p - (float) b0);
-        wk[(size_t) j] = j == 0 ? 0.0f : w48[std::min (kDet - 1, (int) (y * kDet))]; wsum += wk[(size_t) j];
+        wk[(size_t) j] = (double) j * a.sr / FN < kFMin ? 0.0f : w48[std::min (kDet - 1, (int) (y * kDet))]; wsum += wk[(size_t) j];
     }
     if (wsum <= 0) { for (int j = 1; j < FB; ++j) wk[(size_t) j] = 1.0f; wsum = (float) (FB - 1); }
     L.assign ((size_t) std::max (0, count), 0.0f);
@@ -597,7 +605,7 @@ inline void riseWeights (const Analysis& an, int n, float* w)
         float top = 0; for (int j = 0; j <= 3; ++j) top = std::max (top, an.S[(size_t) std::min (an.frames - 1, n + j) * kDet + (size_t) b]);
         const float pre = an.S[(size_t) std::max (0, n - 3) * kDet + (size_t) b];
         const float z = (top - pre) / an.sig[b];
-        w[b] = z > 1.0f ? z - 1.0f : 0.0f; sum += w[b];
+        w[b] = z > 1.0f ? (z - 1.0f) * an.dofW[b] : 0.0f; sum += w[b];
     }
     if (sum < 1.0e-6f) { for (int b = 0; b < kDet; ++b) w[b] = 1.0f / kDet; return; }
     for (int b = 0; b < kDet; ++b) w[b] /= sum;
@@ -721,7 +729,7 @@ inline void fluxCurve (const Analysis& an, float sensitivity, std::vector<float>
         {
             float ref = 0; for (int j = std::max (0, b - 1); j <= std::min (kDet - 1, b + 1); ++j) ref = std::max (ref, std::max (A[j], B[j]));   // a gliding pitch is not an onset
             const float z = (S[b] - ref) / an.sigD[b];
-            if (z > 0.0f) acc += std::min (z, 12.0f);   // no one band can make an event alone
+            if (z > 0.0f) acc += an.dofW[b] * std::min (z, 12.0f);   // no one band can make an event alone
         }
         flux[(size_t) n] = acc;
     }
@@ -995,7 +1003,7 @@ inline std::vector<Event> findLike (const Audio& a, const Analysis& an, const De
             if (tp.w[(size_t) b] <= 0.0f) continue;
             float ref = 0; for (int j = std::max (0, b - 1); j <= std::min (kDet - 1, b + 1); ++j) ref = std::max (ref, std::max (A[j], B[j]));
             const float z = (S[b] - ref) / an.sigD[b];
-            if (z > 0.0f) acc += tp.w[(size_t) b] * std::min (z, 12.0f);
+            if (z > 0.0f) acc += tp.w[(size_t) b] * an.dofW[b] * std::min (z, 12.0f);
         }
         fw[(size_t) n] = acc;
     }
@@ -1006,7 +1014,8 @@ inline std::vector<Event> findLike (const Audio& a, const Analysis& an, const De
     const int64_t gap = std::max<int64_t> (1, (int64_t) (p.minGapMs * 0.001 * a.sr));
     const int g = std::max (1, (int) (gap / kHop / 2));
     const float radius = likeRadius (similarity) * 1.3f;
-    for (int n = 3; n < frames - 1; ++n)
+    const int lastFrame = std::min (frames - 1, (int) ((a.size() - kN / 2) / kHop));
+    for (int n = 3; n < lastFrame; ++n)
     {
         const float z = (fw[(size_t) n] - cen[(size_t) n]) / spr[(size_t) n];
         if (z < lambda) continue;
@@ -1067,7 +1076,10 @@ inline std::vector<Event> detect (const Audio& a, const Analysis& an, const Dete
             last = 2;
         }
     }
-    for (int n = firstFrame; n < frames - 1; ++n)
+    // nor at the very end: a recording that stops mid-noise is a hard cut, which splashes across every band like an
+    // attack. No start is looked for where the window runs past the end (an event there would be under 25 ms anyway).
+    const int lastFrame = std::min (frames - 1, (int) ((a.size() - kN / 2) / kHop));
+    for (int n = firstFrame; n < lastFrame; ++n)
     {
         if (flux[(size_t) n] <= thr[(size_t) n]) continue;
         bool top = true;

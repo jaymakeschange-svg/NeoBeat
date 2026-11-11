@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <random>
+#include "Portable.h"
 #include <set>
 
 using namespace bc;
@@ -19,15 +20,14 @@ struct Disk
     std::mutex m;
 };
 
-static void clank (std::vector<float>& x, size_t at, float amp, double f0, double sr, std::mt19937& rng)
+static void clank (std::vector<float>& x, size_t at, float amp, double f0, double sr, PortableRandom& rng)
 {
-    std::normal_distribution<float> nd;
     const double ratios[] = { 1.0, 1.61, 2.32, 3.71 };
     for (size_t i = 0; i < (size_t) (sr * 0.4) && at + i < x.size(); ++i)
     {
         const double t = (double) i / sr; double v = 0;
         for (int k = 0; k < 4; ++k) v += std::exp (-14.0 * (1 + 0.6 * k) * t) * std::sin (6.283185307 * f0 * ratios[k] * t + k) / (1 + 0.5 * k);
-        v += 0.5 * nd (rng) * std::exp (-300.0 * t);
+        v += 0.5 * rng.gauss() * std::exp (-300.0 * t);
         x[at + i] += (float) (amp * std::min (1.0, t * 4000.0) * v * 0.4);
     }
 }
@@ -51,8 +51,7 @@ static void pump (Session& s, int ms = 120000)
 int main()
 {
     Disk disk;
-    std::mt19937 rng (7);
-    std::normal_distribution<float> nd;
+    PortableRandom rng (7);
     // file 1: 17 minutes at 22.05 kHz (three parts), a clank every 2.3 s, some right on the seams
     std::vector<double> truth1;
     {
@@ -62,7 +61,7 @@ int main()
         for (double t : { seam1 + 0.1, seam1 + 0.95, seam1 + 1.05, seam1 + 1.9 }) truth1.push_back (t);   // in the overlap, both sides of its middle
         std::sort (truth1.begin(), truth1.end());
         for (double t : truth1) clank (a.l, (size_t) (t * sr), 0.4f, 700.0, sr, rng);
-        for (auto& v : a.l) v += 0.01f * nd (rng);
+        for (auto& v : a.l) v += 0.01f * rng.gauss();
         disk.files["/rec/long take.wav"] = a;
     }
     // file 2: clanks and thuds, 20 s at 48 kHz stereo
@@ -74,7 +73,7 @@ int main()
             const size_t at = (size_t) ((0.5 + i * 1.2) * sr);
             if (i % 3 == 0) { thud (a.l, at, 0.6f, sr); ++thuds2; } else { clank (a.l, at, 0.4f, 700.0, sr, rng); ++clanks2; }
         }
-        for (auto& v : a.l) v += 0.003f * nd (rng);
+        for (auto& v : a.l) v += 0.003f * rng.gauss();
         a.r = a.l;
         disk.files["/rec/kitchen.wav"] = a;
     }
@@ -87,7 +86,7 @@ int main()
             const size_t at = (size_t) ((0.4 + i * 1.1) * sr);
             if (i % 2 == 0) { clank (a.l, at, 0.3f, 700.0, sr, rng); ++clanks3; } else thud (a.l, at, 0.5f, sr);
         }
-        for (auto& v : a.l) v += 0.004f * nd (rng);
+        for (auto& v : a.l) v += 0.004f * rng.gauss();
         disk.files["/rec/yard.wav"] = a;
     }
 

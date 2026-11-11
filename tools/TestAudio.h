@@ -2,13 +2,14 @@
 #pragma once
 
 #include <random>
+#include "Portable.h"
 #include "app/Processor.h"
 
 namespace testaudio
 {
 struct Made { juce::File file; std::vector<double> truth; double sr = 48000.0; };
 
-struct Gen { std::mt19937 rng { 5 }; std::normal_distribution<float> nd; float white() { return nd (rng); } float uni (float a, float b) { return std::uniform_real_distribution<float> (a, b) (rng); } };
+struct Gen { PortableRandom rng { 5 }; float white() { return rng.gauss(); } float uni (float a, float b) { return (float) rng.uni (a, b); } };
 
 inline void clank (std::vector<float>& x, size_t at, float amp, double f0, double decay, double sr, Gen& g)
 {

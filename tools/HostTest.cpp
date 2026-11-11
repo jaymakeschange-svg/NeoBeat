@@ -307,10 +307,10 @@ int main (int argc, char** argv)
     std::printf ("10. a long random session (seed %d)\n", seed);
     {
         juce::Random r (seed);
-        auto& w = ed->getView();
         int actions = 0;
         for (int it = 0; it < 700; ++it)
         {
+            auto& w = ed->getView();   // the editor may have been closed and opened again
             const int a = r.nextInt (30);
             auto rp = [&] (juce::Component& c) { return juce::Point<float> (r.nextFloat() * (float) c.getWidth(), r.nextFloat() * (float) c.getHeight()); };
             const auto mods = r.nextInt (4) == 0 ? juce::ModifierKeys::shiftModifier : r.nextInt (5) == 0 ? juce::ModifierKeys::altModifier : 0;
