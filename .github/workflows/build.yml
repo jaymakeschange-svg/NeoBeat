@@ -45,8 +45,9 @@ jobs:
             $seed = "0x{0:x}" -f (Get-Random -Minimum 1 -Maximum 0x7fffffff)
             $log = "pv_$i.txt"
             .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --random-seed $seed --timeout-ms 600000 --output-dir pluginval-log $vst | Out-File $log
-            if ($LASTEXITCODE -eq 0) { Write-Host "seed $seed: SUCCESS" }
-            else { $failed++; Write-Host "==== seed $seed FAILED (exit code $LASTEXITCODE)"; Get-Content $log -Tail 80 }
+            # ${seed} in braces: "$seed:" would be read as a scoped variable name and stop the script
+            if ($LASTEXITCODE -eq 0) { Write-Host "seed ${seed}: SUCCESS" }
+            else { $failed++; Write-Host "==== seed ${seed} FAILED (exit code $LASTEXITCODE)"; Get-Content $log -Tail 80 }
           }
           Write-Host "$failed of 3 pluginval runs failed"
           if ($failed -gt 0) { exit 1 }
