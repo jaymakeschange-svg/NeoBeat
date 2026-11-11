@@ -153,9 +153,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout FxProcessor::layout()
         l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { d.id, 1 }, juce::String (d.label).toLowerCase() + (d.when == When::Millis ? " (ms)" : ""), range, d.def,
                 juce::AudioParameterFloatAttributes().withStringFromValueFunction ([unit] (float v, int) { return formatValue (unit, v); })));
     }
-    l.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "rateTempo", 1 }, "tempo sync", true));
-    l.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "keytrack", 1 }, "keytrack", false));
-    l.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "choke", 1 }, "choke", isFriction()));
+    // on/off switches as two-choice parameters: they snap to 0 or 1 whatever raw value a host sends
+    // (AudioParameterBool keeps the raw value, so a restored state could read 0.67 for "on")
+    const juce::StringArray offOn { "Off", "On" };
+    l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "rateTempo", 1 }, "tempo sync", offOn, 1));
+    l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "keytrack", 1 }, "keytrack", offOn, 0));
+    l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "choke", 1 }, "choke", offOn, isFriction() ? 1 : 0));
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "mode", 1 }, "mode", juce::StringArray { "Load a hit", "Catch hits" }, 0));
     l.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "loop", 1 }, "loop", juce::StringArray { "Off", "1 bar", "2 bars", "4 bars" }, 0));
     return l;
