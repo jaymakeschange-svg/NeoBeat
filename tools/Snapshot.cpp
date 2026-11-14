@@ -28,6 +28,14 @@ static void shot (juce::Component& c, const juce::File& dir, const juce::String&
 
 int main (int argc, char** argv)
 {
+    // (the learner and settings of the snapshots are their own)
+    const auto sharedDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("batchcut_snapshots_shared");
+    sharedDir.deleteRecursively(); sharedDir.createDirectory();
+   #if JUCE_WINDOWS
+    _putenv_s ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8());
+   #else
+    setenv ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8(), 1);
+   #endif
     juce::ScopedJuceInitialiser_GUI init;
     const juce::File outDir (juce::File::getCurrentWorkingDirectory().getChildFile (argc > 1 ? argv[1] : "shots"));
     outDir.createDirectory();
@@ -101,6 +109,29 @@ int main (int argc, char** argv)
     ed->setSize (960, 600);
     pump (*proc, 150);
     shot (*ed, outDir, "07_long_take_part2_small");
+
+    // the kit room: empty, then a kit out of every file's one-shots
+    ed->setSize (1280, 800);
+    proc->open (1, 0); settle (*proc);
+    ed->showRoom (1); pump (*proc, 150);
+    shot (*ed, outDir, "08_kit_empty");
+    proc->kitGather (true); settle (*proc); settle (*proc);
+    proc->kitChoose();
+    proc->kit.name = "Yard kit";
+    proc->kitAssign (2, 1, proc->kit.lanes[7].layers[0].item, false);
+    proc->kit.lanes[2].layers[1].offsetMs = 18.0f; proc->kit.lanes[2].layers[1].semis = -4.0f; proc->kit.lanes[2].layers[1].start = 0.05f; proc->kit.lanes[2].layers[1].end = 0.7f;
+    proc->kit.lanes[0].locked = true;
+    proc->kitChanged(); proc->kitMark();
+    proc->kitRate (proc->kit.lanes[2].layers[1].item, 4.0f); proc->kitRate (proc->kit.lanes[0].layers[0].item, 5.0f);
+    ed->getView().kitLane = 2; ed->getView().kitLayer = 1; ed->getView().kitItem = proc->kit.lanes[2].layers[1].item;
+    proc->kitSetPattern (7, true);
+    proc->kitPlayer.playing.store (true);
+    pump (*proc, 900);
+    ed->getKitRoom().refresh(); pump (*proc, 60);
+    shot (*ed, outDir, "09_kit_room");
+    proc->kitPlayer.playing.store (false);
+    ed->setSize (960, 600); pump (*proc, 100);
+    shot (*ed, outDir, "10_kit_room_small");
 
     ed.reset();
     proc.reset();

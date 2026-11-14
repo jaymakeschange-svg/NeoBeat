@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.22)
-project (Batchcut VERSION 1.0.0 LANGUAGES C CXX)
+project (Batchcut VERSION 2.0.0 LANGUAGES C CXX)
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,7 +42,9 @@ set (BATCHCUT_APP_SOURCES
     Source/app/Processor.cpp
     Source/app/Editor.cpp
     Source/app/Display.cpp
-    Source/app/Panels.cpp)
+    Source/app/Panels.cpp
+    Source/app/KitProc.cpp
+    Source/app/KitRoom.cpp)
 
 set (BATCHCUT_DEFINITIONS
     JUCE_WEB_BROWSER=0
@@ -65,7 +67,7 @@ target_link_libraries (Batchcut
 # Framework-free tests: the engine (detection, layers, loudness, player), the session (files, parts, export)
 # and the detection benchmark, all on the exact code the plugin uses.
 find_package (Threads REQUIRED)
-foreach (t test_engine test_session bench_detect)
+foreach (t test_engine test_session test_kit bench_detect)
     add_executable (${t} tools/${t}.cpp)
     target_include_directories (${t} PRIVATE Source)
     target_link_libraries (${t} PRIVATE Threads::Threads)

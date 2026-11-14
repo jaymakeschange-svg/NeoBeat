@@ -24,6 +24,9 @@ struct View
     std::function<void()> repaintAll;     // something on screen changed
     std::function<void()> refreshPanels;  // the panels show something that changed
     std::function<void()> hoverChanged;   // the readout under the display changed
+    int room = 0;                         // 0 the cut room, 1 the kit room
+    int kitLane = 0, kitLayer = 0, kitItem = -1;   // what is selected in the kit room
+    std::function<void()> roomChanged;
 
     double length() const noexcept { return doc && doc->audio ? (double) doc->audio->size() / doc->audio->sr : 0.0; }
     double sr() const noexcept { return doc && doc->audio ? doc->audio->sr : 48000.0; }
@@ -291,9 +294,32 @@ public:
     void refresh();
 private:
     View& view;
+    bcui::Segmented rooms { { "Cut", "Kit" } };
     bcui::Pill play { "Play" }, rec { "Record" }, exp { "Export" }, expAll { "Export all" };
     bcui::Gem loop { "Loop" };
     juce::Rectangle<int> lcd;
+};
+
+// ---------------------------------------------------------------- the kit room (KitRoom.cpp)
+// A NeoBeat kit out of the one-shots: the pool on the left, the 16 lanes in the middle (auditioned inside
+// one of NeoBeat's 128 patterns), the selected lane's layers on the right.
+class KitRoom final : public juce::Component, private juce::Timer
+{
+public:
+    explicit KitRoom (View& v);
+    ~KitRoom() override;
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void visibilityChanged() override;
+    void refresh();
+    bool key (const juce::KeyPress&);
+private:
+    void timerCallback() override;
+    struct Parts;
+    View& view;
+    std::unique_ptr<Parts> parts;
+    int seenVersion = -1, seenStep = -2;
+    bool wasBusy = false;
 };
 
 // ---------------------------------------------------------------- the editor
@@ -315,6 +341,8 @@ public:
     // for the tests: the parts by name
     View& getView() noexcept { return view; }
     Inspector& getInspector() noexcept { return content.inspector; }
+    KitRoom& getKitRoom() noexcept { return content.kitRoom; }
+    void showRoom (int room) { view.room = room; if (view.roomChanged) view.roomChanged(); }
     SpecView& getSpec() noexcept { return content.spec; }
     EventLane& getLane() noexcept { return content.lane; }
     Overview& getOverview() noexcept { return content.overview; }
@@ -333,7 +361,8 @@ private:
         void refreshToolbar();
         juce::String toolHint() const;
         View& view;
-        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector;
+        void showRoom();
+        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; KitRoom kitRoom;
         bcui::Segmented tools { { "Box", "Brush", "Lasso", "Wand" } };
         juce::ComboBox layerBox;
         bcui::Pill erase { "Erase" }, down { "-6 dB" }, up { "+6 dB" }, toLayer { "To layer" }, undo { "Undo" }, redo { "Redo" };

@@ -6,6 +6,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../core/Player.h"
 #include "../core/Session.h"
+#include "../core/Kit.h"
+#include "../neobeat/shared/LearnerStore.h"
 
 // The input recorder: the audio thread writes into chunks the message thread allocates ahead of it.
 class Recorder
@@ -153,12 +155,48 @@ public:
 
     static bool writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r, double sr, int bits, std::string& err);
 
+    // ---- the Kit room: a NeoBeat kit out of the one-shots (message thread)
+    bc::KitModel kit;
+    bc::KitPlayer kitPlayer;
+    void kitGather (bool allFiles);                              // the open file's one-shots, or every file's, into the pool
+    int kitAddFolder (const juce::File& folder);                 // a folder of one-shots into the pool; how many
+    void kitClearPool();
+    void kitChoose();                                            // a sound on every lane that is not locked
+    void kitShuffle();                                           // another kit out of the same pool
+    void kitAssign (int lane, int layer, int item, bool teach);  // teach: you put it there, so that is what it is
+    void kitNext (int lane, int dir);                            // the next (or last) best sound for a lane
+    void kitRate (int item, float stars);
+    float kitRating (int item);
+    void kitChanged (int lane = -1);                             // a lane changed (-1: all of them): the player and the project hear of it
+    void kitSetPattern (int index, bool takeTempo = false);       // takeTempo: the kit takes the pattern's own tempo and swing
+    void kitMark();                                              // a change is complete: it can be undone from here
+    void kitUndo(); void kitRedo();
+    bool kitCanUndo() const noexcept { return ! kitUndoStack.empty(); }
+    bool kitCanRedo() const noexcept { return ! kitRedoStack.empty(); }
+    void kitPlayItem (int item);                                 // a pool sound as it is
+    void kitPlayLane (int lane) { kitPlayer.hit (lane); }
+    bool kitSaveNjq (const juce::File& file, juce::String& error);
+    std::vector<int> kitCandidates (int lane) { return kit.candidates (lane, nbkstore::learner()); }
+    std::shared_ptr<const bc::KitSound> kitSound (int lane) const { return lane >= 0 && lane < bc::kLanes ? laneSounds[(size_t) lane] : nullptr; }
+    juce::String kitMessage;
+    int kitVersion = 0;                                          // changes with the kit (the room repaints)
+
 private:
     void handleAsyncUpdate() override;
     void timerCallback() override;
     void refreshStateCache();
     void applyState (const juce::XmlElement& root);
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
+
+    void kitTakeGathered();
+    std::unique_ptr<juce::XmlElement> kitToXml();
+    void kitFromXml (const juce::XmlElement&);
+    std::array<std::shared_ptr<const bc::KitSound>, bc::kLanes> laneSounds {};
+    std::vector<std::shared_ptr<const bc::KitSound>> kitKeep;   // never freed on the audio thread
+    std::unique_ptr<juce::XmlElement> kitXmlCache; int kitXmlVersion = -1;
+    using KitLanes = std::array<bc::KitLane, bc::kLanes>;
+    KitLanes kitSaved {};
+    std::vector<KitLanes> kitUndoStack, kitRedoStack;
 
     std::atomic<float>* level = nullptr;
     std::atomic<float>* thru = nullptr;

@@ -82,6 +82,8 @@ void BcProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     if (recorder.isRecording()) stopRecording();   // the rate may change: what was recorded so far is kept
     hostRate = sampleRate > 0 ? sampleRate : 48000.0;
     recorder.prepare (hostRate);
+    kitPlayer.prepare (hostRate);
+    kitSetPattern (kit.pattern);
     scratch.assign ((size_t) std::max (1, samplesPerBlock), 0.0f);
 }
 
@@ -101,7 +103,12 @@ void BcProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         else if (ch >= outCh) buffer.clear (ch, 0, n);
     }
     const float gain = juce::Decibels::decibelsToGain (level->load(), -100.0f);
-    if (outCh >= 2) preview.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, hostRate, gain);
+    if (outCh >= 2)
+    {
+        preview.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, hostRate, gain);
+        kitPlayer.level.store (gain);
+        kitPlayer.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
+    }
     else
     {
         // a mono output: the preview's two sides summed (in pieces of the scratch buffer's size)
@@ -277,6 +284,8 @@ void BcProcessor::refreshStateCache()
     auto* v = root.createNewChildElement ("VIEW");
     v->setAttribute ("file", openFile); v->setAttribute ("part", openPart);
     v->setAttribute ("start", viewStart); v->setAttribute ("end", viewEnd);
+    if (kitXmlVersion != kitVersion || kitXmlCache == nullptr) { kitXmlCache = kitToXml(); kitXmlVersion = kitVersion; }   // (its sounds are encoded only when the kit changed)
+    root.addChildElement (new juce::XmlElement (*kitXmlCache));
     juce::MemoryBlock mb;
     copyXmlToBinary (root, mb);
     const juce::ScopedLock sl (stateLock);
@@ -306,6 +315,7 @@ void BcProcessor::applyState (const juce::XmlElement& root)
     if (auto* p = root.getChildByName ("PARAMS")) apvts.replaceState (juce::ValueTree::fromXml (*p));
     stopPlayback();
     if (recorder.isRecording()) stopRecording();
+    if (auto* k = root.getChildByName ("KIT")) kitFromXml (*k);
     if (auto* s = root.getChildByName ("SESSION"))
     {
         std::vector<std::string> paths;
@@ -335,6 +345,7 @@ void BcProcessor::handleAsyncUpdate()
     if (st != nullptr) applyState (*st);
     const auto before = session.doc();
     session.applyResults();
+    kitTakeGathered();
     if (session.doc() != before) stateDirty = true;
     sendChangeMessage();
 }

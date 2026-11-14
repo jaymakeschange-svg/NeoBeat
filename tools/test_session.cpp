@@ -262,6 +262,22 @@ int main()
         s.settings.exp.normMode = 0; s.settings.exp.separate = false; s.settings.pick.mode = Pick::All;
     }
 
+    std::printf ("6b. gathering for the kit room\n");
+    {
+        s.settings.exp.normMode = 0; s.settings.exp.separate = false; s.settings.pick.mode = Pick::All;
+        disk.written.clear();
+        s.exportFiles (false); pump (s, 300000);
+        const auto exported = disk.written;
+        disk.written.clear();
+        s.gather (false); pump (s, 300000);
+        const auto clips = s.takeGathered();
+        CHECK (! exported.empty() && clips.size() == exported.size() && disk.written.empty(), "the open file's one-shots as sound: %zu, as many as EXPORT writes (%zu), and nothing written", clips.size(), exported.size());
+        int same = 0;
+        for (const auto& c : clips) for (const auto& w : exported) if (w.first.find (c.name + ".wav") != std::string::npos && w.second.first.size() == c.l.size()) { ++same; break; }
+        CHECK (same == (int) clips.size(), "each one is the cut EXPORT makes, under the same name (%d of %zu)", same, clips.size());
+        CHECK (s.takeGathered().empty() && s.status().note.find ("gathered") != std::string::npos, "taken once; the status says so");
+    }
+
     std::printf ("7. busy and cancelled\n");
     s.settings.exp.separate = false; s.settings.pick.mode = Pick::All;
     s.exportFiles (true);

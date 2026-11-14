@@ -72,6 +72,14 @@ int main (int argc, char** argv)
     const int seed = argc > 1 ? std::atoi (argv[1]) : 1;
     const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("batchcut_hosttest");
     dir.deleteRecursively(); dir.createDirectory();
+    // (the learner and the preset folder of this test are its own, not yours)
+    const auto sharedDir = dir.getSiblingFile ("batchcut_hosttest_shared");
+    sharedDir.deleteRecursively(); sharedDir.createDirectory();
+   #if JUCE_WINDOWS
+    _putenv_s ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8());
+   #else
+    setenv ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8(), 1);
+   #endif
     std::printf ("1. test recordings\n");
     const auto field = testaudio::field (dir), loop = testaudio::loop (dir), take = testaudio::longTake (dir);
     CHECK (field.file.existsAsFile() && loop.file.existsAsFile() && take.file.existsAsFile(), "three WAVs written (%zu, %zu, %zu events planted)", field.truth.size(), loop.truth.size(), take.truth.size());
@@ -304,14 +312,148 @@ int main (int argc, char** argv)
     for (auto sz : { std::pair<int, int> { 900, 563 }, { 1920, 1200 }, { 1280, 800 } }) { ed->setSize (sz.first, sz.second); pump (*proc, 30); auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f); juce::ignoreUnused (img); }
     CHECK (ed->getView().doc == proc->session.doc(), "closed while playing, opened again, resized");
 
-    std::printf ("10. a long random session (seed %d)\n", seed);
+    std::printf ("10. the kit room\n");
+    {
+        proc->open (loopIdx, 0); waitIdle (*proc); pump (*proc, 100);
+        proc->kitGather (false);
+        CHECK (waitIdle (*proc), "the open file's one-shots gathered");
+        pump (*proc, 150);
+        const int fromLoop = (int) proc->kit.pool.size();
+        CHECK (fromLoop >= 20, "the drum loop gave the pool %d sounds", fromLoop);
+        proc->kitGather (false); waitIdle (*proc); pump (*proc, 150);
+        CHECK ((int) proc->kit.pool.size() == fromLoop, "gathering the same file again adds nothing (%d)", (int) proc->kit.pool.size());
+        proc->kitGather (true); waitIdle (*proc, 180000); pump (*proc, 150);
+        const int fromAll = (int) proc->kit.pool.size();
+        CHECK (fromAll > fromLoop, "every file: %d sounds", fromAll);
+        const int fromFolder = proc->kitAddFolder (out);
+        CHECK (fromFolder > 0 && (int) proc->kit.pool.size() == fromAll + fromFolder, "a folder of one-shots: %d more", fromFolder);
+        bool finite = true; for (const auto& it : proc->kit.pool) { finite = finite && it->f.valid && std::isfinite (it->quality) && std::isfinite (it->lufs); for (float r : it->roles) finite = finite && std::isfinite (r); }
+        CHECK (finite, "every pool sound was listened to (role, quality, loudness)");
+
+        proc->kitChoose();
+        int filled = 0; std::vector<int> picked;
+        for (const auto& ln : proc->kit.lanes) if (! ln.empty()) { ++filled; picked.push_back (ln.layers[0].item); }
+        std::sort (picked.begin(), picked.end());
+        CHECK (filled == 16 && std::adjacent_find (picked.begin(), picked.end()) == picked.end(), "auto-fill: %d lanes, no sound twice", filled);
+        const auto* kick = proc->kit.item (proc->kit.lanes[0].layers[0].item);
+        CHECK (kick != nullptr && kick->f.centroidHz < 1500.0f, "the kick lane got a low sound (centre %.0f Hz)", kick ? kick->f.centroidHz : 0.0f);
+
+        // heard in a pattern
+        proc->kitSetPattern (3);
+        proc->kitPlayer.playing.store (true);
+        pump (*proc, 60000, 0.0f, 300);
+        const float playing = lastOut; const int stepNow = proc->kitPlayer.step.load();
+        proc->kitPlayer.playing.store (false);
+        pump (*proc, 60000, 0.0f, 1400);
+        CHECK (playing > 0.02f && playing <= 0.9f && stepNow >= 0, "the kit plays in pattern 4, under the ceiling (peak %.2f, step %d)", playing, stepNow);
+        pump (*proc, 60000, 0.0f, 30);
+        CHECK (lastOut < 1.0e-4f && proc->kitPlayer.step.load() == -1, "and stops (%.5f)", lastOut);
+        proc->kitPlayLane (0); pump (*proc, 60000, 0.0f, 20);
+        CHECK (lastOut > 0.01f, "a click on a lane is heard (%.2f)", lastOut);
+
+        // layers, lock, shuffle, undo
+        bc::KitSound one, two;
+        proc->kit.flatten (2, one);
+        const int extra = proc->kit.lanes[4].layers[0].item;
+        proc->kitAssign (2, 1, extra, false);
+        proc->kit.lanes[2].layers[1].offsetMs = 30.0f; proc->kit.lanes[2].layers[1].semis = -5.0f; proc->kitChanged (2); proc->kitMark();
+        proc->kit.flatten (2, two);
+        float pk = 0.0f; for (size_t i = 0; i < two.l.size(); ++i) pk = std::max (pk, std::max (std::fabs (two.l[i]), std::fabs (two.r[i])));
+        bool differs = two.l.size() != one.l.size(); for (size_t i = 0; ! differs && i < one.l.size(); ++i) differs = std::fabs (one.l[i] - two.l[i]) > 1.0e-4f;
+        CHECK (differs && pk <= 0.99f && pk > 0.01f, "a second layer, 30 ms late and 5 st down, is mixed into the lane (peak %.2f)", pk);
+        proc->kitUndo(); proc->kitUndo();
+        CHECK (proc->kit.lanes[2].layers[1].item < 0, "undo takes the layer away");
+        proc->kitRedo(); proc->kitRedo();
+        CHECK (proc->kit.lanes[2].layers[1].item == extra && proc->kit.lanes[2].layers[1].semis == -5.0f, "redo brings it back");
+        proc->kit.lanes[0].locked = true; proc->kitChanged (0); proc->kitMark();
+        const int lockedItem = proc->kit.lanes[0].layers[0].item;
+        bool moved = false, kept = true, twice = false;
+        for (int k = 0; k < 6; ++k)
+        {
+            const auto before = proc->kit.lanes;
+            proc->kitShuffle();
+            kept = kept && proc->kit.lanes[0].layers[0].item == lockedItem;
+            for (int l = 1; l < 16; ++l) moved = moved || proc->kit.lanes[(size_t) l].layers[0].item != before[(size_t) l].layers[0].item;
+            std::vector<int> u; for (const auto& ln : proc->kit.lanes) if (ln.layers[0].item >= 0) u.push_back (ln.layers[0].item);
+            std::sort (u.begin(), u.end()); twice = twice || std::adjacent_find (u.begin(), u.end()) != u.end();
+        }
+        CHECK (moved && kept && ! twice, "shuffle changes the open lanes, keeps the locked one, uses no sound twice");
+        proc->kitNext (5, 1);
+        const int rated = proc->kit.lanes[5].layers[0].item;
+        proc->kitRate (rated, 5.0f);
+        CHECK (proc->kitRating (rated) == 5.0f && shared::learnerFile().existsAsFile(), "five stars are remembered, in the learner both apps share");
+        const int odd = proc->kitCandidates (9).back();
+        const float fitBefore = proc->kit.pool[(size_t) odd]->roles[9];
+        proc->kitAssign (9, 0, odd, true);
+        const float fitAfter = proc->kit.pool[(size_t) odd]->roles[9];
+        CHECK (fitAfter > fitBefore && fitAfter > 0.3f, "a sound you put on a lane is learned as that lane's kind (fit %.2f, was %.2f)", fitAfter, fitBefore);
+
+        // the file NeoBeat loads
+        proc->kit.name = "Yard kit"; proc->kit.bpm = 93.0; proc->kit.swing = 0.58f; proc->kitChanged();
+        const auto njqFile = dir.getChildFile ("Yard kit.njq");
+        juce::String err;
+        const bool savedOk = proc->kitSaveNjq (njqFile, err);
+        // (for the round trip into NeoBeat: BATCHCUT_KEEP_NJQ names where a copy goes)
+        { const auto keep = juce::SystemStats::getEnvironmentVariable ("BATCHCUT_KEEP_NJQ", {}); if (keep.isNotEmpty()) njqFile.copyFileTo (juce::File (keep)); }
+        CHECK (savedOk && njqFile.getSize() > 2000, "saved as .NJQ (%d kB) %s", (int) (njqFile.getSize() / 1024), err.toRawUTF8());
+        {
+            auto back = std::make_unique<njq::Kit>();
+            const bool ok = njq::load (njqFile, *back, err);
+            int lanes = 0; float top = 0.0f; bool rates = true;
+            for (const auto& ln : back->lanes) if (ln.set && ln.hasSample) { ++lanes; rates = rates && ln.sampleRate > 8000.0 && ln.l.size() == ln.r.size() && ln.l.size() > 16; for (float x : ln.l) top = std::max (top, std::fabs (x)); }
+            int hits = 0, want = 0; const auto preset = nb::patternPreset (3);
+            for (int l = 0; l < 16; ++l) for (int st = 0; st < preset.pattern.length; ++st) { want += preset.pattern.steps[(size_t) l][(size_t) st].vel > 0; hits += back->scenes[0].steps[(size_t) l][(size_t) st].vel > 0; }
+            CHECK (ok && lanes == 16 && rates && top > 0.05f && top <= 1.0f, "read back: %d lanes with their sounds (peak %.2f)", lanes, top);
+            CHECK (std::fabs (back->bpm - 93.0) < 0.01 && std::fabs (back->swing - 0.58f) < 0.001f && back->patternIndex == 3 && hits == want && want > 0 && back->name == "Yard kit",
+                   "with its tempo (%.0f), swing, name and pattern (%d hits)", back->bpm, hits);
+        }
+
+        // the kit in the project
+        juce::MemoryBlock state; proc->getStateInformation (state);
+        auto other = std::make_unique<BcProcessor>();
+        other->setPlayConfigDetails (2, 2, 48000.0, 512); other->prepareToPlay (48000.0, 512);
+        other->setStateInformation (state.getData(), (int) state.getSize());
+        waitIdle (*other); pump (*other, 100);
+        bool same = other->kit.name == "Yard kit" && std::fabs (other->kit.bpm - 93.0) < 0.01 && other->kit.pattern == 3 && other->kit.lanes[0].locked;
+        for (int l = 0; l < 16 && same; ++l) for (int y = 0; y < 3 && same; ++y)
+        {
+            const auto *a = proc->kit.item (proc->kit.lanes[(size_t) l].layers[(size_t) y].item), *b = other->kit.item (other->kit.lanes[(size_t) l].layers[(size_t) y].item);
+            same = (a == nullptr) == (b == nullptr) && (a == nullptr || (a->name == b->name && a->l.size() == b->l.size()));
+        }
+        bc::KitSound sa, sb; proc->kit.flatten (2, sa); other->kit.flatten (2, sb);
+        float worst = 0.0f; if (sa.l.size() == sb.l.size()) for (size_t i = 0; i < sa.l.size(); ++i) worst = std::max (worst, std::fabs (sa.l[i] - sb.l[i])); else worst = 1.0f;
+        CHECK (same && worst < 2.0e-3f, "the project keeps the kit: lanes, layers and their sounds (%d kB, worst difference %.5f)", (int) (state.getSize() / 1024), worst);
+        other->releaseResources(); other.reset();
+
+        // the room itself
+        ed->showRoom (1); pump (*proc, 80);
+        auto& room = ed->getKitRoom();
+        CHECK (room.isVisible() && ! ed->getSpec().isVisible(), "KIT shows the kit room");
+        { auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f); juce::ignoreUnused (img); }
+        ed->keyPressed (juce::KeyPress (juce::KeyPress::downKey)); ed->keyPressed (juce::KeyPress (juce::KeyPress::downKey));
+        CHECK (ed->getView().kitLane == 2, "arrow keys walk the lanes");
+        const int was = proc->kit.lanes[2].layers[0].item;
+        ed->keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        CHECK (proc->kit.lanes[2].layers[0].item != was, "right: the next best sound for the lane");
+        ed->keyPressed (juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0));
+        CHECK (proc->kit.lanes[2].layers[0].item == was, "Ctrl+Z in the kit room undoes it");
+        ed->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey)); pump (*proc, 60000, 0.0f, 120);
+        CHECK (proc->kitPlayer.playing.load() && lastOut > 0.02f, "Space plays the kit");
+        ed->showRoom (0); pump (*proc, 60);
+        CHECK (! proc->kitPlayer.playing.load() && ed->getSpec().isVisible() && ! room.isVisible(), "CUT goes back, and the pattern stops");
+        proc->kitClearPool();
+        int still = 0; for (const auto& ln : proc->kit.lanes) still += ln.empty() ? 0 : 1;
+        CHECK (still == 16 && (int) proc->kit.pool.size() <= 17, "clearing the pool keeps the lanes' sounds (%d left in it)", (int) proc->kit.pool.size());
+    }
+
+    std::printf ("11. a long random session (seed %d)\n", seed);
     {
         juce::Random r (seed);
         int actions = 0;
         for (int it = 0; it < 700; ++it)
         {
             auto& w = ed->getView();   // the editor may have been closed and opened again
-            const int a = r.nextInt (30);
+            const int a = r.nextInt (36);
             auto rp = [&] (juce::Component& c) { return juce::Point<float> (r.nextFloat() * (float) c.getWidth(), r.nextFloat() * (float) c.getHeight()); };
             const auto mods = r.nextInt (4) == 0 ? juce::ModifierKeys::shiftModifier : r.nextInt (5) == 0 ? juce::ModifierKeys::altModifier : 0;
             auto& sp = ed->getSpec();
@@ -344,6 +486,31 @@ int main (int argc, char** argv)
                 case 26: if (r.nextInt (6) == 0) { proc->session.exportFiles (r.nextBool()); pump (*proc, 20 + r.nextInt (200)); proc->session.cancelTask(); } break;
                 case 27: if (r.nextInt (8) == 0) { const int ws = 800 + r.nextInt (1100); ed->setSize (ws, ws * 800 / 1280); } break;
                 case 28: if (r.nextInt (10) == 0) { ed.reset(); pump (*proc, 10); ed.reset (dynamic_cast<BcEditor*> (proc->createEditor())); ed->setSize (1280, 800); } break;
+                case 29: ed->showRoom (r.nextInt (2)); break;
+                case 30: if (r.nextInt (8) == 0) proc->kitGather (r.nextBool()); else if (r.nextInt (30) == 0) proc->kitClearPool(); break;
+                case 31: if (r.nextBool()) proc->kitChoose(); else proc->kitShuffle(); break;
+                case 32: proc->kitAssign (r.nextInt (16), r.nextInt (3), r.nextInt ((int) proc->kit.pool.size() + 2) - 1, r.nextBool()); break;
+                case 33:
+                {
+                    auto& ly = proc->kit.lanes[(size_t) r.nextInt (16)].layers[(size_t) r.nextInt (3)];
+                    ly.levelDb = r.nextFloat() * 60.0f - 36.0f; ly.offsetMs = r.nextFloat() * 250.0f - 50.0f; ly.semis = r.nextFloat() * 48.0f - 24.0f;
+                    ly.start = r.nextFloat(); ly.end = r.nextFloat(); ly.fadeMs = r.nextFloat() * 300.0f; ly.reverse = r.nextBool();
+                    proc->kitChanged (r.nextInt (17) - 1); proc->kitMark();
+                    if (r.nextInt (3) == 0) proc->kitSetPattern (r.nextInt (128), r.nextBool());
+                    break;
+                }
+                case 34:
+                    switch (r.nextInt (6))
+                    {
+                        case 0: proc->kitUndo(); break;
+                        case 1: proc->kitRedo(); break;
+                        case 2: proc->kitPlayer.playing.store (r.nextBool()); break;
+                        case 3: proc->kitNext (r.nextInt (16), r.nextBool() ? 1 : -1); break;
+                        case 4: proc->kitRate (r.nextInt ((int) proc->kit.pool.size() + 1), (float) r.nextInt (6)); break;
+                        default: { static const int keys[] = { juce::KeyPress::upKey, juce::KeyPress::downKey, juce::KeyPress::leftKey, juce::KeyPress::rightKey, juce::KeyPress::spaceKey, juce::KeyPress::returnKey };
+                                   ed->keyPressed (juce::KeyPress (keys[r.nextInt (6)])); break; }
+                    }
+                    break;
                 default: if (w.selEvent()) proc->playEvent (*w.selEvent()); break;
             }
             ++actions;
@@ -354,6 +521,8 @@ int main (int argc, char** argv)
             auto& vv = ed->getView();
             if (vv.doc) for (size_t i = 1; i < vv.doc->events.size(); ++i) if (vv.doc->events[i].onset < vv.doc->events[i - 1].onset) { std::printf ("  FAIL: events out of order at step %d\n", it); ++failures; break; }
             if (! (vv.t1 > vv.t0) || ! std::isfinite (vv.t0)) { std::printf ("  FAIL: the view broke at step %d\n", it); ++failures; }
+            for (const auto& ln : proc->kit.lanes) for (const auto& ly : ln.layers) if (ly.item >= (int) proc->kit.pool.size()) { std::printf ("  FAIL: a lane points outside the pool at step %d\n", it); ++failures; }
+            if (! std::isfinite (lastOut) || lastOut > 8.0f) { std::printf ("  FAIL: the output broke at step %d (%f)\n", it, lastOut); ++failures; }
         }
         waitIdle (*proc, 120000);
         CHECK (true, "%d random actions, nothing broke", actions);
@@ -361,7 +530,7 @@ int main (int argc, char** argv)
     ed.reset();
     proc->releaseResources();
     proc.reset();
-    dir.deleteRecursively();
+    dir.deleteRecursively(); sharedDir.deleteRecursively();
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
 }

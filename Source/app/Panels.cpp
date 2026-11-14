@@ -696,7 +696,10 @@ void Inspector::resized()
 
 Header::Header (View& v) : view (v)
 {
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &play, &rec, &exp, &expAll, &loop }) addAndMakeVisible (c);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &rooms, &play, &rec, &exp, &expAll, &loop }) addAndMakeVisible (c);
+    rooms.setItemTooltip (0, "The cut room: find the events in your recordings and cut the one-shots");
+    rooms.setItemTooltip (1, "The kit room: build a NeoBeat kit out of the one-shots and save it as a .NJQ file");
+    rooms.onSelect = [this] (int i) { view.room = i; if (view.roomChanged) view.roomChanged(); };
     rec.setColour (juce::TextButton::buttonOnColourId, C::red());
     play.setTooltip ("Play the open file from the cursor (Space). Click an event to hear just it.");
     loop.setTooltip ("Play the visible stretch round and round (L)");
@@ -716,6 +719,9 @@ Header::Header (View& v) : view (v)
 
 void Header::refresh()
 {
+    const bool kit = view.room == 1;
+    rooms.setSelected (view.room);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &play, &rec, &exp, &expAll, &loop }) c->setVisible (! kit);
     play.setButtonText (view.proc.isPlaying() ? "Stop" : "Play");
     play.setToggleState (view.proc.isPlaying(), juce::dontSendNotification);
     loop.setToggleState (view.loop, juce::dontSendNotification);
@@ -747,6 +753,13 @@ void Header::paint (juce::Graphics& g)
     juce::String l1, l2;
     if (view.proc.recorder.isRecording()) { l1 = "RECORDING  " + mmss (view.proc.recorder.seconds()); l2 = "Press STOP to save it, then it opens here"; }
     else if (s.busy) l1 = juce::String::fromUTF8 (s.what.c_str());
+    else if (view.room == 1)
+    {
+        const auto& k = view.proc.kit;
+        int lanes = 0; for (const auto& ln : k.lanes) lanes += ln.empty() ? 0 : 1;
+        l1 = view.proc.kitMessage.isNotEmpty() ? view.proc.kitMessage : juce::String ("Gather one-shots, then AUTO-FILL the kit");
+        l2 = plural ((int) k.pool.size(), "sound") + " in the pool,  " + juce::String (lanes) + " of 16 lanes filled,  " + juce::String (k.bpm, 1) + " BPM";
+    }
     else if (view.proc.lastMessage.isNotEmpty()) { l1 = view.proc.lastMessage; }
     else if (view.doc && view.doc->file >= 0 && view.doc->file < (int) view.proc.session.files.size())
     {
@@ -756,7 +769,7 @@ void Header::paint (juce::Graphics& g)
            + (view.doc->parts > 1 ? ",  part " + juce::String (view.doc->part + 1) + " of " + juce::String (view.doc->parts) : juce::String());
     }
     else l1 = "Drop recordings here to begin";
-    if (! s.busy && (s.exported > 0 || s.failed > 0) && l2.isEmpty())
+    if (! s.busy && view.room == 0 && (s.exported > 0 || s.failed > 0) && l2.isEmpty())
         l2 = "Last export: " + juce::String (s.exported) + " files" + (s.failed > 0 ? ", " + juce::String (s.failed) + " failed" : "") + (s.note.empty() ? "" : "  (" + juce::String::fromUTF8 (s.note.c_str()) + ")");
     g.setFont (font (13.0f, true)); g.setColour (view.proc.recorder.isRecording() ? C::red().brighter (0.4f) : C::lcdText());
     g.drawFittedText (l1, t.removeFromTop (18), juce::Justification::centredLeft, 1, 0.8f);
@@ -771,10 +784,12 @@ void Header::paint (juce::Graphics& g)
 
 void Header::resized()
 {
-    play.setBounds (246, 16, 76, 32);
-    loop.setBounds (328, 20, 70, 24);
-    rec.setBounds (404, 16, 104, 32);
-    lcd = { 520, 10, 484, 44 };
+    rooms.setBounds (244, 16, 112, 32);
+    const bool kit = view.room == 1;
+    play.setBounds (364, 16, 70, 32);
+    loop.setBounds (440, 20, 66, 24);
+    rec.setBounds (510, 16, 100, 32);
+    lcd = kit ? juce::Rectangle<int> (368, 10, 900, 44) : juce::Rectangle<int> (620, 10, 384, 44);
     exp.setBounds (1016, 16, 118, 32);
     expAll.setBounds (1142, 16, 126, 32);
 }

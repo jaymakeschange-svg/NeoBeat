@@ -250,6 +250,20 @@ public:
         post (std::move (t));
     }
 
+    // the Kit room: the one-shots of the open file, or of every file, as sound (not written anywhere).
+    // They are cut exactly as an export would cut them (the same events, fades and layers), at their own level.
+    struct Clip { std::vector<float> l, r; double sr = 48000.0; std::string name, source; };
+    void gather (bool allFiles)
+    {
+        Task t; t.kind = Task::Gather; t.settings = settings;
+        auto d = doc();
+        for (int i = 0; i < (int) files.size(); ++i)
+            if (allFiles || (d && d->file == i)) { t.exportFiles.push_back ((int) i); t.exportStates.push_back (files[(size_t) i]); }
+        if (t.exportStates.empty()) return;
+        post (std::move (t));
+    }
+    std::vector<Clip> takeGathered() { std::vector<Clip> c; std::lock_guard<std::mutex> lock (resultMutex); c.swap (gathered); return c; }
+
     void cancelTask() { std::lock_guard<std::mutex> lock (mutex); cancel = true; }
 
     struct Status
@@ -305,7 +319,7 @@ public:
 private:
     struct Task
     {
-        enum Kind { Probe, Open, Detect, Export } kind = Probe;
+        enum Kind { Probe, Open, Detect, Export, Gather } kind = Probe;
         std::vector<std::string> paths;
         std::string path;
         FileInfo info;
@@ -381,6 +395,7 @@ private:
                 if (t.kind == Task::Probe) doProbe (t);
                 else if (t.kind == Task::Open) doOpen (t);
                 else if (t.kind == Task::Detect) doDetect (t);
+                else if (t.kind == Task::Gather) doExport (t);
                 else doExport (t);
             }
             catch (const std::exception& e) { std::lock_guard<std::mutex> lock (statusMutex); stat.lastError = e.what(); }
@@ -454,6 +469,7 @@ private:
     void doExport (const Task& t)
     {
         const auto& st = t.settings;
+        const bool gathering = t.kind == Task::Gather;      // the same cuts, kept as sound for the Kit room
         int written = 0, failed = 0, held = 0;
         std::string lastErr, lastDir;
         std::vector<Written> loud;   // loudness mode: what was written, at what level
@@ -468,14 +484,14 @@ private:
             if (fs.info.sr <= 0) { ++failed; lastErr = fs.info.name + ": could not read it"; continue; }
             std::string dir = st.outDir;
             if (st.folderPerFile) dir = joinPath (dir, fs.info.name);
-            if (makeDir && ! makeDir (dir)) { ++failed; lastErr = "could not make the folder " + dir; continue; }
+            if (! gathering && makeDir && ! makeDir (dir)) { ++failed; lastErr = "could not make the folder " + dir; continue; }
             lastDir = dir;
             Namer namer;
             const int parts = partCount (fs.info);
             for (int p = 0; p < parts; ++p)
             {
                 if (cancelled()) { std::lock_guard<std::mutex> lock (statusMutex); stat.exported = written; stat.failed = failed; stat.lastError = "export stopped"; stat.note.clear(); return; }
-                const std::string what = "Exporting " + fs.info.name + (parts > 1 ? " (part " + std::to_string (p + 1) + " of " + std::to_string (parts) + ")" : std::string()) + "  |  file " + std::to_string (fi + 1) + " of " + std::to_string (total);
+                const std::string what = std::string (gathering ? "Gathering " : "Exporting ") + fs.info.name + (parts > 1 ? " (part " + std::to_string (p + 1) + " of " + std::to_string (parts) + ")" : std::string()) + "  |  file " + std::to_string (fi + 1) + " of " + std::to_string (total);
                 setStatus (true, what, (float) fi / (float) std::max (1, total));
                 Audio a; std::string err;
                 if (! loadPart (fs.info, p, a, err)) { ++failed; lastErr = fs.info.name + ": " + err; break; }
@@ -494,6 +510,16 @@ private:
                     std::vector<Out> outs;
                     std::vector<float> ml, mr;
                     renderEvent (a, *an, ed.layers, e, raw, -1, ml, mr);
+                    if (gathering)
+                    {
+                        Clip c; c.sr = a.sr; c.source = fs.info.name;
+                        c.name = namer.name (fs.info.name, p, e, groups, like, std::string());
+                        const size_t dot = c.name.find_last_of ('.'); if (dot != std::string::npos) c.name.erase (dot);
+                        c.l = std::move (ml); c.r = mr.size() == c.l.size() ? std::move (mr) : c.l;
+                        { std::lock_guard<std::mutex> lock (resultMutex); gathered.push_back (std::move (c)); }
+                        ++written;
+                        continue;
+                    }
                     const Level lv = measureLevel (ml, mr, a.sr);   // the level is the mix's, also for layer files
                     float peakDb = lv.peakDb;
                     if (st.exp.separate)
@@ -524,6 +550,12 @@ private:
                     setStatus (true, what, ((float) fi + 0.5f + 0.5f * (float) (k + 1) / (float) std::max<size_t> (1, chosen.size())) / (float) std::max (1, total));
                 }
             }
+        }
+        if (gathering)
+        {
+            std::lock_guard<std::mutex> lock (statusMutex);
+            stat.failed = failed; stat.lastError = lastErr; stat.note = std::to_string (written) + (written == 1 ? " one-shot" : " one-shots") + " gathered for the kit";
+            return;
         }
         std::string note;
         if (st.exp.normMode == 1 && written > 0) note = "every peak at " + dbText (st.exp.normDb) + " dBFS";
@@ -576,5 +608,6 @@ private:
     std::shared_ptr<const Doc> current;
     Status stat;
     std::vector<Result> results;
+    std::vector<Clip> gathered;
 };
 } // namespace bc

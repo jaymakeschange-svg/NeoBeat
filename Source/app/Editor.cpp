@@ -369,8 +369,10 @@ void View::play()
 // ---------------------------------------------------------------- the content (1280 x 800)
 
 BcEditor::Content::Content (View& v)
-    : view (v), header (v), files (v), spec (v), lane (v), ruler (v), overview (v), inspector (v)
+    : view (v), header (v), files (v), spec (v), lane (v), ruler (v), overview (v), inspector (v), kitRoom (v)
 {
+    addChildComponent (kitRoom);
+    view.roomChanged = [this] { showRoom(); };
     for (juce::Component* c : std::initializer_list<juce::Component*> { &header, &files, &spec, &lane, &ruler, &overview, &inspector, &tools, &layerBox,
                                                                           &erase, &down, &up, &toLayer, &undo, &redo, &partPrev, &partNext, &zoomOut, &zoomIn, &zoomFit })
         addAndMakeVisible (c);
@@ -430,6 +432,19 @@ juce::String BcEditor::Content::toolHint() const
     }
 }
 
+void BcEditor::Content::showRoom()
+{
+    const bool kit = view.room == 1;
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &files, &spec, &lane, &ruler, &overview, &inspector, &tools, &layerBox,
+                                                                          &erase, &down, &up, &toLayer, &undo, &redo, &partPrev, &partNext, &zoomOut, &zoomIn, &zoomFit })
+        c->setVisible (! kit);
+    if (kit) view.proc.stopPlayback(); else view.proc.kitPlayer.playing.store (false);
+    kitRoom.setVisible (kit);
+    if (kit) kitRoom.refresh();
+    header.refresh(); header.resized(); header.repaint();
+    repaint();
+}
+
 void BcEditor::Content::refreshToolbar()
 {
     auto* ed = view.edits();
@@ -451,6 +466,7 @@ void BcEditor::Content::refreshToolbar()
 void BcEditor::Content::paint (juce::Graphics& g)
 {
     paintChassis (g, getLocalBounds().toFloat());
+    if (view.room == 1) return;
     paintPlate (g, { 222.0f, 68.0f, 736.0f, 724.0f }, 12.0f);
     // the part, and the readout under the pointer
     juce::String part = "Nothing open";
@@ -490,6 +506,7 @@ void BcEditor::Content::resized()
     zoomIn.setBounds (858, 736, 30, 28);
     zoomFit.setBounds (890, 736, 60, 28);
     inspector.setBounds (964, 72, 304, 716);
+    kitRoom.setBounds (0, 64, 1280, 736);
 }
 
 // ---------------------------------------------------------------- the editor
@@ -499,7 +516,7 @@ BcEditor::BcEditor (BcProcessor& p) : juce::AudioProcessorEditor (p), proc (p), 
     setLookAndFeel (&look);
     addAndMakeVisible (content);
     view.repaintAll = [this] { content.spec.repaint(); content.lane.repaint(); content.ruler.repaint(); content.overview.repaint(); content.refreshToolbar(); };
-    view.refreshPanels = [this] { content.inspector.refresh(); content.header.refresh(); content.files.refresh(); content.refreshToolbar(); };
+    view.refreshPanels = [this] { content.inspector.refresh(); content.header.refresh(); content.files.refresh(); content.refreshToolbar(); if (view.room == 1) content.kitRoom.refresh(); };
     view.hoverChanged = [this] { content.repaint (content.hoverLabel); };
     setResizable (true, true);
     setResizeLimits (800, 500, 2560, 1600);
@@ -583,6 +600,7 @@ bool BcEditor::keyPressed (const juce::KeyPress& key)
     const auto ch = key.getTextCharacter();
     const auto letter = c < 256 ? juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) c) : 0;   // JUCE gives letters in either case
     const auto mods = key.getModifiers();
+    if (view.room == 1) return content.kitRoom.key (key);
     if (key == juce::KeyPress::spaceKey) { view.play(); return true; }
     if (c == juce::KeyPress::escapeKey) { view.clearSelection(); return true; }
     if (mods.isCommandDown() && letter == 'z') { if (mods.isShiftDown()) view.redo(); else view.undo(); return true; }
@@ -624,6 +642,21 @@ bool BcEditor::isInterestedInFileDrag (const juce::StringArray& files)
 void BcEditor::filesDropped (const juce::StringArray& files, int, int)
 {
     dropping = false; repaint();
+    if (view.room == 1)
+    {
+        // in the kit room, what is dropped goes to the pool: folders whole, files with their folder
+        int added = 0; juce::StringArray seen;
+        for (const auto& f : files)
+        {
+            const juce::File file (f);
+            const juce::File dir = file.isDirectory() ? file : file.getParentDirectory();
+            if (seen.contains (dir.getFullPathName())) continue;
+            seen.add (dir.getFullPathName());
+            added += proc.kitAddFolder (dir);
+        }
+        view.refreshPanels();
+        return;
+    }
     const int n = proc.addPaths (files);
     proc.lastMessage = n > 0 ? "Added " + juce::String (n) + (n == 1 ? " file" : " files") : "Nothing new to add (no audio files, or already in the list)";
     view.refreshPanels();
