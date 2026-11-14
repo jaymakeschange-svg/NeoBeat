@@ -73,7 +73,8 @@ struct RenderInputs
 {
     Project project;
     std::array<PadSettings, kNumPads> pads {};
-    std::array<Pattern, kNumScenes> scenes {};
+    // (on the heap: four scenes are 98 KB, and a RenderInputs on a Windows stack, whose threads get 1 MB, must stay small)
+    std::vector<Pattern> scenes = std::vector<Pattern> ((size_t) kNumScenes);
     double bpm = 120.0;
     float swing = 0.62f;
     std::map<std::string, std::shared_ptr<const SampleData>> files;   // loaded by the editor

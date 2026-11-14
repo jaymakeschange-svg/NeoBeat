@@ -110,6 +110,11 @@ add_executable (test_livefx tools/test_livefx.cpp)
 add_executable (test_analysis tools/test_analysis.cpp)
 find_package (Threads REQUIRED)
 target_link_libraries (test_workstation PRIVATE Threads::Threads)
+# The workstation test is one long main() with dozens of project copies in it, and MSVC gives each block its
+# own stack space: 8 MB for its main thread (the engine's own threads keep Windows' 1 MB, as in the plugin).
+if (MSVC)
+    target_link_options (test_workstation PRIVATE /STACK:8388608)
+endif()
 target_include_directories (test_fx PRIVATE Source)
 target_link_libraries (test_fx PRIVATE Threads::Threads)
 
