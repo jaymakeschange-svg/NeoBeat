@@ -216,7 +216,14 @@ public:
         const bool on[3] = { P.matrix.seqOn, P.matrix.oneShotOn, P.matrix.sampleOn };
         for (int v = 0; v < 3; ++v) rows.add ({ ViewRow, v, vn[v], {}, ctx.room == 1 && P.matrix.view == v, false, 0, on[v] });
         rows.add ({ Head, 0, "LAYERMAX", {}, false, true, 0, true });
-        rows.add ({ GridRow, 0, "Pattern " + juce::String (P.grid.current + 1) + (P.grid.play ? " | playing" : " | off"), {}, ctx.room == 2, false, 0, P.grid.play });
+        {
+            // rows that follow a lane play with the sequencer even when the pattern itself is off
+            int follows = 0; for (const auto& f : P.grid.follow) follows += f.on ? 1 : 0;
+            const juce::String state = P.grid.play ? juce::String (" | playing")
+                                     : follows > 0 ? " | " + juce::String (follows) + (follows == 1 ? " row follows" : " rows follow")
+                                                   : juce::String (" | off");
+            rows.add ({ GridRow, 0, "Pattern " + juce::String (P.grid.current + 1) + state, {}, ctx.room == 2, false, 0, P.grid.play || follows > 0 });
+        }
         rows.add ({ Head, 0, "KEY MAP", {}, false, true, 0, true });
         for (int l = 0; l < (int) P.keymap.layers.size() && l < 5; ++l)
             rows.add ({ LayerRow, l, juce::String (P.keymap.layers[(size_t) l].name), { juce::Colour (P.keymap.layers[(size_t) l].colour) }, ctx.room == 3, false, 0, P.keymap.layers[(size_t) l].on });
