@@ -453,7 +453,8 @@ int main (int argc, char** argv)
         p3->project.padFx[2].inserts[0] = nb::CellFx::library (nb::MatrixFx::Freezing); p3->projectChanged();
         NeoBeatProcessor::ExportOptions o; o.folder = tmp.getChildFile ("export"); o.name = "Host test"; o.stems = true; o.range.mode = 2; o.range.barFrom = 0; o.range.barTo = 1;
         CHECK (p3->startExport (o), "started");
-        for (int i = 0; i < 1200 && p3->exporting(); ++i) juce::Thread::sleep (50);
+        // (seconds in a release build; a debug build with sanitizers is about 18 times slower)
+        for (int i = 0; i < 12000 && p3->exporting(); ++i) juce::Thread::sleep (50);
         const auto files = p3->exportedFiles();
         std::printf ("     %s\n", p3->exportResult().toRawUTF8());
         int wavs = 0, mids = 0; juce::int64 mixSize = 0;
