@@ -13,6 +13,7 @@
 
 #include "Engine.h"
 #include "Kits.h"
+#include "LiveState.h"
 #include "Project.h"
 #include "Sequencer.h"
 #include <chrono>
@@ -26,7 +27,7 @@
 namespace nb
 {
 // ------------------------------------------------------------------ what the audio thread reads
-struct RtCell { int pad = 0, step = 0, span = 2; float height = 0.5f; RenderedPtr audio; };
+struct RtCell { int pad = 0, step = 0, span = 2; float height = 0.5f; RenderedPtr audio; int scene = 0; uint32_t key = 0; };
 struct RtSlot { bool fs = true; int slot = 0; SourceKind kind = SourceKind::None; int index = 0; float level = 1.0f; bool replace = false; std::array<RenderedPtr, 2> audio {}; };
 struct RtZone { Zone z; std::shared_ptr<const SampleData> sample; RenderedPtr fxAudio; };
 
@@ -39,7 +40,15 @@ struct RtState
     std::array<float, kNumPads> padSampleRms {};
     bool oneShotOn = true;
     std::vector<RtCell> cells;
-    std::array<std::array<int16_t, Pattern::kMaxSteps>, kNumPads> cellAt {};
+    std::vector<std::pair<uint32_t, int>> cellIndex;                         // (node key, index in cells), sorted: the prepared nodes
+    std::array<std::array<RenderedPtr, 3>, kNumPads> padDry {};             // each lane's own hit at three strengths, for the live effects
+    int cellAt (int scene, int pad, int step) const noexcept
+    {
+        const uint32_t k = nodeKey (scene, pad, step);
+        size_t lo = 0, hi = cellIndex.size();
+        while (lo < hi) { const size_t mid = (lo + hi) / 2; if (cellIndex[mid].first < k) lo = mid + 1; else hi = mid; }
+        return lo < cellIndex.size() && cellIndex[lo].first == k ? cellIndex[lo].second : -1;
+    }
     std::vector<RtSlot> slots;
     std::array<std::vector<int>, kNumPads> padSlots;
     std::array<std::vector<int>, GridPattern::kSize> rowSlots;
@@ -64,7 +73,7 @@ struct RenderInputs
 {
     Project project;
     std::array<PadSettings, kNumPads> pads {};
-    Pattern pattern;
+    std::array<Pattern, kNumScenes> scenes {};
     double bpm = 120.0;
     float swing = 0.62f;
     std::map<std::string, std::shared_ptr<const SampleData>> files;   // loaded by the editor
@@ -225,7 +234,7 @@ private:
     {
         h.i (p.sound).f (p.tune).f (p.decay).f (p.tone).f (p.drive).f (p.hollow).f (p.evolve).i (p.choke).f (p.body).f (p.fat).f (p.space)
          .i (p.character).i (p.useSample).p (p.sample.get()).f (p.sampleRms).i (p.place).i (p.variation).i (p.gesture).f (p.gestureSeconds)
-         .i (p.bounces).f (p.bounceFlight).f (p.restitution);
+         .i (p.bounces).f (p.bounceFlight).f (p.restitution).f (p.width);
     }
     static void hashRate (Hasher& h, const RateSpec& r) { h.i (r.tempo).d (r.beats).d (r.ms).f (r.swing); }
     static void hashFx (Hasher& h, const CellFx& c)
@@ -437,6 +446,7 @@ private:
         std::vector<std::array<uint64_t, 2>> slots;
         uint64_t sample = 0, sampleSrc = 0, grain = 0;
         std::array<uint64_t, kNumPads> kitRows {};
+        std::array<std::array<uint64_t, 3>, kNumPads> dry {};
     };
 
     bool process (const RenderInputs& in, bool interruptible)
@@ -452,7 +462,16 @@ private:
         S.sr = sr;
         S.glue = P.glue;
         S.mod = P.mod;
-        for (auto& row : S.cellAt) row.fill (-1);
+        // what runs live (no render) and what is made ahead
+        const auto lv = buildLiveState (P);
+        std::array<bool, kNumPads> needDry {};
+        for (const auto& n : lv->nodes) if (! n.prepared) needDry[(size_t) n.pad] = true;
+        for (int p = 0; p < kNumPads; ++p) if (lv->insertMode[(size_t) p] == 1 || ! lv->padBounce[(size_t) p].empty()) needDry[(size_t) p] = true;
+        for (size_t zi = 0; zi < P.keymap.zones.size() && zi < lv->zoneFx.size(); ++zi)
+        {
+            const auto& z = P.keymap.zones[zi];
+            if (lv->zoneFx[zi].on() && z.src == ZoneSource::Pad && z.index >= 0 && z.index < kNumPads) needDry[(size_t) z.index] = true;
+        }
 
         // ---- routes
         for (const auto& r : P.mod.routes)
@@ -493,7 +512,17 @@ private:
         static constexpr float kLayers[3] = { 0.4f, 0.7f, 1.0f };
         for (int p = 0; p < kNumPads; ++p)
         {
-            S.hasInserts[(size_t) p] = hasInserts (P.padFx[(size_t) p]);
+            if (needDry[(size_t) p])
+                for (int L = 0; L < 3; ++L)
+                {
+                    const PadSettings ps = in.pads[(size_t) p];
+                    const float v = kLayers[L];
+                    const uint64_t dk = dryKey (ps, v);
+                    K.dry[(size_t) p][(size_t) L] = dk; wanted.push_back (dk);
+                    S.padDry[(size_t) p][(size_t) L] = find (dk);
+                    needs.push_back ({ dk, 0, [this, ps, v] { return dry (ps, v); }, "Lane " + std::to_string (p + 1) + " hit" });
+                }
+            S.hasInserts[(size_t) p] = lv->insertMode[(size_t) p] == 2;      // only inserts that hold a Friction Stretch are made ahead
             if (! S.hasInserts[(size_t) p]) continue;
             for (int L = 0; L < 3; ++L)
             {
@@ -516,17 +545,23 @@ private:
         S.cellSlots.assign (cells.size(), {});
         K.cells.assign (cells.size(), 0);
         std::vector<uint64_t>& cellKeys = K.cells;
+        std::vector<std::function<RenderedPtr()>> cellMakes (cells.size());
+        std::vector<char> cellPrepared (cells.size(), 0);
         for (size_t ci = 0; ci < cells.size(); ++ci)
         {
             const auto& c = cells[ci];
             RtCell rc; rc.pad = std::max (0, std::min (c.pad, kNumPads - 1)); rc.step = std::max (0, std::min (c.step, Pattern::kMaxSteps - 1));
-            rc.span = std::max (1, c.span); rc.height = c.height;
-            const Step st = in.pattern.steps[(size_t) rc.pad][(size_t) rc.step];
+            rc.span = std::max (1, c.span); rc.height = c.height; rc.scene = std::max (0, std::min (c.scene, kNumScenes - 1));
+            rc.key = nodeKey (rc.scene, rc.pad, rc.step);
+            const Pattern& pattern = in.scenes[(size_t) rc.scene];
+            const bool prepared = isFriction (c.fx) || lv->insertMode[(size_t) rc.pad] == 2;
+            cellPrepared[ci] = prepared ? 1 : 0;
+            const Step st = pattern.steps[(size_t) rc.pad][(size_t) rc.step];
             const float vel = st.vel > 0 ? st.vel / 127.0f : 0.8f;
             const double hitTime = stepSeconds16 (rc.step, bpm, in.swing);
             const double barStart = (rc.step / 16) * 4.0 * 60.0 / bpm;
             HitContext hc; hc.beats = hitTime * bpm / 60.0; hc.bpm = bpm; hc.velocity = vel; hc.height = c.height;
-            hc.step = (float) rc.step / (float) std::max (1, in.pattern.length); hc.seed = (uint32_t) ci * 7919u + 1u;
+            hc.step = (float) rc.step / (float) std::max (1, pattern.length); hc.seed = (uint32_t) ci * 7919u + 1u;
             const float height = std::max (0.0f, std::min (1.0f, c.height + renderMods (Dest::CellMain, (int) ci, hc)));
             CellFx fx = c.fx; applyHeight (fx, height);
             const double stepSec = 15.0 / bpm;
@@ -537,20 +572,23 @@ private:
             Hasher h; h.s ("cell").u (dryKey (ps, vel)).d (bpm).f (in.swing).i (rc.step).i (rc.span); hashFx (h, fx);
             for (const auto& c2 : pfx.inserts) hashFx (h, c2);
             const uint64_t key = h.h;
-            cellKeys[ci] = key; wanted.push_back (key);
-            rc.audio = find (key);
+            cellKeys[ci] = key;
+            if (prepared) { wanted.push_back (key); rc.audio = find (key); }
             const int span = rc.span, padIdx = rc.pad;
-            needs.push_back ({ key, 1, [this, ps, vel, fx, pfx, bpm, hitTime, barStart, stepSec, span]
+            cellMakes[ci] = [this, ps, vel, fx, pfx, bpm, hitTime, barStart, stepSec, span]
             {
                 auto d = dry (ps, vel);
                 Rendered o; applyFx (fx, *d, bpm, hitTime - barStart, 0.0, o);
                 for (const auto& ins : pfx.inserts) if (ins.kind != CellFx::None) { Rendered o2; applyFx (ins, o, bpm, 0.0, 0.0, o2); o = std::move (o2); }
                 fadeTo (o, std::max ((int) (span * stepSec * sr), std::min (d->size(), (int) (0.25 * sr))), (int) (0.06 * sr));
                 return std::make_shared<const Rendered> (std::move (o));
-            }, "Cell " + std::to_string (ci + 1) + " | pad " + std::to_string (padIdx + 1) });
+            };
+            if (prepared) needs.push_back ({ key, 1, cellMakes[ci], "Node " + std::to_string (ci + 1) + " | lane " + std::to_string (padIdx + 1) });
             S.cells.push_back (rc);
-            if (S.cellAt[(size_t) rc.pad][(size_t) rc.step] < 0) S.cellAt[(size_t) rc.pad][(size_t) rc.step] = (int16_t) ci;
+            if (prepared) S.cellIndex.push_back ({ rc.key, (int) ci });
         }
+        std::stable_sort (S.cellIndex.begin(), S.cellIndex.end(), [] (const std::pair<uint32_t, int>& a, const std::pair<uint32_t, int>& b) { return a.first < b.first; });
+        S.cellIndex.erase (std::unique (S.cellIndex.begin(), S.cellIndex.end(), [] (const std::pair<uint32_t, int>& a, const std::pair<uint32_t, int>& b) { return a.first == b.first; }), S.cellIndex.end());
 
         // ---- grid samples
         S.gridCurrent = std::max (0, std::min (P.grid.current, 15));
@@ -603,8 +641,9 @@ private:
             {
                 key = cellKeys[(size_t) src.index];
                 const uint64_t ck = key;
-                // the cell's own render (it is planned above, at a higher priority)
-                for (auto& nd : needs) if (nd.key == ck) { auto mk = nd.make; return [this, ck, mk] { if (auto r = find (ck)) return r; auto r = mk(); cache[ck] = r; return r; }; }
+                // the node's own sound, made here for the window to work on
+                auto mk = cellMakes[(size_t) src.index];
+                if (mk) return [this, ck, mk] { if (auto r = find (ck)) return r; auto r = mk(); cache[ck] = r; return r; };
             }
             return {};
         };
@@ -649,7 +688,8 @@ private:
                 sk[(size_t) parity] = key;
                 wanted.push_back (key); wanted.push_back (srcKey);
                 rs.audio[(size_t) parity] = find (key);
-                needs.push_back ({ key, 3 + parity, [this, make, fx, isFs, bpm, hitTime]
+                if (! isFs && parity == 1) continue;                    // Bounce Delay runs live: one render, for the window's picture
+                needs.push_back ({ key, isFs ? 3 + parity : 9, [this, make, fx, isFs, bpm, hitTime]
                 {
                     auto src = make();
                     if (! src || src->size() == 0) return RenderedPtr();
@@ -678,6 +718,7 @@ private:
             const int idx = (int) S.slots.size();
             S.slots.push_back (rs);
             K.slots.push_back (sk);
+            if (! isFs) return;                                          // not played from here
             if (src.kind == SourceKind::Pad && src.index >= 0 && src.index < kNumPads) S.padSlots[(size_t) src.index].push_back (idx);
             if (src.kind == SourceKind::GridRow && src.index >= 0 && src.index < GridPattern::kSize) S.rowSlots[(size_t) src.index].push_back (idx);
             if (src.kind == SourceKind::Cell && src.index >= 0 && src.index < (int) S.cellSlots.size()) S.cellSlots[(size_t) src.index].push_back (idx);
@@ -702,7 +743,7 @@ private:
                 const auto it = in.files.find (z.file);
                 if (it != in.files.end()) rz.sample = it->second;
             }
-            if (z.fx.kind != CellFx::None)
+            if (isFriction (z.fx))
             {
                 const float vel = (z.loVel + z.hiVel) * 0.5f / 127.0f;
                 if (z.src == ZoneSource::Pad && z.index >= 0 && z.index < kNumPads)
@@ -862,7 +903,9 @@ private:
     // fill in whatever is ready now and publish a copy
     void publishState (RtState& S, const RenderInputs& in, const Keys& K)
     {
-        for (size_t i = 0; i < S.cells.size() && i < K.cells.size(); ++i) S.cells[i].audio = find (K.cells[i]);
+        for (const auto& ci : S.cellIndex) if ((size_t) ci.second < K.cells.size()) S.cells[(size_t) ci.second].audio = find (K.cells[(size_t) ci.second]);
+        for (int p = 0; p < kNumPads; ++p)
+            for (int L = 0; L < 3; ++L) if (K.dry[(size_t) p][(size_t) L] != 0) S.padDry[(size_t) p][(size_t) L] = find (K.dry[(size_t) p][(size_t) L]);
         for (int p = 0; p < kNumPads; ++p)
             if (S.hasInserts[(size_t) p]) for (int L = 0; L < 3; ++L) S.insertAudio[(size_t) p][(size_t) L] = find (K.inserts[(size_t) p][(size_t) L]);
         for (size_t i = 0; i < S.slots.size() && i < K.slots.size(); ++i)

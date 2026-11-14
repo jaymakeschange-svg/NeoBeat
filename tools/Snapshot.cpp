@@ -45,6 +45,17 @@ int main (int argc, char** argv)
     for (int col : { 0, 6, 10, 16, 22, 26 }) g.cells[(size_t) col] = nb::GridPattern::pack (230, 128, 128, nb::GridPattern::kOn);
     for (int col : { 4, 12, 20, 28 }) g.cells[(size_t) (2 * 64 + col)] = nb::GridPattern::pack (220, 128, 90, nb::GridPattern::kOn | nb::GridPattern::kBd);
     g.length = 32;
+    // scene B: eight bars; a chain; a Layermax row that follows the kick
+    {
+        auto b = std::make_unique<nb::Pattern> (nb::patternPreset (7).pattern);
+        const int base = b->length;
+        b->length = 128;
+        for (int t = 0; t < 16; ++t) for (int st = base; st < 128; ++st) b->steps[(size_t) t][(size_t) st] = b->steps[(size_t) t][(size_t) (st % base)];
+        proc->pattern.loadScene (1, *b);
+        P.song.chainOn = false; P.song.numLinks = 3; P.song.chain[0] = { 0, 2 }; P.song.chain[1] = { 1, 1 }; P.song.chain[2] = { 0, 1 };
+        P.grid.follow[4].on = true; P.grid.follow[4].lane = 0;
+        nb::OneShotCell c; c.scene = 1; c.pad = 2; c.step = 20; c.fx = nb::CellFx::library (nb::MatrixFx::Shimmer); P.matrix.oneShot.cells.push_back (c);
+    }
     proc->projectChanged();
 
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
@@ -67,6 +78,13 @@ int main (int argc, char** argv)
         { "09_friction", [&] { ctx.room = 0; ctx.select ({ ui::Sel::Pad, 2 }, 0); ctx.openWindow (true, 0); } },
         { "10_bounce", [&] { ctx.fsOpen = false; ctx.openWindow (false, 0); } },
         { "11_routes", [&] { ctx.bdOpen = false; ctx.listOpen = true; ctx.refreshNow(); } },
+        { "12_scene_b_8bars", [&] { ctx.listOpen = false; ctx.room = 0; proc->setScene (1); ctx.viewBars = 4; ctx.viewBar = 0; ctx.select ({ ui::Sel::Node, 4 * nb::Pattern::kMaxSteps + 6 }, 0); } },
+        { "13_layermax_follow", [&] { proc->setScene (0); ctx.viewBars = 2; ctx.room = 2; ctx.gridRow = 4; ctx.select ({ ui::Sel::Grid, 0 }, 1); } },
+        { "14_export", [&] { ctx.room = 0; ctx.select ({ ui::Sel::Pad, 2 }, 0); ctx.overlay = 1; } },
+        { "15_midi_out", [&] { ctx.overlay = 2; } },
+        { "16_import_folder", [&] { ctx.overlay = 3; ctx.overlayFile = "D:\\Samples\\Field recordings\\Kitchen"; } },
+        { "17_default_sequence", [&] { ctx.overlay = 4; ctx.overlayFile = "C:\\Users\\you\\Documents\\Marbelite\\NJQ\\Kitchen kit.NJQ"; } },
+        { "18_notice", [&] { ctx.overlay = 0; ui::sendNode (ctx, 2, 4, 24); } },
     };
     for (auto& s : shots)
     {

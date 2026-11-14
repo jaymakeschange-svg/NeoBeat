@@ -1,4 +1,4 @@
-// NeoBeat 2.0 — the KIT room: 16 pads and the main step sequencer.
+// NeoBeat 3.0 — the SEQUENCER room: the 16 lanes' pads, the four scenes and their nodes.
 #include "UI.h"
 
 namespace ui
@@ -38,7 +38,7 @@ public:
             g.setColour (col); g.fillEllipse (r.getX() + 8, r.getY() + 8, 7, 7);
             // the top row: number and cell count on the left, badges (inserts, windows, algorithm) and MUTE on
             // the right, so the name below has room for two lines
-            int cells = 0; for (const auto& c : P.matrix.oneShot.cells) cells += c.pad == p ? 1 : 0;
+            int cells = 0; for (const auto& c : P.matrix.oneShot.cells) cells += c.pad == p && c.scene == ctx.scene() ? 1 : 0;
             const auto top = r.toNearestInt().reduced (8, 4).removeFromTop (14);
             int x = (int) r.getRight() - 9;
             const float dy = (float) top.getCentreY() - 3.5f;
@@ -59,8 +59,8 @@ public:
             juce::String text = num;
             if (cells > 0)
             {
-                text = num + "  |  " + juce::String (cells) + (cells == 1 ? " cell" : " cells");
-                if (textW (f, text) > (float) label.getWidth()) text = num + " | " + juce::String (cells) + "c";
+                text = num + "  |  " + juce::String (cells) + " sent";
+                if (textW (f, text) > (float) label.getWidth()) text = num + " | " + juce::String (cells);
             }
             g.setColour (C::dim()); g.setFont (f);
             g.drawText (text, label, juce::Justification::centredLeft, true);
@@ -95,22 +95,25 @@ public:
     void padMenu (int p)
     {
         juce::PopupMenu m;
+        m.addSectionHeader ("LANE " + juce::String (p + 1));
         m.addItem (1, "Load a sample...");
         m.addItem (2, "Back to the library sound", ctx.proc.padUsesSample (p));
+        m.addItem (6, "Match the stock sounds' loudness", ctx.proc.padUsesSample (p));
         m.addItem (3, "Mute in the sequencer", true, ctx.proc.apvts.getRawParameterValue (ctx.proc.paramId (p, "mute"))->load() > 0.5f);
         m.addSeparator();
-        m.addItem (4, "Send to a Friction Stretch slot");
-        m.addItem (5, "Send to a Bounce Delay slot");
+        m.addItem (4, "Send lane to a Friction Stretch window");
+        m.addItem (5, "Send lane to a Bounce Delay window");
         m.showMenuAsync (juce::PopupMenu::Options(), [this, p] (int r)
         {
             if (r == 1)
             {
-                chooser = std::make_unique<juce::FileChooser> ("Load a sample onto pad " + juce::String (p + 1), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+                chooser = std::make_unique<juce::FileChooser> ("Load a sample onto lane " + juce::String (p + 1), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
                 chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this, p] (const juce::FileChooser& fc)
                 {
-                    if (fc.getResult().existsAsFile() && ctx.proc.loadSample (p, fc.getResult()) && ctx.refreshAll) ctx.refreshAll();
+                    if (fc.getResult().existsAsFile() && ctx.proc.loadSample (p, fc.getResult())) { ctx.proc.matchLevel (p); ctx.proc.teachLane (p); if (ctx.refreshAll) ctx.refreshAll(); }
                 });
             }
+            if (r == 6) { ctx.proc.matchLevel (p); if (ctx.refreshAll) ctx.refreshAll(); }
             if (r == 2) { ctx.proc.clearSample (p); if (ctx.refreshAll) ctx.refreshAll(); }
             if (r == 3) { const auto id = ctx.proc.paramId (p, "mute"); ctx.proc.setParam (id, ctx.proc.apvts.getRawParameterValue (id)->load() > 0.5f ? 0.0f : 1.0f); repaint(); }
             if (r == 4 || r == 5) assignSlot (r == 4, p);
@@ -133,7 +136,11 @@ public:
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         const int p = padAt ({ x, y });
-        if (p >= 0 && ! files.isEmpty() && ctx.proc.loadSample (p, juce::File (files[0]))) { ctx.select ({ Sel::Pad, p }); }
+        if (p >= 0 && ! files.isEmpty() && ctx.proc.loadSample (p, juce::File (files[0])))
+        {   // as loud as the stock sounds; and this is the lane you say it belongs on
+            ctx.proc.matchLevel (p); ctx.proc.teachLane (p);
+            ctx.select ({ Sel::Pad, p });
+        }
     }
 
 private:
@@ -144,37 +151,52 @@ private:
 };
 
 // ------------------------------------------------------------------ the step grid
+// A page of the scene: `viewBars` bars from `viewBar`, so a node is never too small to see or hit,
+// however long the scene is (up to 32 bars).
 class StepGrid final : public juce::Component
 {
 public:
     explicit StepGrid (Ctx& c) : ctx (c) {}
     static constexpr int kLabel = 132;
 
-    int length() const { return ctx.proc.pattern.length.load(); }
-    float stepW() const { return (float) (getWidth() - kLabel - 4) / (float) length(); }
+    int first() const { return ctx.firstStep(); }
+    int shown() const { return ctx.shownSteps(); }
+    int slots() const { return ctx.viewBars * 16; }
+    float stepW() const { return (float) (getWidth() - kLabel - 4) / (float) slots(); }
     float rowH() const { return (float) (getHeight() - 18) / 16.0f; }
 
+    // which node is under the mouse (step: in the scene)
     bool cellAt (juce::Point<int> pos, int& track, int& step) const
     {
         if (pos.x < kLabel || pos.y < 18) return false;
+        const int col = (int) ((pos.x - kLabel) / stepW());
+        if (col < 0 || col >= shown()) return false;
         track = juce::jlimit (0, 15, (int) ((pos.y - 18) / rowH()));
-        step = juce::jlimit (0, length() - 1, (int) ((pos.x - kLabel) / stepW()));
+        step = first() + col;
         return true;
     }
 
     void paint (juce::Graphics& g) override
     {
-        const int len = length();
+        const int len = shown(), f0 = first();
         const float sw = stepW(), rh = rowH();
         // beat ruler
         for (int s = 0; s < len; s += 4)
         {
-            paintLabel (g, juce::String (s / 16 + 1) + "." + juce::String ((s / 4) % 4 + 1), juce::Rectangle<int> (kLabel + (int) (s * sw) + 2, 2, 40, 12), juce::Justification::centredLeft, 7.0f, C::dim());
+            const int abs = f0 + s;
+            paintLabel (g, juce::String (abs / 16 + 1) + "." + juce::String ((abs / 4) % 4 + 1), juce::Rectangle<int> (kLabel + (int) (s * sw) + 2, 2, 40, 12), juce::Justification::centredLeft, 7.0f, abs % 16 == 0 ? C::text() : C::dim());
             g.setColour (juce::Colour (0x10304840)); g.fillRect ((float) kLabel + s * sw, 18.0f, sw * 4, (float) getHeight() - 18);
-            if ((s / 4) % 2 == 1) { g.setColour (juce::Colours::white.withAlpha (0.12f)); g.fillRect ((float) kLabel + s * sw, 18.0f, sw * 4, (float) getHeight() - 18); }
+            if ((abs / 4) % 2 == 1) { g.setColour (juce::Colours::white.withAlpha (0.12f)); g.fillRect ((float) kLabel + s * sw, 18.0f, sw * 4, (float) getHeight() - 18); }
+            if (abs % 16 == 0 && s > 0) { g.setColour (C::text().withAlpha (0.35f)); g.fillRect ((float) kLabel + s * sw - 0.75f, 16.0f, 1.5f, (float) getHeight() - 16); }
+        }
+        if (len < slots())
+        {   // past the scene's end
+            g.setColour (juce::Colour (0x18000000)); g.fillRect ((float) kLabel + len * sw, 18.0f, (slots() - len) * sw, (float) getHeight() - 18);
         }
         auto& P = ctx.P();
-        const int play = ctx.proc.playStep.load();
+        const int scene = ctx.scene();
+        const bool here = ctx.proc.playScene.load() == scene;
+        const int play = here ? ctx.proc.playStep.load() - f0 : -1;
         for (int t = 0; t < 16; ++t)
         {
             const float y = 18 + t * rh;
@@ -186,8 +208,10 @@ public:
             g.drawText (juce::String (t + 1).paddedLeft ('0', 2) + " " + ctx.proc.padName (t), juce::Rectangle<int> (6, (int) y, kLabel - 10, (int) rh), juce::Justification::centredLeft, true);
             for (int s = 0; s < len; ++s)
             {
-                const auto st = ctx.proc.pattern.get (t, s);
+                const auto st = ctx.proc.pattern.get (t, f0 + s);
                 const float cx = kLabel + (s + 0.5f) * sw, cy = y + rh * 0.5f;
+                const bool chosen = ctx.sel.kind == Sel::Node && ctx.sel.index == t * nb::Pattern::kMaxSteps + f0 + s;
+                if (chosen) { g.setColour (C::teal()); g.drawRoundedRectangle (cx - sw * 0.5f + 1, y + 1, sw - 2, rh - 2, 4.0f, 1.6f); }
                 if (st.vel == 0) { g.setColour (juce::Colour (0x40586560)); g.fillEllipse (cx - 2.5f, cy - 2.5f, 5, 5); continue; }
                 const float size = std::min (sw, rh) * (st.vel > 110 ? 0.82f : st.vel < 60 ? 0.5f : 0.66f);
                 auto r = juce::Rectangle<float> (size, size).withCentre ({ cx, cy });
@@ -206,13 +230,13 @@ public:
                 }
                 if (st.nudge != 0) { g.setColour (C::teal()); g.drawLine (cx, cy + size * 0.6f, cx + st.nudge * 0.1f * sw, cy + size * 0.6f, 1.5f); }
             }
-            // One Shot cells on this track
+            // the effects the nodes of this lane are sent to
             if (P.matrix.oneShotOn)
                 for (const auto& c : P.matrix.oneShot.cells)
-                    if (c.pad == t && c.step < len)
+                    if (c.scene == scene && c.pad == t && c.step >= f0 && c.step < f0 + len)
                     {
                         g.setColour (C::fxColour (c.fx));
-                        g.fillRoundedRectangle (kLabel + c.step * sw + 1, y + 1, std::min ((float) c.span, (float) (len - c.step)) * sw - 2, 3.5f, 1.5f);
+                        g.fillRoundedRectangle (kLabel + (c.step - f0) * sw + 1, y + 1, std::min ((float) c.span, (float) (f0 + len - c.step)) * sw - 2, 3.5f, 1.5f);
                     }
         }
         if (play >= 0 && play < len)
@@ -268,10 +292,17 @@ public:
         repaint();
     }
 
+    // a node's menu: where it is sent (Init: nowhere), then the hit itself
     void stepMenu (int t, int s)
     {
         auto st = ctx.proc.pattern.get (t, s);
+        const int cell = nodeCell (ctx, t, s);
         juce::PopupMenu m;
+        m.addSectionHeader ("NODE | LANE " + juce::String (t + 1) + ", STEP " + juce::String (s / 16 + 1) + "." + juce::String (s % 16 + 1));
+        addSendMenu (m, 100, cell >= 0 ? fxIndex (ctx.P().matrix.oneShot.cells[(size_t) cell].fx) : -1);
+        m.addItem (40, "Copy"); m.addItem (41, "Paste", ctx.clipHas); m.addItem (31, "Clear");
+        m.addItem (42, "Show its settings on the right", st.vel > 0);
+        m.addSeparator();
         m.addItem (1, "Single hit", true, st.roll == 0);
         m.addItem (2, "Ratchet x2", true, st.roll == 2);
         m.addItem (3, "Ratchet x3", true, st.roll == 3);
@@ -281,26 +312,25 @@ public:
         m.addItem (10, "Accent"); m.addItem (11, "Normal"); m.addItem (12, "Ghost");
         m.addSeparator();
         m.addItem (20, "Nudge early (-20 %)"); m.addItem (21, "On the grid"); m.addItem (22, "Nudge late (+20 %)");
-        m.addSeparator();
-        m.addItem (30, "Add a One Shot cell here (brush: " + fxName (fxFromIndex (ctx.brush)) + ")");
-        m.addItem (31, "Clear");
         m.showMenuAsync (juce::PopupMenu::Options(), [this, t, s] (int r)
         {
             if (r <= 0) return;   // dismissed (also what an editor closing with the menu open sends)
+            if (r >= 100) { sendNode (ctx, t, s, r - 101); repaint(); return; }
+            if (r == 40) { copyNode (ctx, t, s); return; }
+            if (r == 41) { pasteNode (ctx, t, s); repaint(); return; }
+            if (r == 42) { const int c = nodeCell (ctx, t, s); ctx.select (c >= 0 ? Sel { Sel::Cell, c } : Sel { Sel::Node, t * nb::Pattern::kMaxSteps + s }, c >= 0 ? 1 : 0); return; }
             auto st2 = ctx.proc.pattern.get (t, s);
-            if (st2.vel == 0 && r > 0 && r < 30) st2.vel = 96;
+            if (st2.vel == 0 && r < 30) st2.vel = 96;
             if (r >= 1 && r <= 5) st2.roll = (uint8_t) (r == 1 ? 0 : r);
             if (r == 10) st2.vel = 127; if (r == 11) st2.vel = 96; if (r == 12) st2.vel = 40;
             if (r == 20) st2.nudge = -20; if (r == 21) st2.nudge = 0; if (r == 22) st2.nudge = 20;
-            if (r == 31) st2 = {};
-            if (r == 30)
+            if (r == 31)
             {
-                nb::OneShotCell c; c.pad = t; c.step = s; c.fx = fxFromIndex (ctx.brush);
-                ctx.P().matrix.oneShot.cells.push_back (c);
-                ctx.select ({ Sel::Cell, (int) ctx.P().matrix.oneShot.cells.size() - 1 }, 1);
-                ctx.changed();
+                st2 = {};
+                const int c = nodeCell (ctx, t, s);
+                if (c >= 0) { auto& cs = ctx.P().matrix.oneShot.cells; cs.erase (cs.begin() + c); ctx.select ({ Sel::Pad, t }); ctx.changed(); }
             }
-            if (r > 0 && r != 30) ctx.proc.pattern.set (t, s, st2);
+            ctx.proc.pattern.set (t, s, st2);
             repaint();
         });
     }
@@ -311,29 +341,148 @@ private:
     uint8_t dragVel = 96;
 };
 
+// ------------------------------------------------------------------ the scene's bars at a glance: click one to go there
+class BarStrip final : public juce::Component
+{
+public:
+    explicit BarStrip (Ctx& c) : ctx (c) {}
+    int bars() const { return std::max (1, (ctx.proc.pattern.length() + 15) / 16); }
+    void paint (juce::Graphics& g) override
+    {
+        const int n = bars();
+        const float w = (float) getWidth() / (float) std::max (n, 8);
+        const bool here = ctx.proc.playScene.load() == ctx.scene();
+        const int playBar = here && ctx.proc.playStep.load() >= 0 ? ctx.proc.playStep.load() / 16 : -1;
+        for (int b = 0; b < n; ++b)
+        {
+            auto r = juce::Rectangle<float> (b * w + 1, 1, w - 2, (float) getHeight() - 2);
+            int hits = 0;
+            for (int t = 0; t < 16; ++t) for (int s = b * 16; s < b * 16 + 16 && s < ctx.proc.pattern.length(); ++s) hits += ctx.proc.pattern.get (t, s).vel > 0 ? 1 : 0;
+            const bool inView = b >= ctx.viewBar && b < ctx.viewBar + ctx.viewBars;
+            g.setColour (inView ? juce::Colours::white.withAlpha (0.85f) : juce::Colours::white.withAlpha (0.3f)); g.fillRoundedRectangle (r, 4.0f);
+            g.setColour (C::teal().withAlpha (juce::jlimit (0.0f, 0.85f, hits / 40.0f))); g.fillRoundedRectangle (r.reduced (2), 3.0f);
+            if (b == playBar) { g.setColour (C::amber()); g.drawRoundedRectangle (r, 4.0f, 2.0f); }
+            else if (inView) { g.setColour (C::text().withAlpha (0.6f)); g.drawRoundedRectangle (r, 4.0f, 1.2f); }
+            if (w > 16) { g.setColour (C::text()); g.setFont (font (9.0f, inView)); g.drawText (juce::String (b + 1), r.toNearestInt(), juce::Justification::centred); }
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override { mouseDrag (e); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        const int n = bars();
+        const float w = (float) getWidth() / (float) std::max (n, 8);
+        const int b = juce::jlimit (0, n - 1, (int) (e.x / w));
+        const int start = juce::jlimit (0, std::max (0, n - ctx.viewBars), b - b % ctx.viewBars);
+        if (start != ctx.viewBar) { ctx.viewBar = start; ctx.follow = false; if (ctx.refreshAll) ctx.refreshAll(); }
+    }
+private:
+    Ctx& ctx;
+};
+
+// ------------------------------------------------------------------ the chain: scenes one after another
+class ChainStrip final : public juce::Component
+{
+public:
+    explicit ChainStrip (Ctx& c) : ctx (c) {}
+    juce::Rectangle<int> link (int i) const { return { i * 46, 0, 42, getHeight() }; }
+    void paint (juce::Graphics& g) override
+    {
+        const auto& sg = ctx.P().song;
+        const int playing = sg.chainOn ? ctx.proc.playLink.load() : -1;
+        for (int i = 0; i < sg.numLinks; ++i)
+        {
+            auto r = link (i).toFloat();
+            paintPearl (g, r, 8.0f, i == playing);
+            g.setColour (sg.chainOn ? C::text() : C::dim()); g.setFont (font (12.5f, true));
+            g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + sg.chain[(size_t) i].scene)) + (sg.chain[(size_t) i].repeats > 1 ? " x" + juce::String ((int) sg.chain[(size_t) i].repeats) : juce::String()), link (i), juce::Justification::centred);
+        }
+        if (sg.numLinks < nb::SongSettings::kMaxLinks)
+        {
+            auto r = link (sg.numLinks);
+            g.setColour (C::dim()); g.setFont (font (16.0f, true)); g.drawText ("+", r.withWidth (26), juce::Justification::centred);
+        }
+        if (sg.numLinks == 0) { g.setColour (C::dim()); g.setFont (font (11.0f)); g.drawText ("click + to add a scene to the chain", 30, 0, 260, getHeight(), juce::Justification::centredLeft); }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        auto& sg = ctx.P().song;
+        if (sg.numLinks < nb::SongSettings::kMaxLinks && link (sg.numLinks).withWidth (26).contains (e.getPosition()))
+        {
+            sg.chain[(size_t) sg.numLinks++] = { (uint8_t) ctx.scene(), 1 };
+            sg.chainOn = true; ctx.changed(); return;
+        }
+        for (int i = 0; i < sg.numLinks; ++i)
+        {
+            if (! link (i).contains (e.getPosition())) continue;
+            if (e.mods.isPopupMenu())
+            {
+                juce::PopupMenu m;
+                for (int sc = 0; sc < nb::kNumScenes; ++sc) m.addItem (1 + sc, "Scene " + juce::String::charToString ((juce::juce_wchar) ('A' + sc)), true, sg.chain[(size_t) i].scene == sc);
+                m.addSeparator();
+                for (int r : { 1, 2, 3, 4, 8, 16 }) m.addItem (100 + r, "Play it " + juce::String (r) + (r == 1 ? " time" : " times"), true, sg.chain[(size_t) i].repeats == r);
+                m.addSeparator(); m.addItem (99, "Remove from the chain");
+                m.showMenuAsync (juce::PopupMenu::Options(), [this, i] (int r)
+                {
+                    auto& s2 = ctx.P().song;
+                    if (r <= 0 || i >= s2.numLinks) return;
+                    if (r >= 1 && r <= nb::kNumScenes) s2.chain[(size_t) i].scene = (uint8_t) (r - 1);
+                    if (r > 100) s2.chain[(size_t) i].repeats = (uint8_t) (r - 100);
+                    if (r == 99) { for (int k = i; k + 1 < s2.numLinks; ++k) s2.chain[(size_t) k] = s2.chain[(size_t) k + 1]; --s2.numLinks; if (s2.numLinks == 0) s2.chainOn = false; }
+                    ctx.changed();
+                });
+                return;
+            }
+            sg.chain[(size_t) i].scene = (uint8_t) ((sg.chain[(size_t) i].scene + 1) % nb::kNumScenes);
+            ctx.changed(); return;
+        }
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        auto& sg = ctx.P().song;
+        for (int i = 0; i < sg.numLinks; ++i)
+            if (link (i).contains (e.getPosition())) { sg.chain[(size_t) i].repeats = (uint8_t) juce::jlimit (1, 32, (int) sg.chain[(size_t) i].repeats + (w.deltaY > 0 ? 1 : -1)); ctx.changed (false); repaint(); }
+    }
+private:
+    Ctx& ctx;
+};
+
 // ------------------------------------------------------------------ the room
 class KitRoom final : public juce::Component, public Part
 {
 public:
-    explicit KitRoom (Ctx& c) : ctx (c), pads (c), steps (c), lengths ({ "16", "32", "64" }), modes ({ "HOST", "KEY", "PADS" }),
+    explicit KitRoom (Ctx& c) : ctx (c), pads (c), steps (c), strip (c), chainStrip (c), scenes ({ "A", "B", "C", "D" }), zoom ({ "1", "2", "4" }), modes ({ "HOST", "KEY", "PADS" }),
                                 swing (c, "SWING", 0.5f, 0.75f, 0.64f), tempo (c, "TEMPO", 60.0f, 200.0f, 120.0f)
     {
         addAndMakeVisible (patternBox);
-        for (int i = 0; i < nb::numPatterns(); ++i) patternBox.addItem (juce::String (i + 1).paddedLeft ('0', 3) + "  " + nb::patternPreset (i).name, i + 1);
         patternBox.onChange = [this] { const int id = patternBox.getSelectedId(); if (id > 0 && id <= nb::numPatterns()) { ctx.proc.loadPreset (id - 1); ctx.changed(); } else if (id > 1000) loadUser (id); };
-        for (auto* b : { &prev, &next, &save, &clear }) addAndMakeVisible (b);
+        for (auto* b : { &prev, &next, &save, &clear, &chain, &followBtn }) addAndMakeVisible (b);
         prev.onClick = [this] { ctx.proc.loadPreset ((ctx.proc.currentPreset.load() + nb::numPatterns() - 1) % nb::numPatterns()); ctx.changed(); };
         next.onClick = [this] { ctx.proc.loadPreset ((ctx.proc.currentPreset.load() + 1) % nb::numPatterns()); ctx.changed(); };
         save.onClick = [this] { saveUser(); };
-        clear.onClick = [this] { nb::Pattern p; p.length = ctx.proc.pattern.length.load(); ctx.proc.pattern.load (p); ctx.changed(); };
+        clear.onClick = [this] { ctx.proc.clearScene (ctx.scene()); ctx.changed(); };
+        clear.setTooltip ("Empty this scene (its nodes and where they are sent)");
         addAndMakeVisible (kitBox);
         for (int k = 0; k < (int) nb::kits().size(); ++k) kitBox.addItem ("KIT | " + juce::String (nb::kits()[(size_t) k].name).toUpperCase(), k + 1);
         kitBox.onChange = [this] { ctx.proc.loadKit (kitBox.getSelectedId() - 1); ctx.changed(); };
-        addAndMakeVisible (lengths);
-        lengths.onSelect = [this] (int i) { ctx.proc.pattern.setLength (16 << i); ctx.changed(); };
         addAndMakeVisible (modes);
         modes.onSelect = [this] (int i) { ctx.proc.setParam ("mode", (float) i); };
-        addAndMakeVisible (pads); addAndMakeVisible (steps);
+        addAndMakeVisible (scenes);
+        scenes.onSelect = [this] (int i) { ctx.proc.setScene (i); ctx.viewBar = 0; if (ctx.sel.kind == Sel::Node || ctx.sel.kind == Sel::Cell) ctx.sel = { Sel::Pad, ctx.pad }; if (ctx.refreshAll) ctx.refreshAll(); };
+        scenes.setTooltip ("Four scenes, each up to 32 bars. While it plays, a new scene starts on the next bar. Right-click: copy or clear.");
+        scenes.addMouseListener (this, true);
+        addAndMakeVisible (barsBox);
+        for (int b : { 1, 2, 4, 8, 16, 32 }) barsBox.addItem (juce::String (b) + (b == 1 ? " BAR" : " BARS"), b);
+        barsBox.onChange = [this] { const int b = barsBox.getSelectedId(); if (b > 0) { ctx.proc.pattern.setLength (b * 16); ctx.viewBar = juce::jlimit (0, std::max (0, b - ctx.viewBars), ctx.viewBar); ctx.changed(); } };
+        addAndMakeVisible (zoom);
+        zoom.onSelect = [this] (int i) { ctx.viewBars = 1 << i; ctx.viewBar -= ctx.viewBar % ctx.viewBars; if (ctx.refreshAll) ctx.refreshAll(); };
+        zoom.setTooltip ("How many bars the grid shows at once");
+        chain.setClickingTogglesState (true);
+        chain.onClick = [this] { auto& sg = ctx.P().song; sg.chainOn = chain.getToggleState() && sg.numLinks > 0; ctx.changed(); };
+        chain.setTooltip ("Play the scenes one after another (up to 128 bars and more), instead of looping the one shown");
+        followBtn.setClickingTogglesState (true);
+        followBtn.onClick = [this] { ctx.follow = followBtn.getToggleState(); };
+        followBtn.setTooltip ("Turn the pages with the playhead");
+        addAndMakeVisible (pads); addAndMakeVisible (steps); addAndMakeVisible (strip); addAndMakeVisible (chainStrip);
         for (auto* k : { &swing, &tempo }) addAndMakeVisible (k);
         swing.attach (ctx.proc.apvts.getParameter ("swing"));
         swing.toText = [] (float v) { return juce::String (juce::roundToInt (v * 100)) + " %"; };
@@ -341,6 +490,25 @@ public:
         tempo.toText = [] (float v) { return juce::String (v, 1); };
         tempo.setTooltip ("Standalone tempo (the host's tempo wins inside a DAW)");
         refresh();
+    }
+    ~KitRoom() override { scenes.removeMouseListener (this); }
+
+    // right-click on a scene button
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu() || ! scenes.isParentOf (e.eventComponent)) return;
+        const int sc = juce::jlimit (0, 3, e.getEventRelativeTo (&scenes).x * 4 / std::max (1, scenes.getWidth()));
+        juce::PopupMenu m;
+        const juce::String name = juce::String::charToString ((juce::juce_wchar) ('A' + sc));
+        m.addSectionHeader ("SCENE " + name);
+        for (int to = 0; to < nb::kNumScenes; ++to) if (to != sc) m.addItem (1 + to, "Copy to scene " + juce::String::charToString ((juce::juce_wchar) ('A' + to)));
+        m.addSeparator(); m.addItem (20, "Clear scene " + name);
+        m.showMenuAsync (juce::PopupMenu::Options(), [this, sc] (int r)
+        {
+            if (r >= 1 && r <= nb::kNumScenes) ctx.proc.copyScene (sc, r - 1);
+            if (r == 20) ctx.proc.clearScene (sc);
+            if (r > 0) ctx.changed();
+        });
     }
 
     void loadUser (int id)
@@ -351,7 +519,7 @@ public:
     }
     void saveUser()
     {
-        auto* w = new juce::AlertWindow ("Save the pattern", "A name for your pattern (kept in your NeoBeat presets):", juce::MessageBoxIconType::NoIcon);
+        auto* w = new juce::AlertWindow ("Save the scene", "A name for this scene's pattern (kept in your NeoBeat presets).\nTo keep the kit and all four scenes in one file, use KIT / FILE > Save as .NJQ.", juce::MessageBoxIconType::NoIcon);
         w->addTextEditor ("name", nb::patternPreset (ctx.proc.currentPreset.load()).name + " (mine)");
         w->addButton ("SAVE", 1); w->addButton ("CANCEL", 0);
         w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w] (int r)
@@ -363,33 +531,43 @@ public:
     void paint (juce::Graphics& g) override
     {
         paintPearl (g, getLocalBounds().toFloat(), 18.0f);
-        auto info = juce::Rectangle<int> (426, 58, 380, 214);
+        auto info = juce::Rectangle<int> (426, 54, 380, 180);
         paintWell (g, info.toFloat(), 12.0f);
         const int p = ctx.pad;
-        paintLabel (g, "PAD " + juce::String (p + 1) + " | " + ctx.proc.padGroup (p), info.reduced (12, 8).removeFromTop (12), juce::Justification::centredLeft, 8.0f);
+        paintLabel (g, "LANE " + juce::String (p + 1) + " | " + ctx.proc.padGroup (p), info.reduced (12, 8).removeFromTop (12), juce::Justification::centredLeft, 8.0f);
         g.setColour (C::text()); g.setFont (font (17.0f, true));
         g.drawText (ctx.proc.padName (p), info.reduced (12, 0).withTrimmedTop (24).withHeight (24), juce::Justification::centredLeft, true);
-        g.setColour (C::dim()); g.setFont (font (12.0f));
-        g.drawFittedText ("Click a pad to hear it (higher on the pad is harder). Its sound, effects and modulation are in the inspector on the right."
-                          " Right-click a pad to load a sample or send it to a window; drop audio files onto pads.",
-                          info.reduced (12, 0).withTrimmedTop (52).withHeight (64), juce::Justification::topLeft, 4);
-        paintLabel (g, "STEPS | CLICK HIT | SHIFT ACCENT | ALT GHOST | RIGHT-CLICK ROLLS | WHEEL VELOCITY", { 14, 282, 780, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
+        g.setColour (C::dim()); g.setFont (font (11.5f));
+        g.drawFittedText ("Click a lane's pad to hear it. Its sound, effects and modulation are on the right. Right-click a pad to load a sample; drop audio files onto pads.",
+                          info.reduced (12, 0).withTrimmedTop (50).withWidth (212).withHeight (120), juce::Justification::topLeft, 7);
+        paintLabel (g, "SCENE", { 14, 240, 60, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
+        paintLabel (g, "LENGTH", { 196, 240, 60, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
+        paintLabel (g, "SHOW BARS", { 300, 240, 70, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
+        const int q = ctx.proc.queuedScene.load();
+        if (q >= 0 && ! ctx.P().song.chainOn) paintLabel (g, "NEXT BAR: " + juce::String::charToString ((juce::juce_wchar) ('A' + q)), { 76, 240, 110, 12 }, juce::Justification::centredLeft, 7.0f, C::amber().darker (0.4f));
+        paintLabel (g, "NODES | CLICK HIT | SHIFT ACCENT | ALT GHOST | WHEEL VELOCITY | RIGHT-CLICK: SEND NODE TO, ROLLS, COPY", { 14, 308, 780, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
     }
 
     void resized() override
     {
         auto top = juce::Rectangle<int> (12, 10, getWidth() - 24, 36);
-        patternBox.setBounds (top.removeFromLeft (214).reduced (0, 3));
+        patternBox.setBounds (top.removeFromLeft (232).reduced (0, 3));
         prev.setBounds (top.removeFromLeft (34).reduced (2, 3)); next.setBounds (top.removeFromLeft (34).reduced (2, 3));
         save.setBounds (top.removeFromLeft (58).reduced (2, 3));
         clear.setBounds (top.removeFromLeft (62).reduced (2, 3));
-        kitBox.setBounds (top.removeFromLeft (136).reduced (4, 3));
-        lengths.setBounds (top.removeFromLeft (104).reduced (2, 0));
+        kitBox.setBounds (top.removeFromLeft (150).reduced (4, 3));
         modes.setBounds (top.reduced (2, 0));
-        pads.setBounds (14, 56, 400, 218);
-        swing.setBounds (650, 168, 70, 96);
-        tempo.setBounds (726, 168, 70, 96);
-        steps.setBounds (8, 296, getWidth() - 16, getHeight() - 304);
+        pads.setBounds (14, 54, 400, 180);
+        swing.setBounds (656, 124, 70, 96);
+        tempo.setBounds (730, 124, 70, 96);
+        scenes.setBounds (14, 254, 172, 30);
+        barsBox.setBounds (196, 255, 96, 28);
+        zoom.setBounds (300, 254, 96, 30);
+        followBtn.setBounds (402, 256, 72, 26);
+        chain.setBounds (482, 256, 64, 26);
+        chainStrip.setBounds (552, 254, getWidth() - 566, 30);
+        strip.setBounds (8 + StepGrid::kLabel, 288, getWidth() - 20 - StepGrid::kLabel, 18);
+        steps.setBounds (8, 322, getWidth() - 16, getHeight() - 330);
     }
 
     void refresh() override
@@ -404,19 +582,38 @@ public:
         }
         patternBox.setSelectedId (ctx.proc.currentPreset.load() + 1, juce::dontSendNotification);
         kitBox.setSelectedId (ctx.proc.currentKit.load() + 1, juce::dontSendNotification);
-        const int len = ctx.proc.pattern.length.load();
-        lengths.setSelected (len <= 16 ? 0 : len <= 32 ? 1 : 2);
+        const int bars = std::max (1, (ctx.proc.pattern.length() + 15) / 16);
+        barsBox.setSelectedId (bars, juce::dontSendNotification);
+        if (barsBox.getSelectedId() != bars) barsBox.setText (juce::String (ctx.proc.pattern.length()) + " STEPS", juce::dontSendNotification);
+        ctx.viewBar = juce::jlimit (0, std::max (0, bars - 1), ctx.viewBar);
+        scenes.setSelected (ctx.scene());
+        zoom.setSelected (ctx.viewBars == 1 ? 0 : ctx.viewBars == 2 ? 1 : 2);
+        chain.setToggleState (ctx.P().song.chainOn, juce::dontSendNotification);
+        followBtn.setToggleState (ctx.follow, juce::dontSendNotification);
         modes.setSelected ((int) ctx.proc.apvts.getRawParameterValue ("mode")->load());
-        repaint(); pads.repaint(); steps.repaint();
+        repaint(); pads.repaint(); steps.repaint(); strip.repaint(); chainStrip.repaint();
     }
 
     void tick() override
     {
         pads.tick();
         swing.syncFromParam(); tempo.syncFromParam();
+        // the chain plays other scenes than the one shown: show the one that sounds
+        const int playing = ctx.proc.playScene.load();
+        if (ctx.P().song.chainOn && ctx.proc.playStep.load() >= 0 && ctx.follow && playing != ctx.scene()) { ctx.proc.pattern.edit.store (playing); ctx.viewBar = 0; if (ctx.refreshAll) ctx.refreshAll(); }
+        // a scene chosen by the host (automation) or reached on the bar line
+        const int wanted = (int) std::lround (ctx.proc.apvts.getRawParameterValue ("scene")->load());
+        if (! ctx.P().song.chainOn && wanted != ctx.scene()) { ctx.proc.pattern.edit.store (juce::jlimit (0, 3, wanted)); if (ctx.refreshAll) ctx.refreshAll(); }
         const int s = ctx.proc.playStep.load();
+        if (ctx.follow && s >= 0 && playing == ctx.scene())
+        {
+            const int page = (s / 16) - (s / 16) % ctx.viewBars;
+            if (page != ctx.viewBar) { ctx.viewBar = page; if (ctx.refreshAll) ctx.refreshAll(); }
+        }
         const auto v = ctx.proc.pattern.version.load();
-        if (s != lastStep || v != lastVersion) { lastStep = s; lastVersion = v; steps.repaint(); }
+        const int q = ctx.proc.queuedScene.load(), link = ctx.proc.playLink.load();
+        if (s != lastStep || v != lastVersion) { if (s / 16 != lastStep / 16 || v != lastVersion) strip.repaint(); lastStep = s; lastVersion = v; steps.repaint(); }
+        if (q != lastQueued || link != lastLink) { lastQueued = q; lastLink = link; repaint(); chainStrip.repaint(); }
         if (ctx.proc.currentPreset.load() + 1 != patternBox.getSelectedId() && patternBox.getSelectedId() < 1000) patternBox.setSelectedId (ctx.proc.currentPreset.load() + 1, juce::dontSendNotification);
     }
 
@@ -424,11 +621,13 @@ private:
     Ctx& ctx;
     PadGrid pads;
     StepGrid steps;
-    juce::ComboBox patternBox, kitBox;
-    Pill prev { "<" }, next { ">" }, save { "SAVE" }, clear { "CLEAR" };
-    Segmented lengths, modes;
+    BarStrip strip;
+    ChainStrip chainStrip;
+    juce::ComboBox patternBox, kitBox, barsBox;
+    Pill prev { "<" }, next { ">" }, save { "SAVE" }, clear { "CLEAR" }, chain { "CHAIN" }, followBtn { "FOLLOW" };
+    Segmented scenes, zoom, modes;
     Knob swing, tempo;
-    int lastStep = -2;
+    int lastStep = -2, lastQueued = -2, lastLink = -2;
     uint32_t lastVersion = 0;
 };
 

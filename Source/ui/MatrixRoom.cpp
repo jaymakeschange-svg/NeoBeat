@@ -228,18 +228,21 @@ class OneShotLanes final : public juce::Component
 public:
     explicit OneShotLanes (Ctx& c) : ctx (c) {}
     static constexpr int kLabel = 116;
-    int length() const { return ctx.proc.pattern.length.load(); }
-    float stepW() const { return (float) (getWidth() - kLabel - 4) / (float) length(); }
+    // the same page of the scene as the sequencer's grid
+    int first() const { return ctx.firstStep(); }
+    int length() const { return ctx.shownSteps(); }
+    float stepW() const { return (float) (getWidth() - kLabel - 4) / (float) (ctx.viewBars * 16); }
     float laneH() const { return (float) (getHeight() - 16) / 16.0f; }
+    bool onPage (const nb::OneShotCell& c) const { return c.scene == ctx.scene() && c.step >= first() && c.step < first() + length(); }
     juce::Rectangle<float> cellRect (const nb::OneShotCell& c) const
     {
         const float y = 16 + c.pad * laneH();
-        return { kLabel + c.step * stepW() + 1, y + 2, std::max (6.0f, std::min ((float) c.span, (float) (length() - c.step)) * stepW() - 2), laneH() * 0.62f };
+        return { kLabel + (c.step - first()) * stepW() + 1, y + 2, std::max (6.0f, std::min ((float) c.span, (float) (first() + length() - c.step)) * stepW() - 2), laneH() * 0.62f };
     }
     int cellAt (juce::Point<float> p) const
     {
         auto& cs = ctx.P().matrix.oneShot.cells;
-        for (int i = (int) cs.size() - 1; i >= 0; --i) if (cs[(size_t) i].step < length() && cellRect (cs[(size_t) i]).contains (p)) return i;
+        for (int i = (int) cs.size() - 1; i >= 0; --i) if (onPage (cs[(size_t) i]) && cellRect (cs[(size_t) i]).contains (p)) return i;
         return -1;
     }
 
@@ -250,10 +253,10 @@ public:
         for (int s = 0; s < len; s += 4)
         {
             if ((s / 4) % 2 == 0) { g.setColour (juce::Colour (0x10304840)); g.fillRect ((float) kLabel + s * sw, 16.0f, sw * 4, (float) getHeight() - 16); }
-            paintLabel (g, juce::String (s / 16 + 1) + "." + juce::String ((s / 4) % 4 + 1), juce::Rectangle<int> (kLabel + (int) (s * sw) + 2, 0, 40, 14), juce::Justification::centredLeft, 7.0f, C::dim());
+            paintLabel (g, juce::String ((first() + s) / 16 + 1) + "." + juce::String (((first() + s) / 4) % 4 + 1), juce::Rectangle<int> (kLabel + (int) (s * sw) + 2, 0, 40, 14), juce::Justification::centredLeft, 7.0f, C::dim());
         }
         auto& cells = ctx.P().matrix.oneShot.cells;
-        const int play = ctx.proc.playStep.load();
+        const int play = ctx.proc.playScene.load() == ctx.scene() ? ctx.proc.playStep.load() - first() : -1;
         for (int t = 0; t < 16; ++t)
         {
             const float y = 16 + t * lh;
@@ -261,7 +264,7 @@ public:
             g.drawText (juce::String (t + 1).paddedLeft ('0', 2) + " " + ctx.proc.padName (t), juce::Rectangle<int> (4, (int) y, kLabel - 8, (int) lh), juce::Justification::centredLeft, true);
             for (int s = 0; s < len; ++s)
             {
-                const auto st = ctx.proc.pattern.get (t, s);
+                const auto st = ctx.proc.pattern.get (t, first() + s);
                 const float cx = kLabel + (s + 0.5f) * sw, cy = y + lh * 0.82f;
                 if (st.vel == 0) { g.setColour (juce::Colour (0x30586560)); g.fillEllipse (cx - 1.5f, cy - 1.5f, 3, 3); continue; }
                 const float sz = std::min (sw, lh) * (st.vel > 110 ? 0.42f : 0.32f);
@@ -271,7 +274,7 @@ public:
         for (int i = 0; i < (int) cells.size(); ++i)
         {
             const auto& c = cells[(size_t) i];
-            if (c.step >= len) continue;
+            if (! onPage (c)) continue;
             auto r = cellRect (c);
             const bool hasHit = ctx.proc.pattern.get (c.pad, c.step).vel > 0;
             const bool sel = ctx.sel.kind == Sel::Cell && ctx.sel.index == i;
@@ -292,7 +295,21 @@ public:
         drag = -1;
         if (hit >= 0)
         {
-            if (e.mods.isPopupMenu()) { cs.erase (cs.begin() + hit); ctx.select ({ Sel::None, 0 }); ctx.changed(); return; }
+            if (e.mods.isPopupMenu())
+            {   // the node's menu: send it somewhere else, back to Init, copy, clear
+                const int lane = cs[(size_t) hit].pad, step = cs[(size_t) hit].step;
+                juce::PopupMenu m; addSendMenu (m, 100, fxIndex (cs[(size_t) hit].fx));
+                m.addItem (40, "Copy"); m.addItem (41, "Paste", ctx.clipHas); m.addItem (31, "Clear (back to Init)");
+                m.showMenuAsync (juce::PopupMenu::Options(), [this, lane, step] (int r)
+                {
+                    if (r >= 100) sendNode (ctx, lane, step, r - 101);
+                    if (r == 40) copyNode (ctx, lane, step);
+                    if (r == 41) pasteNode (ctx, lane, step);
+                    if (r == 31) sendNode (ctx, lane, step, -1);
+                    repaint();
+                });
+                return;
+            }
             drag = hit;
             const auto r = cellRect (cs[(size_t) hit]);
             mode = e.position.x > r.getRight() - 7 ? 1 : 0;
@@ -302,9 +319,16 @@ public:
         }
         if (e.x < kLabel || e.y < 16) return;
         const int t = juce::jlimit (0, 15, (int) ((e.y - 16) / laneH()));
-        const int s = juce::jlimit (0, length() - 1, (int) ((e.x - kLabel) / stepW()));
-        if (e.mods.isPopupMenu() || cs.size() >= 256) return;
-        nb::OneShotCell c; c.pad = t; c.step = s; c.fx = fxFromIndex (ctx.brush); c.span = c.fx.kind == nb::CellFx::FrictionStretchFx ? 6 : 3;
+        const int s = first() + juce::jlimit (0, length() - 1, (int) ((e.x - kLabel) / stepW()));
+        if (e.mods.isPopupMenu())
+        {   // an empty node: where to send it
+            juce::PopupMenu m; addSendMenu (m, 100, -1); m.addItem (41, "Paste", ctx.clipHas);
+            m.showMenuAsync (juce::PopupMenu::Options(), [this, t, s] (int r) { if (r >= 100) sendNode (ctx, t, s, r - 101); if (r == 41) pasteNode (ctx, t, s); repaint(); });
+            return;
+        }
+        if (cs.size() >= 2048) return;
+        if (nodeCell (ctx, t, s) >= 0) return;
+        nb::OneShotCell c; c.pad = t; c.step = s; c.scene = ctx.scene(); c.fx = fxFromIndex (ctx.brush); c.span = c.fx.kind == nb::CellFx::FrictionStretchFx ? 6 : 3;
         cs.push_back (c);
         drag = (int) cs.size() - 1; mode = 1; grabStep = s; grabSpan = c.span; grabHeight = c.height;
         ctx.select ({ Sel::Cell, drag }, 1);
@@ -320,7 +344,7 @@ public:
         {
             if (std::abs (e.getDistanceFromDragStartY()) > std::abs (e.getDistanceFromDragStartX()))
                 c.height = juce::jlimit (0.0f, 1.0f, grabHeight - e.getDistanceFromDragStartY() / (laneH() * 3.0f));
-            else c.step = juce::jlimit (0, length() - 1, grabStep + juce::roundToInt (e.getDistanceFromDragStartX() / stepW()));
+            else c.step = juce::jlimit (first(), first() + length() - 1, grabStep + juce::roundToInt (e.getDistanceFromDragStartX() / stepW()));
         }
         ctx.changed (false);
         repaint();
@@ -489,7 +513,7 @@ private:
 class MatrixRoom final : public juce::Component, public Part
 {
 public:
-    explicit MatrixRoom (Ctx& c) : ctx (c), views ({ "SEQUENCER", "ONE SHOT", "SAMPLE" }), seq (c), lanes (c), sample (c), brush (c)
+    explicit MatrixRoom (Ctx& c) : ctx (c), views ({ "DRAW", "ONE SHOT", "SAMPLE" }), seq (c), lanes (c), sample (c), brush (c)
     {
         addAndMakeVisible (views);
         views.onSelect = [this] (int i) { ctx.P().matrix.view = i; ctx.select ({ Sel::None, 0 }); };
@@ -570,7 +594,7 @@ public:
         if (ctx.P().matrix.view == 2)
         {
             auto& S = ctx.P().matrix.sample;
-            paintLabel (g, "TIME | 32 CELLS  >  |  BAND (HEIGHT = MAIN CONTROL)  ^  |  PLAYS ON PAD " + juce::String (S.pad + 1) + (S.file.empty() ? " | ITS OWN HIT" : " | " + juce::File (S.file).getFileName()),
+            paintLabel (g, "TIME | 32 SLICES  >  |  BAND (HEIGHT = MAIN CONTROL)  ^  |  PLAYS ON LANE " + juce::String (S.pad + 1) + (S.file.empty() ? " | ITS OWN HIT" : " | " + juce::File (S.file).getFileName()),
                         { 14, 54, 700, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
         }
     }
@@ -615,9 +639,9 @@ public:
         lanes.setVisible (M.view == 1);
         sample.setVisible (M.view == 2);
         play.setVisible (M.view == 2);
-        play.setButtonText ("PLAY PAD " + juce::String (M.sample.pad + 1));
+        play.setButtonText ("PLAY LANE " + juce::String (M.sample.pad + 1));
         brush.setVisible (M.view != 0);
-        brush.hint = M.view == 1 ? "click a hit to drop a cell" : "drag on the spectrogram to draw a box";
+        brush.hint = M.view == 1 ? "click a node to send it here" : "drag on the spectrogram to draw a box";
         resized();
         repaint(); seq.repaint(); lanes.repaint(); sample.repaint(); brush.repaint();
     }

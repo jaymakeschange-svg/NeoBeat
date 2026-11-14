@@ -81,7 +81,7 @@ public:
         if (cellMode())
         {
             const auto& c = ctx.P().matrix.oneShot.cells[(size_t) ctx.winCell];
-            sub = "EDITING CELL " + juce::String (ctx.winCell + 1) + " | PAD " + juce::String (c.pad + 1) + " | STEP " + juce::String (c.step + 1);
+            sub = "EDITING NODE " + juce::String (ctx.winCell + 1) + " | LANE " + juce::String (c.pad + 1) + " | STEP " + juce::String (c.step + 1);
         }
         else sub = "SLOT " + juce::String (slot() + 1) + " | LISTENS TO " + sourceLabel (ctx.P(), currentSource()).toUpperCase();
         paintLabel (g, sub, { 22, 36, 600, 14 }, juce::Justification::centredLeft, 7.5f, C::dim());
@@ -347,7 +347,7 @@ private:
         if (! r || r->size() < 2048)
         {
             g.setColour (C::lcdDim()); g.setFont (font (15.0f));
-            g.drawText (currentSource().kind == nb::SourceKind::None && ! cellMode() ? "PICK A SOURCE FOR THIS SLOT (A PAD, A GRID ROW OR A CELL)" : "RENDERING...", display, juce::Justification::centred);
+            g.drawText (currentSource().kind == nb::SourceKind::None && ! cellMode() ? "PICK A SOURCE FOR THIS SLOT (A LANE, A LAYERMAX ROW OR A NODE)" : "PREPARING...", display, juce::Justification::centred);
             return;
         }
         if (r.get() != imageSrc || image.getWidth() != display.getWidth())
@@ -437,13 +437,13 @@ public:
             {
                 addKnob ("FIRST GAP", 0, (float) divisions().size() - 1, (float) divisionIndex (p->rate.beats), false,
                          [P, ch] (float v) { if (auto* q = P()) { q->rate.beats = divisions()[(size_t) juce::roundToInt (v)].second; ch(); } }, {}, [] (float v) { return juce::String (divisions()[(size_t) juce::roundToInt (v)].first); });
-                addKnob ("GRID", 0, (float) divisions().size() - 1, (float) divisionIndex (p->gridBeats), false,
+                addKnob ("DIVISION", 0, (float) divisions().size() - 1, (float) divisionIndex (p->gridBeats), false,
                          [P, ch] (float v) { if (auto* q = P()) { q->gridBeats = divisions()[(size_t) juce::roundToInt (v)].second; ch(); } }, {}, [] (float v) { return juce::String (divisions()[(size_t) juce::roundToInt (v)].first); });
             }
             else
             {
                 addKnob ("FIRST GAP", 20, 2000, (float) p->rate.ms, true, [P, ch] (float v) { if (auto* q = P()) { q->rate.ms = v; ch(); } }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " ms"; });
-                addKnob ("GRID", 5, 500, (float) p->gridMs, true, [P, ch] (float v) { if (auto* q = P()) { q->gridMs = v; ch(); } }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " ms"; });
+                addKnob ("DIVISION", 5, 500, (float) p->gridMs, true, [P, ch] (float v) { if (auto* q = P()) { q->gridMs = v; ch(); } }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " ms"; });
             }
             addKnob ("SWING", 0.5f, 0.75f, p->rate.swing, false, [P, ch] (float v) { if (auto* q = P()) { q->rate.swing = v; ch(); } }, {}, pct);
             addKnob ("BOUNCINESS", 0.3f, 0.95f, p->bounciness, false, [P, ch] (float v) { if (auto* q = P()) { q->bounciness = v; ch(); } }, destFor ("bounciness"), pct)->setMain (true);

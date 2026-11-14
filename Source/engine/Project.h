@@ -12,6 +12,7 @@
 #pragma once
 
 #include "MatrixxxerFx.h"
+#include "Sequencer.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -90,6 +91,7 @@ struct OneShotCell
     int pad = 0, step = 0, span = 2;   // sits on the hit at (pad, step); reaches `span` steps
     float height = 0.5f;               // sets the effect's main control
     CellFx fx;
+    int scene = 0;                     // which scene's hit (A..D)
 };
 struct OneShotPreset { std::string name = "INIT"; std::vector<OneShotCell> cells; };
 
@@ -198,8 +200,21 @@ inline double gridRateBeats (int rate)
     switch (rate) { case 0: return 0.5; case 1: return 0.25; case 2: return 1.0 / 6.0; default: return 0.125; }
 }
 
+// A Layermax row that follows a lane of the sequencer: its sound plays with (or between) that lane's hits.
+struct GridFollow
+{
+    bool on = false;
+    int lane = 0;
+    int mode = 0;            // 0 layer: with every hit; 1 fill: on the 16ths the lane leaves empty; 2 every Nth hit
+    int nth = 2;
+    float offsetMs = 0.0f;   // before (-) or after (+) the hit
+    bool velocity = true;    // as hard as the lane's hit
+    float level = 0.8f, pan = 0.0f, semis = 0.0f;
+};
+
 struct GridState
 {
+    std::vector<GridFollow> follow = std::vector<GridFollow> (GridPattern::kSize);   // one per row
     std::string folder;
     std::vector<std::string> files;   // one per row (row % count)
     bool useKit = true;               // rows play the kit's 16 pads (until a folder is loaded)
@@ -216,7 +231,7 @@ enum class ModSrc : uint8_t { Lfo1, Lfo2, Env1, Random, Velocity, Key, Height, S
 enum class Scope : uint8_t { Kit, Pad, Cell };
 inline const char* modSrcName (ModSrc s)
 {
-    static const char* n[] = { "LFO 1", "LFO 2", "ENV 1", "RANDOM", "VELOCITY", "KEY POSITION", "CELL HEIGHT", "STEP", "XY X", "XY Y" };
+    static const char* n[] = { "LFO 1", "LFO 2", "ENV 1", "RANDOM", "VELOCITY", "KEY POSITION", "NODE HEIGHT", "STEP", "XY X", "XY Y" };
     return n[(size_t) std::min ((int) s, (int) ModSrc::Count - 1)];
 }
 
@@ -278,9 +293,23 @@ struct ModState : ModParams
     std::array<PadAlgo, kNumPads> algos {};
 };
 
+// ------------------------------------------------------------------ MIDI out: NeoBeat as a sequencer for other instruments
+struct MidiSettings
+{
+    int mode = 0;                                  // 0 sound and MIDI, 1 MIDI only (the lanes stay silent), 2 sound only
+    std::array<uint8_t, kNumPads> note {};         // one note per lane (36.. by default: a Drum Rack from C1)
+    std::array<uint8_t, kNumPads> channel {};      // 1..16
+    float lengthSteps = 0.5f;                      // how long each note is held, in 16ths
+    bool rolls = true;                             // a roll sends each of its hits (off: one note for the step)
+    bool transpose = false;                        // key mode: the held key moves the notes too
+    MidiSettings() { for (int i = 0; i < kNumPads; ++i) { note[(size_t) i] = (uint8_t) (36 + i); channel[(size_t) i] = 1; } }
+};
+
 // ------------------------------------------------------------------ the whole project
 struct Project
 {
+    SongSettings song;        // the chain of scenes
+    MidiSettings midi;
     std::array<PadFx, kNumPads> padFx {};
     std::array<FsSlot, kNumSlots> fs {};
     std::array<BdSlot, kNumSlots> bd {};

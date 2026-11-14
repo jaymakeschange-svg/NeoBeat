@@ -1,4 +1,4 @@
-// NeoBeat 2.0 — the GRID room (Blip-style: paint a 64 x 64 grid, red volume, green pan, blue pitch)
+// NeoBeat 3.0 — the LAYERMAX room (paint a 64 x 64 grid: red volume, green pan, blue pitch; rows can follow a lane)
 // and the KEY MAP room (zones on a key x velocity grid, in layers: splits, velocity layers, round robin).
 #include "UI.h"
 
@@ -49,6 +49,7 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         const auto q = at (e.position);
+        ctx.gridRow = q.y;      // the inspector's FX tab shows what this row follows
         const bool erase = tool == 3 || e.mods.isPopupMenu();
         if (tool == 4) { const auto v = pat().cells[(size_t) (q.y * 64 + q.x)]; if (v & nb::GridPattern::kOn) { colour = v; if (onPick) onPick(); } return; }
         if (tool == 1 && ! erase) { lineActive = true; lineA = lineB = q; repaint(); return; }

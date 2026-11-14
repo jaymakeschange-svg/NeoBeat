@@ -42,6 +42,47 @@ struct PadSettings
     int bounces = 0;               // > 1: one hit becomes a bouncing object (bounce physics)
     float bounceFlight = 0.35f;    // first flight (s)
     float restitution = 0.79f;     // each flight and impact speed times this (measured: 0.79; > 1 gains energy)
+    float width = 1.0f;            // stereo: 0 mono, 1 as the sound is, 2 wide (the widening cancels in mono)
+};
+
+// A sound's stereo width. Narrowing scales the side; widening adds a decorrelated copy of the middle
+// (above the bass) to the side only, so the mono sum is untouched.
+struct Widener
+{
+    void start (float width, float sr) noexcept
+    {
+        w = std::max (0.0f, std::min (2.0f, width));
+        on = std::fabs (w - 1.0f) > 1.0e-3f;
+        if (w > 1.0f)
+        {
+            a.fill (0.0f); b.fill (0.0f); pos = 0; lp = 0.0f;
+            lenA = std::max (8, std::min (1023, (int) (0.0031f * sr))); lenB = std::max (8, std::min (1023, (int) (0.0053f * sr)));
+            lpCoef = 1.0f - std::exp (-6.2831853f * 250.0f / sr);
+        }
+    }
+    void process (float& l, float& r) noexcept
+    {
+        if (! on) return;
+        const float mid = 0.5f * (l + r);
+        float side = 0.5f * (l - r);
+        if (w <= 1.0f) side *= w;
+        else
+        {
+            lp += lpCoef * (mid - lp);
+            const float x = mid - lp;
+            const float ya = a[(size_t) ((pos - lenA) & 1023)];
+            const float oa = -0.6f * x + ya; a[(size_t) pos] = x + 0.6f * oa;
+            const float yb = b[(size_t) ((pos - lenB) & 1023)];
+            const float ob = -0.6f * oa + yb; b[(size_t) pos] = oa + 0.6f * ob;
+            pos = (pos + 1) & 1023;
+            side = side * w + (w - 1.0f) * 0.7f * ob;
+        }
+        l = mid + side; r = mid - side;
+    }
+    bool on = false;
+    float w = 1.0f, lp = 0.0f, lpCoef = 0.03f;
+    int pos = 0, lenA = 149, lenB = 254;
+    std::array<float, 1024> a {}, b {};
 };
 
 // Where a voice is heard, and the stroke that moves it (set by the engine at the trigger).
@@ -209,7 +250,8 @@ public:
             roomHp1.setHighpass (240.0f, 0.7071f, sr); roomHp1.reset();
             roomHp2 = roomHp1;
         }
-        tailSamples = (int64_t) ((cs.bodyT60 * ts * 1.3f + (spaceAmt > 0.0f ? 0.12f : 0.0f) + 0.02f) * sr);
+        widener.start (ps.width, sr);
+        tailSamples = (int64_t) ((cs.bodyT60 * ts * 1.3f + (spaceAmt > 0.0f ? 0.12f : 0.0f) + (ps.width > 1.0f ? 0.03f : 0.0f) + 0.02f) * sr);
         sideHpCoef = 1.0f - std::exp (-kTwoPi * 220.0f / sr);
         sideHp1.setHighpass (260.0f, 0.7071f, sr); sideHp1.reset();
         sideHp2 = sideHp1;
@@ -346,6 +388,7 @@ public:
             // the delay line (distance) must empty before the voice ends
             if (! any && placeTail-- > 0) any = true;
         }
+        widener.process (left, right);      // last, so the mono sum is exactly what it was
         if (! any) active = false;
     }
 
@@ -354,9 +397,11 @@ public:
     float roomSend = 0.0f;
 
     int pad = -1, chokeGroup = 0;
+    int fxRoute = -1;             // >= 0: this voice feeds a live effect instead of the mix
     uint64_t order = 0;
 
 private:
+    Widener widener;
     void applyGesture() noexcept
     {
         const float u = std::min (gu, 1.0f);
@@ -399,12 +444,15 @@ public:
     static constexpr int kPads = 16;
     static constexpr int kVoices = 48;
     static constexpr int kVoicesPerPad = 4;
+    static constexpr int kRoutes = 24, kMixBlock = 2048;
 
     Engine() { library.build(); }
 
     void prepare (float sampleRate)
     {
         sr = sampleRate;
+        mixL.assign ((size_t) kMixBlock, 0.0f); mixR.assign ((size_t) kMixBlock, 0.0f);
+        routeL.fill (nullptr); routeR.fill (nullptr);
         for (auto& v : voices) v.prepare (sr);
         bus.prepare (sr);
         library.tables.materialNoise->prepare (sr);
@@ -456,10 +504,33 @@ public:
         nextSettings = nullptr; nextMod = nullptr; nextAlgo = nullptr;
     }
 
+    // The same, but the hit feeds a live effect: its sound goes to route buffer `route` (setRoute), not the mix.
+    void triggerRouted (int route, int pad, const PadSettings& settings, float velocity, float extraSemis, const VoiceMod* vmod) noexcept
+    {
+        if (route < 0 || route >= kRoutes) return;
+        nextRoute = route;
+        triggerWith (pad, settings, velocity, extraSemis, vmod, nullptr, 0.0f);
+        nextRoute = -1;
+    }
+    // where a route's sound is written during the next renderVoices (null: nowhere)
+    void setRoute (int route, float* l, float* r) noexcept { if (route >= 0 && route < kRoutes) { routeL[(size_t) route] = l; routeR[(size_t) route] = r; } }
+    bool routeBusy (int route) const noexcept
+    {
+        for (const auto& v : voices) if (v.isActive() && v.fxRoute == route) return true;
+        for (int k = 0; k < pendingCount; ++k) if (pending[(size_t) k].route == route) return true;
+        return false;
+    }
+    void killRoute (int route) noexcept
+    {
+        for (auto& v : voices) if (v.isActive() && v.fxRoute == route) v.kill();
+        for (int k = 0; k < pendingCount; ) { if (pending[(size_t) k].route == route) pending[(size_t) k] = pending[(size_t) --pendingCount]; else ++k; }
+    }
+    void chokeRoute (int route) noexcept { for (auto& v : voices) if (v.isActive() && v.fxRoute == route) v.choke(); }
+
     // ---- offline: one hit of a pad, dry (no master, no kit bus), until it has died away
     void renderHit (const PadSettings& settings, float velocity, float maxSeconds, Rendered& out)
     {
-        for (auto& v : voices) v.kill();
+        for (auto& v : voices) { v.kill(); v.fxRoute = -1; }
         for (int b = 0; b < kNumPlaces; ++b)
         {
             if (roomUsed[(size_t) b]) { rooms[(size_t) b].configure (sr, placePreset (b), b * 64); roomUsed[(size_t) b] = false; }
@@ -503,12 +574,12 @@ private:
         {   // a bouncing object: each flight lasts e times the last, each impact is e times slower
             const Bounces b = bounceTimes (p0.bounceFlight, p0.restitution, std::min (p0.bounces, 32), 0.0f);
             for (size_t i = 1; i < b.times.size() && pendingCount < kPending; ++i)
-                pending[(size_t) pendingCount++] = { sampleClock + (int64_t) (b.times[i] * sr), pad, velocity * std::min (b.speeds[i], 1.6f), extraSemis };
+                pending[(size_t) pendingCount++] = { sampleClock + (int64_t) (b.times[i] * sr), pad, velocity * std::min (b.speeds[i], 1.6f), extraSemis, nextRoute };
         }
-        fire (pad, velocity, extraSemis);
+        fire (pad, velocity, extraSemis, nextRoute);
     }
 
-    void fire (int pad, float velocity, float extraSemis) noexcept
+    void fire (int pad, float velocity, float extraSemis, int route = -1) noexcept
     {
         PadSettings ps = nextSettings != nullptr ? *nextSettings : pads[(size_t) pad];
         ps.tune += extraSemis;
@@ -528,18 +599,18 @@ private:
             ps.tune += vp.gesture->pitch (std::min (vp.u0, 1.0f));               // pitch applies to each strike
         }
         // choke: a hit in a group fades every voice in that group (open/closed hats)
-        if (ps.choke > 0)
+        if (ps.choke > 0 && route < 0)
             for (auto& v : voices)
-                if (v.isActive() && v.chokeGroup == ps.choke) v.choke();
+                if (v.isActive() && v.chokeGroup == ps.choke && v.fxRoute < 0) v.choke();
         // per-pad polyphony
         int count = 0; PadVoice* oldestOfPad = nullptr;
         for (auto& v : voices)
-            if (v.isActive() && v.pad == pad)
+            if (v.isActive() && v.pad == pad && v.fxRoute < 0)
             {
                 ++count;
                 if (oldestOfPad == nullptr || v.order < oldestOfPad->order) oldestOfPad = &v;
             }
-        if (count >= kVoicesPerPad && oldestOfPad != nullptr) oldestOfPad->choke();
+        if (route < 0 && count >= kVoicesPerPad && oldestOfPad != nullptr) oldestOfPad->choke();
         PadVoice* target = nullptr;
         for (auto& v : voices) if (! v.isActive()) { target = &v; break; }
         if (target == nullptr)
@@ -548,6 +619,7 @@ private:
         }
         target->mod = nextMod != nullptr ? *nextMod : VoiceMod();
         target->algoSpec = nextAlgo; target->algoOffset = nextAlgoOffset;
+        target->fxRoute = route;
         target->start (library, pad, ps, velocity, seedCounter = ls::hash32 (seedCounter + 0x9e3779b9u), ++orderCounter, vp);
         hitCounter[(size_t) pad].fetch_add (1, std::memory_order_relaxed);
     }
@@ -565,6 +637,20 @@ public:
     void renderCore (float* left, float* right, int numSamples, float* tap, int tapPad,
                      const float* addL, const float* addR, bool withMaster) noexcept
     {
+        for (int done = 0; done < numSamples; )
+        {
+            const int n = std::min (kMixBlock, numSamples - done);
+            renderVoices (n, tap != nullptr ? tap + done : nullptr, tapPad, withMaster);
+            if (withMaster) finishMix (left + done, right + done, n, addL != nullptr ? addL + done : nullptr, addR != nullptr ? addR + done : nullptr);
+            else for (int i = 0; i < n; ++i) { left[done + i] += mixL[(size_t) i]; right[done + i] += mixR[(size_t) i]; }
+            done += n;
+        }
+    }
+
+    // The two halves of a block (n <= kMixBlock), so live effects can sit between them: the voices and
+    // rooms into the engine's own mix (routed voices into their route buffers) ...
+    void renderVoices (int numSamples, float* tap, int tapPad, bool tapAdds = true) noexcept
+    {
         for (int i = 0; i < numSamples; ++i)
         {
             // scheduled bounces
@@ -574,7 +660,7 @@ public:
                 {
                     const auto e = pending[(size_t) k];
                     pending[(size_t) k] = pending[(size_t) --pendingCount];
-                    fire (e.pad, e.velocity, e.semis);
+                    fire (e.pad, e.velocity, e.semis, e.route);
                     continue;
                 }
                 ++k;
@@ -586,6 +672,11 @@ public:
                 if (! v.isActive()) continue;
                 float l, r;
                 v.render (l, r);
+                if (v.fxRoute >= 0)
+                {
+                    if (float* rl = routeL[(size_t) v.fxRoute]) { rl[i] += l; routeR[(size_t) v.fxRoute][i] += r; }
+                    continue;
+                }
                 L += l; R += r;
                 if (v.bus() >= 0) sends[(size_t) v.bus()] += v.roomSend;
                 if (v.pad == tapPad) T += 0.5f * (l + r);
@@ -602,18 +693,21 @@ public:
                 L += wl; R += wr;
             }
             ++sampleClock;
-            if (! withMaster)
-            {
-                left[i] += L; right[i] += R;
-                if (tap != nullptr) tap[i] = T;
-                continue;
-            }
+            mixL[(size_t) i] = L; mixR[(size_t) i] = R;
+            if (tap != nullptr) { if (tapAdds) tap[i] += T; else tap[i] = T; }
+        }
+    }
+    // ... then everything else (players, marks, live effects: addL/addR), the master, the kit bus and the safety knee.
+    void finishMix (float* left, float* right, int numSamples, const float* addL, const float* addR) noexcept
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float L = mixL[(size_t) i], R = mixR[(size_t) i];
             if (addL != nullptr) { L += addL[i]; R += addR[i]; }
             L *= master; R *= master;
             bus.process (L, R, glue);
             left[i] += safety (L);
             right[i] += safety (R);
-            if (tap != nullptr) tap[i] += T;
         }
     }
 
@@ -640,7 +734,10 @@ public:
 
 private:
     int64_t roomTail (int b) const noexcept { return (int64_t) ((placePreset (b).rt60 * 1.6f + 0.6f) * sr); }
-    struct Pending { int64_t at = 0; int pad = 0; float velocity = 0, semis = 0; };
+    struct Pending { int64_t at = 0; int pad = 0; float velocity = 0, semis = 0; int route = -1; };
+    std::vector<float> mixL, mixR;
+    std::array<float*, kRoutes> routeL {}, routeR {};
+    int nextRoute = -1;
     static constexpr int kPending = 128;
     std::array<Pending, kPending> pending {};
     int pendingCount = 0;

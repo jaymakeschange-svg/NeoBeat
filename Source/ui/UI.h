@@ -1,6 +1,11 @@
-// NeoBeat 2.0 — the interface. One shell in every room:
+// NeoBeat 3.0 — the interface. One shell in every room:
 //   left       the tree: where you are
-//   middle     the room (KIT, MATRIXXXER, GRID, KEY MAP): drawing and playing only
+//   middle     the room (SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP): drawing and playing only
+//
+// The words, everywhere:
+//   Room    one of the four tabs.            Lane   one of the 16 rows of the sequencer, and its sound.
+//   Node    a box in a sequencer that holds a hit. A node can be sent to an effect; until it is, it is Init.
+//   Send    to give a node, a lane or a row an effect.     Scene  one of the four patterns, A to D.
 //   right      the inspector: whatever is selected (SOUND / FX / MOD)
 //   bottom     the mod dock: drag a source onto any knob
 // The Friction Stretch and Bounce Delay windows open over the shell.
@@ -67,7 +72,7 @@ public:
 // ------------------------------------------------------------------ shared state
 struct Sel
 {
-    enum Kind { None, Pad, Cell, SampleOp, Mark, Zone, Grid };
+    enum Kind { None, Pad, Cell, SampleOp, Mark, Zone, Grid, Node };   // Node: index = lane * 512 + step, in the scene shown
     Kind kind = Pad;
     int index = 0;
     bool operator== (const Sel& o) const { return kind == o.kind && index == o.index; }
@@ -78,7 +83,29 @@ struct Ctx
     explicit Ctx (NeoBeatProcessor& p) : proc (p) {}
     NeoBeatProcessor& proc;
     nb::Project& P() { return proc.project; }
-    int room = 0;            // 0 KIT, 1 MATRIXXXER, 2 GRID, 3 KEY MAP
+    int room = 0;            // 0 SEQUENCER, 1 MATRIXXXER, 2 LAYERMAX, 3 KEY MAP
+    int gridRow = 0;         // the Layermax row last touched (the inspector shows what it follows)
+    int scene() const { return proc.scene(); }
+    // the part of the scene the step grids show: `viewBars` bars from bar `viewBar`
+    int viewBar = 0, viewBars = 2;
+    bool follow = true;      // the view turns its pages with the playhead
+    int firstStep() const { return viewBar * 16; }
+    int shownSteps() const { return std::max (1, std::min (viewBars * 16, proc.pattern.length() - viewBar * 16)); }
+    // overlays: 0 none, 1 export, 2 MIDI out, 3 import a folder, 4 "make this a default sequence?"
+    int overlay = 0;
+    juce::String overlayFile;
+    // a node's effect, copied
+    nb::CellFx clipFx; nb::Step clipStep; int clipSpan = 2; float clipHeight = 0.5f; bool clipHas = false;
+    // something worth saying once (a notice over the shell)
+    juce::StringArray noticesShown; juce::String noticeTitle, noticeText;
+    void notify (const juce::String& key, const juce::String& title, const juce::String& text)
+    {
+        if (noticesShown.contains (key)) return;
+        noticesShown.add (key); noticeTitle = title; noticeText = text;
+        if (refreshAll) refreshAll();
+    }
+    // what changed since the last call becomes one undo step in this room
+    void commit() { proc.undoCommit (room); }
     int pad = 0;             // the pad the kit room and the inspector follow
     Sel sel;
     int tab = 0;             // inspector tab: 0 SOUND, 1 FX, 2 MOD
@@ -160,6 +187,7 @@ public:
     std::function<void (int)> onSelect;
     void setSelected (int i);
     int getSelected() const noexcept { return selected; }
+    void setTooltip (const juce::String& t) { for (auto* b : buttons) b->setTooltip (t); }
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -191,10 +219,14 @@ private:
     void timerCallback() override;
     void handleAsyncUpdate() override { refresh(); }
     Look look;
+    bool keyPressed (const juce::KeyPress&) override;
+    void mouseUp (const juce::MouseEvent&) override;      // (every child's: the end of a gesture is an undo step)
     std::unique_ptr<juce::Component> header, tree, inspector, dock, routeList, fsWindow, bdWindow;
     std::array<std::unique_ptr<juce::Component>, 4> rooms;
+    std::array<std::unique_ptr<juce::Component>, 5> overlays;   // export, MIDI, import, default prompt, notice
     std::vector<Part*> parts;
-    int shownRoom = -1;
+    int shownRoom = -1, sinceCommit = 0;
+    uint32_t lateSeen = 0;
     bool shownFs = false, shownBd = false, shownList = false;
 };
 
@@ -209,6 +241,18 @@ std::unique_ptr<juce::Component> makeKeyMapRoom (Ctx&);
 std::unique_ptr<juce::Component> makeFrictionWindow (Ctx&);
 std::unique_ptr<juce::Component> makeBounceWindow (Ctx&);
 std::unique_ptr<juce::Component> makeRouteList (Ctx&);
+std::unique_ptr<juce::Component> makeExportPanel (Ctx&);
+std::unique_ptr<juce::Component> makeMidiPanel (Ctx&);
+std::unique_ptr<juce::Component> makeImportPanel (Ctx&);
+std::unique_ptr<juce::Component> makeDefaultPrompt (Ctx&);
+std::unique_ptr<juce::Component> makeNotice (Ctx&);
+
+// nodes: a hit in the scene shown, and the effect it is sent to
+int nodeCell (Ctx&, int lane, int step);                       // the index of its effect cell, or -1 (Init)
+void sendNode (Ctx&, int lane, int step, int fxIdx);           // fxIdx: an fxIndex, or -1 for Init (no effect)
+void addSendMenu (juce::PopupMenu&, int idBase, int current);  // "Send to": ids idBase (Init) and idBase + 1 + fxIndex
+void copyNode (Ctx&, int lane, int step);
+void pasteNode (Ctx&, int lane, int step);
 
 // shared helpers for the parts
 void addRoute (Ctx&, nb::ModSrc src, const juce::String& dest, float depth = 0.3f);

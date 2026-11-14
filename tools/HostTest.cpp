@@ -1,6 +1,7 @@
 // NeoBeat 2.0 — a stress host: the whole plugin (processor and editor) driven like a DAW would,
 // with random edits everywhere, MIDI, transport jumps, sample-rate and block-size changes, state
 // round trips and the editor opened, used and closed while it plays. Usage: NeoBeatHostTest [seconds]
+#include <cstdlib>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Source/plugin/PluginProcessor.h"
 #include "../Source/plugin/PluginEditor.h"
@@ -95,6 +96,15 @@ static void randomEdit (NeoBeatProcessor& p, juce::Random& r)
 
 int main (int argc, char** argv)
 {
+    // the tests keep their settings, presets and what the learner knows away from the real ones
+    const auto sharedDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("neobeat_hosttest_shared");
+    sharedDir.deleteRecursively(); sharedDir.createDirectory();
+   #if JUCE_WINDOWS
+    _putenv_s ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8());
+   #else
+    setenv ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8(), 1);
+   #endif
+
     juce::ScopedJuceInitialiser_GUI init;
     const double seconds = argc > 1 ? std::atof (argv[1]) : 20.0;
     auto proc = std::make_unique<NeoBeatProcessor>();
@@ -271,6 +281,187 @@ int main (int argc, char** argv)
         host.prepare (48000.0, 512); host.run (0.5);
         CHECK (! host.bad, "finite through 150 rate and block changes");
     }
+
+    std::printf ("8. scenes: four in the state, a 2.0 state becomes scene A\n");
+    {
+        auto p3 = std::make_unique<NeoBeatProcessor>();
+        auto pat = std::make_unique<nb::Pattern>(); pat->length = 512; pat->steps[3][511].vel = 99; pat->steps[3][511].roll = 3;
+        p3->pattern.loadScene (2, *pat);
+        p3->setScene (2);
+        p3->project.song.chainOn = true; p3->project.song.numLinks = 2; p3->project.song.chain[0] = { 2, 3 }; p3->project.song.chain[1] = { 0, 1 };
+        nb::OneShotCell c; c.scene = 2; c.pad = 3; c.step = 511; c.fx = nb::CellFx::library (nb::MatrixFx::Freezing); p3->project.matrix.oneShot.cells = { c };
+        p3->project.midi.mode = 1; p3->project.midi.note[5] = 60; p3->project.grid.follow[7].on = true; p3->project.grid.follow[7].lane = 3; p3->project.grid.follow[7].mode = 2;
+        p3->projectChanged();
+        juce::MemoryBlock st; p3->getStateInformation (st);
+        auto p4 = std::make_unique<NeoBeatProcessor>();
+        p4->setStateInformation (st.getData(), (int) st.getSize());
+        const auto got = p4->pattern.getIn (2, 3, 511);
+        CHECK (p4->pattern.lengthOf (2) == 512 && got.vel == 99 && got.roll == 3 && p4->scene() == 2, "a 32-bar scene survives");
+        CHECK (p4->project.song.chainOn && p4->project.song.numLinks == 2 && p4->project.song.chain[0].repeats == 3, "the chain survives");
+        CHECK (p4->project.matrix.oneShot.cells.size() == 1 && p4->project.matrix.oneShot.cells[0].scene == 2 && p4->project.matrix.oneShot.cells[0].step == 511, "a node's scene and step survive");
+        CHECK (p4->project.midi.mode == 1 && p4->project.midi.note[5] == 60 && p4->project.grid.follow[7].on && p4->project.grid.follow[7].mode == 2, "MIDI out and the Layermax follows survive");
+        // a 2.0 state: one PATTERN element
+        auto x = juce::AudioProcessor::getXmlFromBinary (st.getData(), (int) st.getSize());
+        while (auto* ch = x->getChildByName ("SCENES")) x->removeChildElement (ch, true);
+        auto* old2 = x->createNewChildElement ("PATTERN"); old2->setAttribute ("length", 16);
+        old2->setAttribute ("t0", "60 0 0 0 60 0 0 0 60 0 0 0 60 0 0 0");
+        juce::MemoryBlock ob; juce::AudioProcessor::copyXmlToBinary (*x, ob);
+        p4->setStateInformation (ob.getData(), (int) ob.getSize());
+        CHECK (p4->pattern.lengthOf (0) == 16 && p4->pattern.getIn (0, 0, 4).vel == 0x60 && p4->pattern.getIn (1, 0, 4).vel == 0, "a 2.0 project's pattern loads as scene A");
+    }
+
+    std::printf ("9. undo: each room keeps its own history\n");
+    {
+        auto p3 = std::make_unique<NeoBeatProcessor>();
+        p3->undoCommit (0);                                   // the starting point
+        nb::Step hit; hit.vel = 111;
+        p3->pattern.set (9, 3, hit); p3->undoCommit (0);       // the sequencer's room: a hit
+        p3->project.grid.patterns[0].cells[5] = nb::GridPattern::pack (200, 128, 128, nb::GridPattern::kOn); p3->projectChanged(); p3->undoCommit (2);   // Layermax: a box
+        p3->setParam (p3->paramId (4, "width"), 0.0f); p3->undoCommit (0);   // the sequencer's room again: a knob
+        CHECK (p3->canUndo (0) && p3->canUndo (2) && ! p3->canUndo (1) && ! p3->canUndo (3), "two rooms have something to undo, two have nothing");
+        std::printf ("     sequencer: \"%s\" | Layermax: \"%s\"\n", p3->undoLabel (0).toRawUTF8(), p3->undoLabel (2).toRawUTF8());
+        p3->undo (2);
+        CHECK (p3->project.grid.patterns[0].cells[5] == 0 && p3->pattern.get (9, 3).vel == 111 && p3->getParam (p3->paramId (4, "width")) < 0.01f, "undo in Layermax takes back the box and nothing else");
+        p3->undo (0);
+        CHECK (p3->getParam (p3->paramId (4, "width")) > 0.99f && p3->pattern.get (9, 3).vel == 111, "undo in the sequencer's room takes back the knob");
+        p3->undo (0);
+        CHECK (p3->pattern.get (9, 3).vel == 0, "and again: the hit");
+        p3->redo (0); p3->redo (0); p3->redo (2);
+        CHECK (p3->pattern.get (9, 3).vel == 111 && p3->getParam (p3->paramId (4, "width")) < 0.01f && p3->project.grid.patterns[0].cells[5] != 0, "redo brings all three back");
+        // a node sent to an effect, and back
+        nb::OneShotCell c; c.pad = 9; c.step = 3; c.fx = nb::CellFx::library (nb::MatrixFx::Shimmer); p3->project.matrix.oneShot.cells.push_back (c); p3->projectChanged(); p3->undoCommit (1);
+        p3->undo (1);
+        CHECK (p3->project.matrix.oneShot.cells.empty(), "sending a node to an effect is one step in the Matrixxxer's history");
+        for (int i = 0; i < 130; ++i) { hit.vel = (uint8_t) (1 + i % 120); p3->pattern.set (1, i % 64, hit); p3->undoCommit (0); }
+        int steps = 0; while (p3->canUndo (0) && steps < 500) { p3->undo (0); ++steps; }
+        CHECK (steps == 100, "the history keeps the last 100 steps");
+    }
+
+    const auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("neobeat_hosttest_" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+    tmp.createDirectory();
+    auto writeWav = [&] (const juce::File& f, int kind, float gain)
+    {
+        const double sr = 44100.0; const int n = (int) (sr * (kind == 3 ? 0.7 : 0.3));
+        juce::AudioBuffer<float> b (2, n); juce::Random r (kind * 77 + 5); float ph = 0.0f, lp = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float t = (float) (i / sr); float v = 0.0f; const float w = r.nextFloat() * 2.0f - 1.0f;
+            if (kind == 0) { ph += 6.2831853f * (50.0f + 140.0f * std::exp (-t * 35.0f)) / (float) sr; v = std::sin (ph) * std::exp (-t * 11.0f); }
+            else if (kind == 1) { ph += 6.2831853f * 190.0f / (float) sr; v = 0.5f * std::sin (ph) * std::exp (-t * 22.0f) + 0.6f * w * std::exp (-t * 16.0f); }
+            else { const float hp = w - lp; lp += 0.35f * (w - lp); v = hp * std::exp (-t * (kind == 2 ? 90.0f : 7.0f)); }
+            b.setSample (0, i, v * gain); b.setSample (1, i, v * gain * 0.8f);
+        }
+        juce::WavAudioFormat wav; f.deleteFile();
+        std::unique_ptr<juce::AudioFormatWriter> wr (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 24, {}, 0));
+        if (wr) wr->writeFromAudioSampleBuffer (b, 0, n);
+    };
+
+    std::printf ("10. a folder of samples into the lanes\n");
+    {
+        const auto folder = tmp.getChildFile ("samples"); folder.createDirectory();
+        writeWav (folder.getChildFile ("thing_a.wav"), 0, 0.05f);     // a kick, recorded very quietly
+        writeWav (folder.getChildFile ("thing_b.wav"), 1, 0.5f);      // a snare
+        writeWav (folder.getChildFile ("thing_c.wav"), 2, 0.5f);      // a closed hat
+        writeWav (folder.getChildFile ("thing_d.wav"), 3, 0.5f);      // an open hat
+        auto p3 = std::make_unique<NeoBeatProcessor>();
+        p3->undoCommit (0);
+        const auto rep = p3->importFolder (folder, true);
+        for (const auto& l : rep.lines) std::printf ("     %s\n", l.toRawUTF8());
+        CHECK (rep.found == 4 && rep.lanes == 4, "four files found, four lanes filled");
+        CHECK (p3->padName (0).containsIgnoreCase ("thing_a") && p3->padName (2).containsIgnoreCase ("thing_b") && p3->padName (4).containsIgnoreCase ("thing_c") && p3->padName (5).containsIgnoreCase ("thing_d"),
+               "kick, snare, closed hat and open hat each landed on their lane");
+        CHECK (p3->getParam (p3->paramId (0, "level")) > p3->getParam (p3->paramId (2, "level")) + 12.0f, "the quiet recording was brought up to the others (more than 12 dB more)");
+        CHECK (p3->padUsesSample (0) && ! p3->padUsesSample (1), "the other lanes keep their stock sounds");
+        p3->undoCommit (0); p3->undo (0);
+        CHECK (! p3->padUsesSample (0) && ! p3->padUsesSample (4), "one undo takes the whole import back");
+        const auto all = p3->importFolder (folder, false);
+        CHECK (all.rows == 4 && p3->project.grid.files.size() == 4 && ! p3->project.grid.useKit, "import all: every file is also a Layermax row");
+    }
+
+    std::printf ("11. .NJQ: a kit and its sequence in one file, there and back\n");
+    {
+        juce::String err;
+        auto p3 = std::make_unique<NeoBeatProcessor>();
+        writeWav (tmp.getChildFile ("mine.wav"), 1, 0.4f);
+        CHECK (p3->loadSample (6, tmp.getChildFile ("mine.wav")), "a sample on lane 7");
+        p3->setParam (p3->paramId (6, "level"), 7.5f); p3->setParam (p3->paramId (6, "width"), 1.6f); p3->setParam (p3->paramId (2, "tune"), -5.0f);
+        p3->setParam ("tempo", 97.0f); p3->setParam ("swing", 0.58f);
+        nb::Step hit; hit.vel = 120; hit.roll = 2; p3->pattern.setIn (3, 6, 200, hit); p3->pattern.setLengthIn (3, 256);
+        p3->project.song.chainOn = true; p3->project.song.numLinks = 1; p3->project.song.chain[0] = { 3, 2 };
+        const auto file = tmp.getChildFile ("Test kit.NJQ");
+        CHECK (p3->saveNjq (file, "Test kit", err) && file.getSize() > 1000, "saved");
+        std::printf ("     %s: %d bytes\n", file.getFileName().toRawUTF8(), (int) file.getSize());
+        auto p4 = std::make_unique<NeoBeatProcessor>();
+        CHECK (p4->loadNjq (file, err), "loaded into a new NeoBeat");
+        CHECK (p4->padUsesSample (6) && std::fabs (p4->getParam (p4->paramId (6, "level")) - 7.5f) < 0.06f && std::fabs (p4->getParam (p4->paramId (6, "width")) - 1.6f) < 0.01f, "the lane's sample and its settings");
+        CHECK (! p4->padUsesSample (2) && std::fabs (p4->getParam (p4->paramId (2, "tune")) + 5.0f) < 0.02f && p4->padName (2) == p3->padName (2), "a stock lane, by name, with its settings");
+        CHECK (p4->pattern.lengthOf (3) == 256 && p4->pattern.getIn (3, 6, 200).vel == 120 && p4->pattern.getIn (3, 6, 200).roll == 2, "the scenes");
+        CHECK (p4->project.song.chainOn && p4->project.song.chain[0].scene == 3 && std::fabs (p4->getParam ("tempo") - 97.0f) < 0.06f && std::fabs (p4->getParam ("swing") - 0.58f) < 0.002f, "the chain, the tempo and the swing");
+        // the sound itself came through the FLAC intact
+        Host h4 (*p4); h4.prepare (48000.0, 512); h4.playing = false;
+        p4->audition (6, 1.0f); h4.run (0.3, false);
+        CHECK (! h4.bad && h4.maxAbs > 0.02f, "the lane plays its sample");
+        // the project remembers where the sample came from
+        juce::MemoryBlock st; p4->getStateInformation (st);
+        auto p5 = std::make_unique<NeoBeatProcessor>();
+        p5->setStateInformation (st.getData(), (int) st.getSize());
+        CHECK (p5->padUsesSample (6), "a saved project finds the sample inside the .NJQ again");
+        CHECK (! p5->loadNjq (tmp.getChildFile ("mine.wav"), err) && err.isNotEmpty(), "a file that is not a .NJQ is refused, with a reason");
+        // "make this a default sequence"
+        juce::File::getCurrentWorkingDirectory();
+        auto st0 = shared::Settings::load(); st0.presetFolder = tmp.getChildFile ("presets").getFullPathName(); st0.startupNjq.clear(); st0.save();
+        CHECK (p4->makeDefault (file, true, err), "made a default sequence");
+        const auto st1 = shared::Settings::load();
+        CHECK (p4->njqFiles().size() == 1 && juce::File (st1.startupNjq).existsAsFile() && juce::File (st1.startupNjq).isAChildOf (st1.presets()), "it is in the preset folder's list, and the one to start with");
+        auto p6 = std::make_unique<NeoBeatProcessor>();
+        for (int i = 0; i < 40 && ! p6->padUsesSample (6); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+        CHECK (p6->padUsesSample (6) && p6->pattern.lengthOf (3) == 256, "a new NeoBeat opens with it");
+        auto p7 = std::make_unique<NeoBeatProcessor>();
+        p7->setStateInformation (st.getData(), (int) st.getSize());
+        p7->setParam (p7->paramId (6, "level"), -3.0f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (700);
+        CHECK (std::fabs (p7->getParam (p7->paramId (6, "level")) + 3.0f) < 0.06f, "but a saved project is left as it was saved");
+        auto st2 = shared::Settings::load(); st2.startupNjq.clear(); st2.save();
+    }
+
+    // a kit made in Batchcut's Kit room (NJQ_FROM_BATCHCUT names its file; skipped without it)
+    {
+        const auto from = juce::SystemStats::getEnvironmentVariable ("NJQ_FROM_BATCHCUT", {});
+        if (from.isNotEmpty())
+        {
+            std::printf ("11b. a .NJQ from Batchcut's Kit room\n");
+            juce::String err;
+            auto pb = std::make_unique<NeoBeatProcessor>();
+            const bool ok = pb->loadNjq (juce::File (from), err);
+            CHECK (ok, "loaded");
+            int withSample = 0; for (int l = 0; l < 16; ++l) withSample += pb->padUsesSample (l) ? 1 : 0;
+            int hits = 0; for (int l = 0; l < 16; ++l) for (int st = 0; st < pb->pattern.lengthOf (0); ++st) hits += pb->pattern.getIn (0, l, st).vel > 0;
+            std::printf ("     %d lanes with a sample, %d hits in scene A, tempo %.1f, swing %.2f\n", withSample, hits, pb->getParam ("tempo"), pb->getParam ("swing"));
+            CHECK (withSample == 16 && hits > 20, "16 lanes play Batchcut's sounds, scene A has its pattern");
+            CHECK (std::fabs (pb->getParam ("tempo") - 93.0f) < 0.06f && std::fabs (pb->getParam ("swing") - 0.58f) < 0.002f, "at its tempo and swing");
+            Host hb (*pb); hb.prepare (48000.0, 512); hb.bpm = 93.0; hb.playing = true;
+            hb.run (5.0, false);
+            std::printf ("     peak %.2f\n", hb.maxAbs);
+            CHECK (! hb.bad && hb.maxAbs > 0.05f && hb.maxAbs <= 1.0f, "and it plays in NeoBeat");
+        }
+    }
+
+    std::printf ("12. export: WAV, stems and MIDI into a folder\n");
+    {
+        auto p3 = std::make_unique<NeoBeatProcessor>();
+        Host h3 (*p3); h3.prepare (48000.0, 512); h3.playing = false; h3.run (0.1, false);
+        p3->project.padFx[2].inserts[0] = nb::CellFx::library (nb::MatrixFx::Freezing); p3->projectChanged();
+        NeoBeatProcessor::ExportOptions o; o.folder = tmp.getChildFile ("export"); o.name = "Host test"; o.stems = true; o.range.mode = 2; o.range.barFrom = 0; o.range.barTo = 1;
+        CHECK (p3->startExport (o), "started");
+        for (int i = 0; i < 1200 && p3->exporting(); ++i) juce::Thread::sleep (50);
+        const auto files = p3->exportedFiles();
+        std::printf ("     %s\n", p3->exportResult().toRawUTF8());
+        int wavs = 0, mids = 0; juce::int64 mixSize = 0;
+        for (const auto& f : files) { const juce::File ff (f); if (ff.hasFileExtension ("wav")) { ++wavs; if (ff.getFileName() == "Host test.wav") mixSize = ff.getSize(); } if (ff.hasFileExtension ("mid")) ++mids; }
+        CHECK (! p3->exporting() && wavs >= 4 && mids == 1, "the mix, a stem for each lane that plays, and a MIDI file");
+        CHECK (mixSize > (juce::int64) (2.0 * 48000 * 6), "the mix is at least the bar (24 bit stereo), plus its tail");
+    }
+    tmp.deleteRecursively();
 
     proc2.reset();
     proc.reset();

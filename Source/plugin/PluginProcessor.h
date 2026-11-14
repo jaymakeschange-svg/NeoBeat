@@ -1,19 +1,28 @@
-// NeoBeat 2.0 — the plugin processor: host parameters, the pattern, the project, files, presets and
-// state. The sound is the framework-free Workstation; this class feeds it and keeps it in sync.
+// NeoBeat 3.0 — the plugin processor: host parameters, the scenes, the project, files, presets, undo,
+// import, export and state. The sound is the framework-free Workstation; this class feeds it and keeps
+// it in sync.
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include "../engine/Export.h"
 #include "../engine/Factory.h"
 #include "../engine/Kits.h"
 #include "../engine/Workstation.h"
+#include "../shared/Learner.h"
+#include "../shared/Njq.h"
 
-// The pattern the editor edits and the audio thread plays, shared without locks.
+// The four scenes the editor edits and the audio thread plays, shared without locks.
 struct PatternStore
 {
-    std::array<std::atomic<uint32_t>, nb::Pattern::kTracks * nb::Pattern::kMaxSteps> cells {};
-    std::atomic<int> length { 32 };
+    static constexpr int kPerScene = nb::Pattern::kTracks * nb::Pattern::kMaxSteps;
+    std::vector<std::atomic<uint32_t>> cells = std::vector<std::atomic<uint32_t>> ((size_t) (nb::kNumScenes * kPerScene));
+    std::array<std::atomic<int>, nb::kNumScenes> lengths;
+    std::array<std::atomic<uint32_t>, nb::kNumScenes> sceneVersion;
     std::atomic<uint32_t> version { 1 };
+    std::atomic<int> edit { 0 };      // the scene the editor shows and edits
+
+    PatternStore() { for (auto& l : lengths) l.store (32); for (auto& v : sceneVersion) v.store (1); }
 
     static uint32_t pack (nb::Step s) noexcept { return (uint32_t) s.vel | ((uint32_t) s.roll << 8) | ((uint32_t) (uint8_t) s.nudge << 16); }
     static nb::Step unpack (uint32_t v) noexcept
@@ -21,27 +30,37 @@ struct PatternStore
         nb::Step s; s.vel = (uint8_t) (v & 0xff); s.roll = (uint8_t) ((v >> 8) & 0xff); s.nudge = (int8_t) (uint8_t) ((v >> 16) & 0xff);
         return s;
     }
-    nb::Step get (int track, int step) const noexcept { return unpack (cells[(size_t) (track * nb::Pattern::kMaxSteps + step)].load (std::memory_order_relaxed)); }
-    void set (int track, int step, nb::Step s) noexcept
-    {
-        cells[(size_t) (track * nb::Pattern::kMaxSteps + step)].store (pack (s), std::memory_order_relaxed);
-        version.fetch_add (1, std::memory_order_release);
-    }
-    void setLength (int len) noexcept { length.store (juce::jlimit (1, nb::Pattern::kMaxSteps, len)); version.fetch_add (1, std::memory_order_release); }
-    void load (const nb::Pattern& p) noexcept
+    static size_t at (int scene, int track, int step) noexcept { return (size_t) (scene * kPerScene + track * nb::Pattern::kMaxSteps + step); }
+    void touch (int scene) noexcept { sceneVersion[(size_t) scene].fetch_add (1, std::memory_order_release); version.fetch_add (1, std::memory_order_release); }
+
+    // ---- the scene being edited
+    int scene() const noexcept { return edit.load (std::memory_order_relaxed); }
+    int length() const noexcept { return lengths[(size_t) scene()].load(); }
+    nb::Step get (int track, int step) const noexcept { return getIn (scene(), track, step); }
+    void set (int track, int step, nb::Step s) noexcept { setIn (scene(), track, step, s); }
+    void setLength (int len) noexcept { setLengthIn (scene(), len); }
+    void load (const nb::Pattern& p) noexcept { loadScene (scene(), p); }
+    void snapshot (nb::Pattern& p) const noexcept { snapshotScene (scene(), p); }
+
+    // ---- any scene
+    nb::Step getIn (int scene, int track, int step) const noexcept { return unpack (cells[at (scene, track, step)].load (std::memory_order_relaxed)); }
+    void setIn (int scene, int track, int step, nb::Step s) noexcept { cells[at (scene, track, step)].store (pack (s), std::memory_order_relaxed); touch (scene); }
+    int lengthOf (int scene) const noexcept { return lengths[(size_t) scene].load(); }
+    void setLengthIn (int scene, int len) noexcept { lengths[(size_t) scene].store (juce::jlimit (1, nb::Pattern::kMaxSteps, len)); touch (scene); }
+    void loadScene (int scene, const nb::Pattern& p) noexcept
     {
         for (int t = 0; t < nb::Pattern::kTracks; ++t)
             for (int s = 0; s < nb::Pattern::kMaxSteps; ++s)
-                cells[(size_t) (t * nb::Pattern::kMaxSteps + s)].store (pack (p.steps[(size_t) t][(size_t) s]), std::memory_order_relaxed);
-        length.store (p.length);
-        version.fetch_add (1, std::memory_order_release);
+                cells[at (scene, t, s)].store (pack (p.steps[(size_t) t][(size_t) s]), std::memory_order_relaxed);
+        lengths[(size_t) scene].store (juce::jlimit (1, nb::Pattern::kMaxSteps, p.length));
+        touch (scene);
     }
-    void snapshot (nb::Pattern& p) const noexcept
+    void snapshotScene (int scene, nb::Pattern& p) const noexcept
     {
-        p.length = length.load();
+        p.length = lengths[(size_t) scene].load();
         for (int t = 0; t < nb::Pattern::kTracks; ++t)
             for (int s = 0; s < nb::Pattern::kMaxSteps; ++s)
-                p.steps[(size_t) t][(size_t) s] = get (t, s);
+                p.steps[(size_t) t][(size_t) s] = getIn (scene, t, s);
     }
 };
 
@@ -54,6 +73,7 @@ public:
     static constexpr int kPads = nb::kNumPads;
     static constexpr int kPadNoteBase = 36;
     static constexpr int kKeyRoot = 60;
+    static constexpr int kRooms = 4;      // SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP
 
     NeoBeatProcessor();
     ~NeoBeatProcessor() override;
@@ -80,10 +100,11 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     // ---- the editor (message thread)
-    void loadPreset (int index);
+    void loadPreset (int index);          // one of the 128 patterns, into the scene being edited
     void loadKit (int index);
     void audition (int pad, float velocity) noexcept { ws->audition (pad, velocity); }
     void auditionNote (int note, float velocity) noexcept { ws->auditionNote (note, velocity); }
+    void midiTest (int lane) noexcept { ws->midiTest (lane); }
     bool loadSample (int pad, const juce::File& file);
     void clearSample (int pad);
     juce::String padName (int pad) const;
@@ -91,16 +112,66 @@ public:
     bool padUsesSample (int pad) const noexcept { return useSample[(size_t) pad].load(); }
     juce::String paramId (int pad, const char* name) const { return "p" + juce::String (pad + 1) + "_" + name; }
     void setParam (const juce::String& id, float value);
+    float getParam (const juce::String& id) const;
+
+    // scenes: the one shown is the one played (unless the chain runs)
+    int scene() const noexcept { return pattern.scene(); }
+    void setScene (int s);
+    void copyScene (int from, int to);
+    void clearScene (int s);
 
     // the project: edit it, then call projectChanged()
     nb::Project project;
-    void projectChanged() noexcept { ++projectVersion; }
+    void projectChanged();
     std::map<std::string, std::shared_ptr<const nb::SampleData>> files;
     std::shared_ptr<const nb::SampleData> loadFile (const juce::File& f);
     int loadGridFolder (const juce::File& folder);   // returns how many samples
     nb::RenderService& renderer() noexcept { return ws->render(); }
     nb::Workstation& workstation() noexcept { return *ws; }
     void snapshotPattern (nb::Pattern& p) const noexcept { pattern.snapshot (p); }
+    std::unique_ptr<nb::RenderInputs> renderInputs() const;
+
+    // ---- undo: one history per room. Call undoCommit after every gesture; what changed since the last
+    // call becomes one step in that room's history.
+    void undoCommit (int room);
+    bool canUndo (int room) const { return room >= 0 && room < kRooms && ! history[(size_t) room].undo.empty(); }
+    bool canRedo (int room) const { return room >= 0 && room < kRooms && ! history[(size_t) room].redo.empty(); }
+    juce::String undoLabel (int room) const { return canUndo (room) ? history[(size_t) room].undo.back().label : juce::String(); }
+    juce::String redoLabel (int room) const { return canRedo (room) ? history[(size_t) room].redo.back().label : juce::String(); }
+    void undo (int room);
+    void redo (int room);
+
+    // ---- .NJQ: a kit and its sequence in one file
+    bool saveNjq (const juce::File& file, const juce::String& name, juce::String& error);
+    bool loadNjq (const juce::File& file, juce::String& error);
+    juce::Array<juce::File> njqFiles() const;         // the preset folder's
+    juce::String currentNjq;                           // the last one saved or loaded (for "make this a default?")
+    std::atomic<double> suggestedBpm { 0.0 };          // a loaded kit's tempo, when the host keeps its own
+    // "make this a default sequence": into the preset folder (so it is listed), and optionally what a new NeoBeat opens with
+    bool makeDefault (const juce::File& njq, bool startWithIt, juce::String& error);
+
+    // ---- a folder of samples into the lanes
+    struct ImportReport { int found = 0, lanes = 0, rows = 0; juce::StringArray lines; };
+    ImportReport importFolder (const juce::File& folder, bool pickMostMusical);
+    void matchLevel (int pad);                         // bring a lane's sample to the stock sounds' loudness
+    void rateLane (int pad, float stars);              // teach the learner
+    void teachLane (int pad);                          // "this sound belongs on this lane" (you put it there)
+    float laneRating (int pad);
+    static nbk::Learner& learner();                    // shared with Batchcut through one file
+    static void saveLearner();
+
+    // ---- export the sequencer's pattern
+    struct ExportOptions
+    {
+        juce::File folder; juce::String name = "NeoBeat";
+        nb::ExportRange range;
+        bool wav = true, stems = false, midi = true, straightMidi = false;
+    };
+    bool startExport (const ExportOptions&);
+    bool exporting() const noexcept { return exportBusy.load(); }
+    float exportProgress() const noexcept { return exportDone.load(); }
+    juce::String exportResult() const { const juce::ScopedLock l (exportLock); return exportMessage; }
+    juce::StringArray exportedFiles() const { const juce::ScopedLock l (exportLock); return exportFiles; }
 
     // user presets ("keep their samples": referenced files are copied next to the preset)
     static juce::File userRoot();
@@ -111,10 +182,11 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     PatternStore pattern;
     const nb::Library& library() const noexcept { return ws->kit().lib(); }
-    std::atomic<int> currentPreset { 0 }, currentKit { 0 }, playStep { -1 }, selectedPad { 0 };
+    std::atomic<int> currentPreset { 0 }, currentKit { 0 }, playStep { -1 }, playScene { 0 }, queuedScene { -1 }, playLink { -1 }, selectedPad { 0 };
     std::atomic<double> displayBpm { 120.0 };
     std::atomic<bool> hostSynced { false };
     uint32_t hitCount (int pad) const noexcept { return ws->kit().hitCounter[(size_t) pad].load (std::memory_order_relaxed); }
+    uint32_t lateHits() const noexcept { return ws->lateHits(); }
 
     // Mono tap of the selected pad, for the editor's displays.
     juce::AbstractFifo tapFifo { 16384 };
@@ -129,9 +201,22 @@ private:
     void reloadProjectFiles();
     std::unique_ptr<juce::XmlElement> sectionXml (const juce::String& section);
     void applySectionXml (const juce::String& section, const juce::XmlElement& e);
+    void setPadSample (int pad, std::shared_ptr<const nb::SampleData> ptr);
+    std::shared_ptr<const nb::SampleData> resolveSample (const juce::String& key);
+    void publishLive();
 
-    nb::Pattern patternCopy;
-    uint32_t seenVersion = 0;
+    // undo
+    using Sections = std::map<juce::String, juce::MemoryBlock>;
+    struct Entry { juce::String label; Sections before, after; };
+    struct History { std::vector<Entry> undo, redo; };
+    Sections captureSections();
+    void applySections (const Sections&);
+    std::array<History, kRooms> history;
+    Sections baseline;
+    bool baselineValid = false;
+
+    std::vector<nb::Pattern> sceneCopy = std::vector<nb::Pattern> ((size_t) nb::kNumScenes);
+    std::array<uint32_t, nb::kNumScenes> seenScene {};
     std::vector<nb::MidiIn> midiIn;
     std::vector<nb::MidiOut> midiOut;
     std::vector<float> tapScratch;
@@ -140,8 +225,11 @@ private:
     bool prepared = false;
 
     std::atomic<uint64_t> projectVersion { 1 };
-    uint64_t pendingHash = 0, submittedHash = 0;
-    juce::uint32 pendingSince = 0;
+    uint64_t publishedVersion = 0, submittedHash = 0;
+    juce::uint32 lastSubmit = 0;
+    int ticks = 0;
+    std::atomic<bool> stateRestored { false };
+    bool startupDone = false;
 
     std::array<std::atomic<bool>, kPads> useSample {};
     std::array<std::shared_ptr<const nb::SampleData>, kPads> samples {};    // message-thread owner
@@ -150,9 +238,18 @@ private:
     std::vector<std::shared_ptr<const nb::SampleData>> keepAlive;           // never freed on the audio thread
     juce::AudioFormatManager formats;
 
-    struct PadParams { std::atomic<float>* sound, * tune, * decay, * tone, * drive, * hollow, * evolve, * pan, * level, * choke, * mute; };
+    struct PadParams { std::atomic<float>* sound, * tune, * decay, * tone, * drive, * hollow, * evolve, * pan, * level, * choke, * mute, * width; };
     std::array<PadParams, kPads> padParams {};
-    std::atomic<float>* masterParam = nullptr, * swingParam = nullptr, * tempoParam = nullptr, * modeParam = nullptr, * runParam = nullptr;
+    std::atomic<float>* masterParam = nullptr, * swingParam = nullptr, * tempoParam = nullptr, * modeParam = nullptr, * runParam = nullptr, * sceneParam = nullptr;
+
+    // export (its own thread)
+    struct ExportThread;
+    std::unique_ptr<ExportThread> exportThread;
+    std::atomic<bool> exportBusy { false };
+    std::atomic<float> exportDone { 0.0f };
+    juce::CriticalSection exportLock;
+    juce::String exportMessage;
+    juce::StringArray exportFiles;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeoBeatProcessor)
 };

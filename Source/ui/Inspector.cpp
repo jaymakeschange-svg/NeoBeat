@@ -1,4 +1,4 @@
-// NeoBeat 2.0 — the inspector: whatever is selected, in three tabs (SOUND, FX, MOD).
+// NeoBeat 3.0 — the inspector: whatever is selected, in three tabs (SOUND, FX, MOD).
 #include "UI.h"
 
 namespace ui
@@ -198,6 +198,7 @@ private:
         auto& P = ctx.P();
         const auto& s = ctx.sel;
         if (s.kind == Sel::Cell && s.index >= 0 && s.index < (int) P.matrix.oneShot.cells.size()) { buildCell (f, s.index); return; }
+        if (s.kind == Sel::Node) { buildNode (f, s.index / nb::Pattern::kMaxSteps, s.index % nb::Pattern::kMaxSteps); return; }
         if (s.kind == Sel::SampleOp && s.index >= 0 && s.index < (int) P.matrix.sample.ops.size()) { buildOp (f, s.index); return; }
         if (s.kind == Sel::Mark && s.index >= 0 && s.index < (int) P.matrix.seq.marks.size()) { buildMark (f, s.index); return; }
         if (s.kind == Sel::Zone && s.index >= 0 && s.index < (int) P.keymap.zones.size()) { buildZone (f, s.index); return; }
@@ -262,8 +263,8 @@ private:
     // ---------------------------------------------------------------- a pad
     void buildPad (FlowPanel& f, int p)
     {
-        crumb = "KIT > PAD " + juce::String (p + 1);
-        lcd.set ("PAD " + juce::String (p + 1).paddedLeft ('0', 2) + " | " + ctx.proc.padName (p).toUpperCase(), ctx.proc.padGroup (p).toUpperCase());
+        crumb = "SEQUENCER > LANE " + juce::String (p + 1);
+        lcd.set ("LANE " + juce::String (p + 1).paddedLeft ('0', 2) + " | " + ctx.proc.padName (p).toUpperCase(), ctx.proc.padGroup (p).toUpperCase());
         const juce::String dp = "pad/" + juce::String (p) + "/";
         if (ctx.tab == 0)
         {
@@ -275,15 +276,24 @@ private:
                 if (soundParam) soundParam->setValueNotifyingHost (soundParam->convertTo0to1 ((float) i));
                 ctx.proc.clearSample (p); ctx.proc.audition (p, 0.85f); if (ctx.refreshAll) ctx.refreshAll();
             });
-            const char* ids[] = { "tune", "decay", "tone", "drive", "hollow", "evolve", "pan", "level" };
-            const char* labels[] = { "TUNE", "DECAY", "TONE", "DRIVE", "HOLLOW", "EVOLVE", "PAN", "LEVEL" };
-            for (int i = 0; i < 8; ++i)
+            const char* ids[] = { "tune", "decay", "tone", "drive", "hollow", "evolve", "pan", "level", "width" };
+            const char* labels[] = { "TUNE", "DECAY", "TONE", "DRIVE", "HOLLOW", "EVOLVE", "PAN", "LEVEL", "WIDTH" };
+            for (int i = 0; i < 9; ++i)
             {
                 auto* prm = ctx.proc.apvts.getParameter (ctx.proc.paramId (p, ids[i]));
                 auto& k = f.knob (labels[i], 0, 1, 0, false, nullptr, dp + ids[i]);
                 k.attach (prm);
                 k.toText = [prm] (float v) { return prm != nullptr ? prm->getText (prm->convertTo0to1 (v), 8) + (prm->getLabel().isEmpty() ? "" : " " + prm->getLabel()) : juce::String (v); };
                 if (i == 1) k.setRange (0.25f, 4.0f, true);
+                if (i == 7) k.setTooltip ("Up to +24 dB, so a quiet recording can sit beside the stock sounds");
+                if (i == 8) k.setTooltip ("Stereo: 0 is mono, 100 % is the sound as it is, 200 % is wide (the widening disappears in mono, it never thins the sound)");
+            }
+            if (ctx.proc.padUsesSample (p))
+            {
+                f.button ("MATCH LEVEL", [this, p] { ctx.proc.matchLevel (p); if (ctx.refreshAll) ctx.refreshAll(); }).setTooltip ("Set LEVEL so this sample is as loud as the stock sounds");
+                // your rating teaches NeoBeat (and Batchcut) what you like
+                const int stars = juce::roundToInt (ctx.proc.laneRating (p));
+                f.combo ("MY RATING", { "not rated", "1 star", "2 stars", "3 stars", "4 stars", "5 stars" }, juce::jlimit (0, 5, stars), [this, p] (int i) { ctx.proc.rateLane (p, (float) i); });
             }
             f.combo ("CHOKE", { "NONE", "GROUP 1", "GROUP 2", "GROUP 3", "GROUP 4" }, (int) ctx.proc.apvts.getRawParameterValue (ctx.proc.paramId (p, "choke"))->load(),
                      [this, p] (int i) { ctx.proc.setParam (ctx.proc.paramId (p, "choke"), (float) i); });
@@ -293,15 +303,16 @@ private:
             f.button (ctx.proc.padUsesSample (p) ? "CLEAR SAMPLE" : "LOAD SAMPLE", [this, p]
             {
                 if (ctx.proc.padUsesSample (p)) { ctx.proc.clearSample (p); if (ctx.refreshAll) ctx.refreshAll(); return; }
-                chooser = std::make_unique<juce::FileChooser> ("Load a sample onto pad " + juce::String (p + 1), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+                chooser = std::make_unique<juce::FileChooser> ("Load a sample onto lane " + juce::String (p + 1), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
                 chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this, p] (const juce::FileChooser& fc)
-                { if (fc.getResult().existsAsFile() && ctx.proc.loadSample (p, fc.getResult()) && ctx.refreshAll) ctx.refreshAll(); });
+                { if (fc.getResult().existsAsFile() && ctx.proc.loadSample (p, fc.getResult())) { ctx.proc.matchLevel (p); ctx.proc.teachLane (p); if (ctx.refreshAll) ctx.refreshAll(); } });
             });
             f.text ("Every knob is a mod destination: drag a source from the dock onto it. The rings show what moves it.", 40);
         }
         else if (ctx.tab == 1)
         {
-            f.section ("SIGNAL PATH | HIT > CELL > INSERTS > WINDOWS > MIX");
+            f.section ("SIGNAL PATH | HIT > NODE'S EFFECT > INSERTS > WINDOWS > MIX");
+            f.text ("Inserts are on every hit of this lane and run live: turn a knob and hear it now. (Friction Stretch is the one effect prepared ahead.)", 46);
             juce::StringArray items { "None" }; items.addArray (fxMenuNames());
             for (int i = 0; i < nb::kNumInserts; ++i)
             {
@@ -313,7 +324,7 @@ private:
                 });
                 fxKnobs (f, get, {}, nullptr);
             }
-            f.section ("WINDOWS LISTENING TO THIS PAD");
+            f.section ("WINDOWS LISTENING TO THIS LANE");
             auto& P = ctx.P();
             int n = 0;
             for (int s = 0; s < nb::kNumSlots; ++s)
@@ -327,9 +338,9 @@ private:
                     f.knob ((fs ? "FRICTION " : "BOUNCE ") + juce::String (s + 1), 0, 1.5f, fs ? P.fs[(size_t) s].level : P.bd[(size_t) s].level, false,
                             [this, fs, s] (float v) { (fs ? ctx.P().fs[(size_t) s].level : ctx.P().bd[(size_t) s].level) = v; ctx.changed (false); });
                 }
-            if (n == 0) f.text ("None yet. Send this pad to a slot and its hits feed that window too.", 32);
-            f.button ("+ FRICTION SLOT", [this, p] { assign (true, p); });
-            f.button ("+ BOUNCE SLOT", [this, p] { assign (false, p); });
+            if (n == 0) f.text ("None yet. Send this lane to a window and its hits feed it too.", 32);
+            f.button ("SEND TO FRICTION", [this, p] { assign (true, p); });
+            f.button ("SEND TO BOUNCE", [this, p] { assign (false, p); });
         }
         else
         {
@@ -364,27 +375,54 @@ private:
         ctx.openWindow (fs, free);
     }
 
-    // ---------------------------------------------------------------- a One Shot cell
+    // ---------------------------------------------------------------- a node that is sent to an effect
     void buildCell (FlowPanel& f, int i)
     {
         auto& c = ctx.P().matrix.oneShot.cells[(size_t) i];
-        crumb = "PAD " + juce::String (c.pad + 1) + " > CELL " + juce::String (i + 1);
-        lcd.set ("CELL " + juce::String (i + 1) + " | " + fxName (c.fx).toUpperCase(), "PAD " + juce::String (c.pad + 1) + " | STEP " + juce::String (c.step + 1) + " | " + juce::String (c.span) + " STEPS | HEIGHT " + juce::String (c.height, 2));
+        const juce::String sceneName = juce::String::charToString ((juce::juce_wchar) ('A' + c.scene));
+        crumb = "SCENE " + sceneName + " > LANE " + juce::String (c.pad + 1) + " > NODE";
+        lcd.set ("NODE > " + fxName (c.fx).toUpperCase(), "SCENE " + sceneName + " | LANE " + juce::String (c.pad + 1) + " | STEP " + juce::String (c.step / 16 + 1) + "." + juce::String (c.step % 16 + 1) + " | REACH " + juce::String (c.span) + " | HEIGHT " + juce::String (c.height, 2));
         auto get = [this, i] () -> nb::CellFx* { auto& cs = ctx.P().matrix.oneShot.cells; return i < (int) cs.size() ? &cs[(size_t) i].fx : nullptr; };
         if (ctx.tab == 2) { routes (f, "cell/" + juce::String (i) + "/"); return; }
-        f.combo ("EFFECT", fxMenuNames(), fxIndex (c.fx), [this, i] (int sel) { auto& cs = ctx.P().matrix.oneShot.cells; if (i < (int) cs.size()) { cs[(size_t) i].fx = fxFromIndex (sel); ctx.changed(); } });
+        juce::StringArray items { "Init (no effect)" }; items.addArray (fxMenuNames());
+        const int lane = c.pad, step = c.step;
+        f.combo ("SEND NODE TO", items, fxIndex (c.fx) + 1, [this, lane, step] (int sel) { sendNode (ctx, lane, step, sel - 1); });
         const auto mc = nb::mainControl (c.fx);
         auto& h = f.knob ("HEIGHT", 0, 1, c.height, false, [this, i] (float v) { auto& cs = ctx.P().matrix.oneShot.cells; if (i < (int) cs.size()) { cs[(size_t) i].height = v; ctx.changed (false); } },
                           "cell/" + juce::String (i) + "/main", [mc] (float v) { return juce::String (mc.valueAt (v), mc.hi > 50 ? 0 : 2); });
         h.setMain (true);
         h.setTooltip ("Height sets the main control: " + juce::String (mc.name));
-        f.knob ("SPAN", 1, 16, (float) c.span, false, [this, i] (float v) { auto& cs = ctx.P().matrix.oneShot.cells; if (i < (int) cs.size()) { cs[(size_t) i].span = juce::roundToInt (v); ctx.changed (false); } }, {},
+        f.knob ("REACH", 1, 64, (float) c.span, false, [this, i] (float v) { auto& cs = ctx.P().matrix.oneShot.cells; if (i < (int) cs.size()) { cs[(size_t) i].span = juce::roundToInt (v); ctx.changed (false); } }, {},
                 [] (float v) { return juce::String (juce::roundToInt (v)) + " steps"; });
-        f.text ("HEIGHT is " + juce::String (mc.name) + " for this effect: higher reaches further. SPAN is how far the effect rings past the hit.", 34);
+        f.text (c.fx.kind == nb::CellFx::FrictionStretchFx
+                    ? juce::String ("Friction Stretch is prepared ahead: a change is in after a moment (PREPARING, top right). HEIGHT is its ") + mc.name + "."
+                    : "Live: every knob here is heard as you turn it, also on a hit that is still ringing. HEIGHT is " + juce::String (mc.name) + "; REACH is how far the effect rings past the hit.", 48);
         f.section ("SETTINGS");
         fxKnobs (f, get, {}, [this, i, get] { if (auto* x = get()) ctx.openWindow (x->kind == nb::CellFx::FrictionStretchFx, 0, i); });
         f.button ("PLAY THE HIT", [this, i] { auto& cs = ctx.P().matrix.oneShot.cells; if (i < (int) cs.size()) ctx.proc.audition (cs[(size_t) i].pad, 0.9f); });
-        f.button ("DELETE CELL", [this, i] { auto& cs = ctx.P().matrix.oneShot.cells; if (i < (int) cs.size()) { cs.erase (cs.begin() + i); ctx.select ({ Sel::None, 0 }); ctx.changed(); } });
+        f.button ("BACK TO INIT", [this, lane, step] { sendNode (ctx, lane, step, -1); });
+    }
+
+    // ---------------------------------------------------------------- a node as it starts: Init (no effect)
+    void buildNode (FlowPanel& f, int lane, int step)
+    {
+        const auto st = ctx.proc.pattern.get (lane, step);
+        const juce::String sceneName = juce::String::charToString ((juce::juce_wchar) ('A' + ctx.scene()));
+        crumb = "SCENE " + sceneName + " > LANE " + juce::String (lane + 1) + " > NODE";
+        lcd.set ("NODE > INIT", "SCENE " + sceneName + " | LANE " + juce::String (lane + 1) + " | STEP " + juce::String (step / 16 + 1) + "." + juce::String (step % 16 + 1) + (st.vel == 0 ? " | EMPTY" : " | VELOCITY " + juce::String ((int) st.vel)));
+        if (ctx.tab == 2) { f.text ("Send the node to an effect first: its main control is then a destination for the dock's sources.", 46); return; }
+        juce::StringArray items { "Init (no effect)" }; items.addArray (fxMenuNames());
+        f.combo ("SEND NODE TO", items, 0, [this, lane, step] (int sel) { if (sel > 0) sendNode (ctx, lane, step, sel - 1); });
+        f.text ("Init: this node plays its lane's sound as it is. Send it to an effect and that effect is on this one hit only.", 46);
+        f.section ("THE HIT");
+        auto setStep = [this, lane, step] (std::function<void (nb::Step&)> fn) { auto s2 = ctx.proc.pattern.get (lane, step); fn (s2); ctx.proc.pattern.set (lane, step, s2); };
+        f.knob ("VELOCITY", 0, 127, (float) st.vel, false, [setStep] (float v) { setStep ([v] (nb::Step& x) { x.vel = (uint8_t) juce::roundToInt (v); }); }, {}, [] (float v) { return juce::roundToInt (v) == 0 ? juce::String ("off") : juce::String (juce::roundToInt (v)); });
+        f.knob ("NUDGE", -50, 50, (float) st.nudge, false, [setStep] (float v) { setStep ([v] (nb::Step& x) { x.nudge = (int8_t) juce::roundToInt (v); }); }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " %"; });
+        f.combo ("ROLL", { "Single hit", "Ratchet x2", "Ratchet x3", "Ratchet x4", "Triplet roll (two steps)" }, st.roll == 0 ? 0 : st.roll - 1,
+                 [setStep] (int i) { setStep ([i] (nb::Step& x) { x.roll = (uint8_t) (i == 0 ? 0 : i + 1); if (x.vel == 0) x.vel = 96; }); });
+        f.button ("PLAY THE HIT", [this, lane] { ctx.proc.audition (lane, 0.9f); });
+        f.button ("COPY", [this, lane, step] { copyNode (ctx, lane, step); });
+        f.button ("PASTE", [this, lane, step] { pasteNode (ctx, lane, step); if (ctx.refreshAll) ctx.refreshAll(); });
     }
 
     // ---------------------------------------------------------------- a Sample view box
@@ -395,7 +433,7 @@ private:
         const float lo = std::min (o.fLo, o.fHi), hi = std::max (o.fLo, o.fHi);
         const float height = juce::jlimit (0.0f, 1.0f, std::log2 (hi / std::max (20.0f, lo)) / std::log2 (16000.0f / 30.0f));
         const auto mc = nb::mainControl (o.fx);
-        lcd.set ("BOX " + juce::String (i + 1) + " | " + fxName (o.fx).toUpperCase(), "CELLS " + juce::String (std::min (o.c0, o.c1) + 1) + "-" + juce::String (std::max (o.c0, o.c1)) + " | " + juce::String (juce::roundToInt (lo)) + "-" + juce::String (juce::roundToInt (hi)) + " HZ");
+        lcd.set ("BOX " + juce::String (i + 1) + " | " + fxName (o.fx).toUpperCase(), "SLICES " + juce::String (std::min (o.c0, o.c1) + 1) + "-" + juce::String (std::max (o.c0, o.c1)) + " | " + juce::String (juce::roundToInt (lo)) + "-" + juce::String (juce::roundToInt (hi)) + " HZ");
         if (ctx.tab == 2) { routes (f, "sample/"); return; }
         auto get = [this, i] () -> nb::CellFx* { auto& os = ctx.P().matrix.sample.ops; return i < (int) os.size() ? &os[(size_t) i].fx : nullptr; };
         auto op = [this, i] () -> nb::SampleOp* { auto& os = ctx.P().matrix.sample.ops; return i < (int) os.size() ? &os[(size_t) i] : nullptr; };
@@ -404,8 +442,8 @@ private:
         f.knob ("BAND LOW", 20, 18000, lo, true, [this, op] (float v) { if (auto* x = op()) { x->fLo = v; ctx.changed (false); } }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " Hz"; });
         f.knob ("BAND HIGH", 30, 20000, hi, true, [this, op] (float v) { if (auto* x = op()) { x->fHi = v; ctx.changed (false); } }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " Hz"; });
         f.knob ("MIX", 0, 1, o.mix, false, [this, op] (float v) { if (auto* x = op()) { x->mix = v; ctx.changed (false); } });
-        f.knob ("FROM", 0, 31, (float) std::min (o.c0, o.c1), false, [this, op] (float v) { if (auto* x = op()) { x->c0 = juce::roundToInt (v); if (x->c1 <= x->c0) x->c1 = x->c0 + 1; ctx.changed (false); } }, {}, [] (float v) { return "cell " + juce::String (juce::roundToInt (v) + 1); });
-        f.knob ("TO", 1, 32, (float) std::max (o.c0, o.c1), false, [this, op] (float v) { if (auto* x = op()) { x->c1 = juce::roundToInt (v); if (x->c1 <= x->c0) x->c0 = x->c1 - 1; ctx.changed (false); } }, {}, [] (float v) { return "cell " + juce::String (juce::roundToInt (v)); });
+        f.knob ("FROM", 0, 31, (float) std::min (o.c0, o.c1), false, [this, op] (float v) { if (auto* x = op()) { x->c0 = juce::roundToInt (v); if (x->c1 <= x->c0) x->c1 = x->c0 + 1; ctx.changed (false); } }, {}, [] (float v) { return "slice " + juce::String (juce::roundToInt (v) + 1); });
+        f.knob ("TO", 1, 32, (float) std::max (o.c0, o.c1), false, [this, op] (float v) { if (auto* x = op()) { x->c1 = juce::roundToInt (v); if (x->c1 <= x->c0) x->c0 = x->c1 - 1; ctx.changed (false); } }, {}, [] (float v) { return "slice " + juce::String (juce::roundToInt (v)); });
         f.section ("SETTINGS");
         fxKnobs (f, get, {}, nullptr);
         f.button ("DELETE BOX", [this, i] { auto& os = ctx.P().matrix.sample.ops; if (i < (int) os.size()) { os.erase (os.begin() + i); ctx.select ({ Sel::None, 0 }); ctx.changed(); } });
@@ -417,7 +455,7 @@ private:
         auto& P = ctx.P().matrix.seq;
         auto& m = P.marks[(size_t) i];
         const char* types[] = { "DOT", "DASH", "WARBLE", "TICK", "SPRAY" };
-        crumb = "SEQUENCER > MARK " + juce::String (i + 1);
+        crumb = "DRAW > MARK " + juce::String (i + 1);
         lcd.set ("MARK " + juce::String (i + 1) + " | " + types[(int) m.type], noteName (nb::rowNote (P, m.row)) + " | STEP " + juce::String (m.start + 1, 1) + " | " + juce::String (m.length, 1) + " STEPS");
         if (ctx.tab == 2) { routes (f, "seq/"); return; }
         auto mk = [this, i] () -> nb::Mark* { auto& ms = ctx.P().matrix.seq.marks; return i < (int) ms.size() ? &ms[(size_t) i] : nullptr; };
@@ -443,15 +481,15 @@ private:
         if (v == 0)
         {
             auto& S = M.seq;
-            crumb = "MATRIXXXER > SEQUENCER";
-            lcd.set ("SEQUENCER | " + juce::String (S.name).toUpperCase(), juce::String (S.marks.size()) + " MARKS | " + juce::String (nb::scaleNames()[(size_t) S.scale]).toUpperCase() + " | " + juce::String (S.bars) + " BARS");
+            crumb = "MATRIXXXER > DRAW";
+            lcd.set ("DRAW | " + juce::String (S.name).toUpperCase(), juce::String (S.marks.size()) + " MARKS | " + juce::String (nb::scaleNames()[(size_t) S.scale]).toUpperCase() + " | " + juce::String (S.bars) + " BARS");
             if (ctx.tab == 2) { routes (f, "seq/"); return; }
             f.combo ("ENGINE", { "ADD | additive partials", "FM | two operators", "FFT | harmonic bands of noise", "SMP | grains of a pad" }, (int) S.engine,
                      [this] (int i) { ctx.P().matrix.seq.engine = (nb::MarkEngine) i; ctx.changed(); });
             juce::StringArray sc; for (const auto& s : nb::scaleNames()) sc.add (s);
             f.combo ("SCALE", sc, S.scale, [this] (int i) { ctx.P().matrix.seq.scale = i; ctx.changed(); });
             f.combo ("ROOT", { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, S.root, [this] (int i) { ctx.P().matrix.seq.root = i; ctx.changed(); });
-            f.combo ("GRID", { "1/16 (swung)", "1/16 triplets", "1/8 triplets", "1/32" }, S.grid, [this] (int i) { ctx.P().matrix.seq.grid = i; ctx.changed(); });
+            f.combo ("DIVISION", { "1/16 (swung)", "1/16 triplets", "1/8 triplets", "1/32" }, S.grid, [this] (int i) { ctx.P().matrix.seq.grid = i; ctx.changed(); });
             auto ch = [this] { ctx.changed (false); };
             f.knob ("BARS", 1, 32, (float) S.bars, false, [this, ch] (float x) { ctx.P().matrix.seq.bars = juce::roundToInt (x); ch(); }, {}, [] (float x) { return juce::String (juce::roundToInt (x)); });
             f.knob ("OCTAVE", 1, 6, (float) S.baseOctave, false, [this, ch] (float x) { ctx.P().matrix.seq.baseOctave = juce::roundToInt (x); ch(); }, {}, [] (float x) { return "C" + juce::String (juce::roundToInt (x) - 2); });
@@ -462,7 +500,7 @@ private:
             {
                 f.knob ("GRAIN", 5, 200, S.grainMs, true, [this, ch] (float x) { ctx.P().matrix.seq.grainMs = x; ch(); }, {}, [] (float x) { return juce::String (juce::roundToInt (x)) + " ms"; });
                 f.knob ("SPRAY", 0, 1, S.spray, false, [this, ch] (float x) { ctx.P().matrix.seq.spray = x; ch(); });
-                juce::StringArray padsList; for (int p = 0; p < 16; ++p) padsList.add ("Pad " + juce::String (p + 1) + " | " + ctx.proc.padName (p));
+                juce::StringArray padsList; for (int p = 0; p < 16; ++p) padsList.add ("Lane " + juce::String (p + 1) + " | " + ctx.proc.padName (p));
                 f.combo ("GRAINS OF", padsList, std::max (0, S.samplePad), [this] (int i) { ctx.P().matrix.seq.samplePad = i; ctx.changed(); });
             }
             f.button (S.mirror ? "MIRROR MAIN RHYTHM: ON" : "MIRROR MAIN RHYTHM", [this] { auto& s2 = ctx.P().matrix.seq; s2.mirror = ! s2.mirror; ctx.changed(); }, true, S.mirror);
@@ -472,21 +510,21 @@ private:
         else if (v == 1)
         {
             crumb = "MATRIXXXER > ONE SHOT";
-            lcd.set ("ONE SHOT | " + juce::String (M.oneShot.name).toUpperCase(), juce::String (M.oneShot.cells.size()) + " CELLS");
+            lcd.set ("ONE SHOT | " + juce::String (M.oneShot.name).toUpperCase(), juce::String (M.oneShot.cells.size()) + " NODES SENT");
             if (ctx.tab == 2) { routes (f, "cell/"); return; }
             f.button (M.oneShotOn ? "VIEW ON" : "VIEW OFF", [this] { ctx.P().matrix.oneShotOn = ! ctx.P().matrix.oneShotOn; ctx.changed(); }, true, M.oneShotOn);
-            f.button ("CLEAR CELLS", [this] { ctx.P().matrix.oneShot.cells.clear(); ctx.changed(); });
-            f.text ("Pick an effect in the brush, then click a hit to drop a cell on it. Drag a cell's right edge for its span, drag it up or down for its height (the main control). Click a cell to edit it here.", 62);
+            f.button ("ALL BACK TO INIT", [this] { ctx.P().matrix.oneShot.cells.clear(); ctx.changed(); });
+            f.text ("Pick an effect in the brush, then click a node to send it there (or right-click any node: Send node to). Drag its right edge for its reach, drag it up or down for its height (the main control). Click it to edit it here.", 76);
         }
         else
         {
             auto& S = M.sample;
             crumb = "MATRIXXXER > SAMPLE";
-            lcd.set ("SAMPLE | " + juce::String (S.name).toUpperCase(), juce::String (S.ops.size()) + " BOXES | PLAYS ON PAD " + juce::String (S.pad + 1));
+            lcd.set ("SAMPLE | " + juce::String (S.name).toUpperCase(), juce::String (S.ops.size()) + " BOXES | PLAYS ON LANE " + juce::String (S.pad + 1));
             if (ctx.tab == 2) { routes (f, "sample/"); return; }
-            juce::StringArray padsList; for (int p = 0; p < 16; ++p) padsList.add ("Pad " + juce::String (p + 1) + " | " + ctx.proc.padName (p));
+            juce::StringArray padsList; for (int p = 0; p < 16; ++p) padsList.add ("Lane " + juce::String (p + 1) + " | " + ctx.proc.padName (p));
             f.combo ("PLAYS ON", padsList, S.pad, [this] (int i) { ctx.P().matrix.sample.pad = i; ctx.changed(); });
-            f.text (S.file.empty() ? juce::String ("The sample is that pad's own hit. Load a file to mangle any sound instead.") : "The sample: " + juce::File (S.file).getFileName(), 34);
+            f.text (S.file.empty() ? juce::String ("The sample is that lane's own hit. Load a file to mangle any sound instead.") : "The sample: " + juce::File (S.file).getFileName(), 34);
             f.button ("LOAD FILE", [this]
             {
                 chooser = std::make_unique<juce::FileChooser> ("A sample to mangle", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
@@ -495,29 +533,76 @@ private:
                     if (fc.getResult().existsAsFile() && ctx.proc.loadFile (fc.getResult())) { ctx.P().matrix.sample.file = fc.getResult().getFullPathName().toStdString(); ctx.changed(); }
                 });
             });
-            f.button ("USE THE PAD'S HIT", [this] { ctx.P().matrix.sample.file.clear(); ctx.changed(); });
+            f.button ("USE THE LANE'S HIT", [this] { ctx.P().matrix.sample.file.clear(); ctx.changed(); });
             f.button (M.sampleOn ? "VIEW ON" : "VIEW OFF", [this] { ctx.P().matrix.sampleOn = ! ctx.P().matrix.sampleOn; ctx.changed(); }, true, M.sampleOn);
             f.button ("CLEAR BOXES", [this] { ctx.P().matrix.sample.ops.clear(); ctx.changed(); });
             f.text ("Drag on the spectrogram to draw a box: its time span and band are where the brush's effect acts. A taller box (a wider band) pushes the effect further.", 62);
         }
     }
 
-    // ---------------------------------------------------------------- the grid
+    // ---------------------------------------------------------------- Layermax
     void buildGrid (FlowPanel& f)
     {
         auto& G = ctx.P().grid;
         auto& pat = G.patterns[(size_t) G.current];
-        crumb = "GRID > PATTERN " + juce::String (G.current + 1);
-        lcd.set ("GRID | PATTERN " + juce::String (G.current + 1), G.useKit || G.files.empty() ? juce::String ("ROWS PLAY THE KIT'S 16 PADS") : juce::String (G.files.size()) + " SAMPLES | " + juce::File (G.folder).getFileName().toUpperCase());
+        crumb = "LAYERMAX > PATTERN " + juce::String (G.current + 1);
+        lcd.set ("LAYERMAX | PATTERN " + juce::String (G.current + 1), G.useKit || G.files.empty() ? juce::String ("ROWS PLAY THE 16 LANES' SOUNDS") : juce::String (G.files.size()) + " SAMPLES | " + juce::File (G.folder).getFileName().toUpperCase());
         if (ctx.tab == 2) { routes (f, "grid/"); return; }
         auto ch = [this] { ctx.changed (false); };
+        if (ctx.tab == 1)
+        {   // a row that follows a lane of the sequencer
+            const int row = juce::jlimit (0, nb::GridPattern::kSize - 1, ctx.gridRow);
+            auto fol = [this, row] () -> nb::GridFollow& { return ctx.P().grid.follow[(size_t) row]; };
+            const auto& fw = fol();
+            f.section ("ROW " + juce::String (row + 1) + " FOLLOWS THE SEQUENCER");
+            f.knob ("ROW", 1, 64, (float) (row + 1), false, [this] (float v) { const int r = juce::roundToInt (v) - 1; if (r != ctx.gridRow) { ctx.gridRow = r; if (ctx.refreshAll) ctx.refreshAll(); } }, {}, [] (float v) { return juce::String (juce::roundToInt (v)); });
+            f.button (fw.on ? "FOLLOWING" : "FOLLOW A LANE", [this, fol] { fol().on = ! fol().on; ctx.changed(); }, true, fw.on);
+            juce::StringArray lanes; for (int p = 0; p < 16; ++p) lanes.add ("Lane " + juce::String (p + 1) + " | " + ctx.proc.padName (p));
+            f.combo ("LANE", lanes, fw.lane, [this, fol] (int i) { fol().lane = i; ctx.changed (false); });
+            f.combo ("PLAYS", { "With every hit (layer)", "In the gaps the lane leaves (fill)", "With every Nth hit" }, fw.mode, [this, fol] (int i) { fol().mode = i; ctx.changed(); });
+            if (fw.mode == 2) f.knob ("EVERY", 2, 16, (float) fw.nth, false, [fol, ch] (float v) { fol().nth = juce::roundToInt (v); ch(); }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + ". hit"; });
+            f.knob ("OFFSET", -120, 120, fw.offsetMs, false, [fol, ch] (float v) { fol().offsetMs = std::fabs (v) < 1.0f ? 0.0f : v; ch(); }, {}, [] (float v) { return std::fabs (v) < 1.0f ? juce::String ("on it") : juce::String (juce::roundToInt (v)) + " ms"; });
+            f.knob ("LEVEL", 0, 1.5f, fw.level, false, [fol, ch] (float v) { fol().level = v; ch(); });
+            f.knob ("PAN", -1, 1, fw.pan, false, [fol, ch] (float v) { fol().pan = v; ch(); });
+            f.knob ("PITCH", -24, 24, fw.semis, false, [fol, ch] (float v) { fol().semis = std::round (v); ch(); }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " st"; });
+            f.button ("AS HARD AS THE HIT", [this, fol] { fol().velocity = ! fol().velocity; ctx.changed(); }, true, fw.velocity);
+            f.button ("UNLINK AND KEEP", [this, row] { bakeFollow (row); }).setTooltip ("Write what this row plays into the Layermax pattern (16ths, the scene shown) and stop following");
+            int n = 0; juce::String who;
+            for (int r = 0; r < (int) G.follow.size(); ++r) if (G.follow[(size_t) r].on) { ++n; if (who.length() < 60) who << (who.isEmpty() ? "" : ", ") << "row " << (r + 1) << " > lane " << (G.follow[(size_t) r].lane + 1); }
+            f.text (n == 0 ? juce::String ("No row follows a lane yet. A following row plays its sound with (or between) that lane's hits, in every scene, whether or not Layermax's own pattern is playing, even when the lane is muted.")
+                           : "Following now: " + who + ".", 62);
+            return;
+        }
         f.combo ("RATE", { "1/8 (swung)", "1/16 (swung)", "1/16 triplets", "1/32" }, pat.rate, [this] (int i) { auto& g = ctx.P().grid; g.patterns[(size_t) g.current].rate = i; ctx.changed(); });
         f.knob ("LENGTH", 1, 64, (float) pat.length, false, [this, ch] (float v) { auto& g = ctx.P().grid; g.patterns[(size_t) g.current].length = juce::roundToInt (v); ch(); }, {}, [] (float v) { return juce::String (juce::roundToInt (v)) + " cols"; });
         f.knob ("SWING", 0.49f, 0.75f, pat.swing < 0 ? 0.49f : pat.swing, false, [this, ch] (float v) { auto& g = ctx.P().grid; g.patterns[(size_t) g.current].swing = v < 0.5f ? -1.0f : v; ch(); }, {},
                 [] (float v) { return v < 0.5f ? juce::String ("main") : juce::String (juce::roundToInt (v * 100)) + " %"; });
         f.knob ("LEVEL", 0, 1.5f, G.level, false, [this, ch] (float v) { ctx.P().grid.level = v; ch(); }, "grid/level");
-        auto& pm = f.knob ("PITCH MOD", -1, 1, 0, false, nullptr, "grid/pitch"); pm.setTooltip ("A mod destination: drop a source here to bend the grid");
-        f.text ("Paint cells: red is volume, green is pan, blue is pitch. Tag cells FS or BD and they also feed the Friction or Bounce slot listening to their row.", 48);
+        auto& pm = f.knob ("PITCH MOD", -1, 1, 0, false, nullptr, "grid/pitch"); pm.setTooltip ("A mod destination: drop a source here to bend Layermax");
+        f.text ("Paint boxes: red is volume, green is pan, blue is pitch. Tag boxes FS or BD and they also feed the Friction or Bounce window listening to their row. The FX tab makes a row follow a lane of the sequencer.", 62);
+    }
+
+    // what a following row plays, written into the pattern (so it can be edited box by box)
+    void bakeFollow (int row)
+    {
+        auto& G = ctx.P().grid;
+        auto& fw = G.follow[(size_t) row];
+        auto& pat = G.patterns[(size_t) G.current];
+        const int len = std::min (nb::GridPattern::kSize, ctx.proc.pattern.length());
+        pat.rate = 1; pat.length = std::max (pat.length, len);
+        int ordinal = 0;
+        for (int s = 0; s < len; ++s)
+        {
+            const auto st = ctx.proc.pattern.get (fw.lane, s);
+            bool on = false; float vel = 0.8f;
+            if (fw.mode == 1) on = st.vel == 0;
+            else if (st.vel > 0) { on = fw.mode == 0 || ordinal % std::max (1, fw.nth) == 0; ++ordinal; vel = fw.velocity ? st.vel / 127.0f : 0.8f; }
+            if (! on) continue;
+            const int red = juce::jlimit (1, 255, juce::roundToInt (255.0f * std::pow (juce::jlimit (0.0f, 1.0f, fw.level * vel / 0.8f), 1.0f / 1.5f)));
+            pat.cells[(size_t) (row * nb::GridPattern::kSize + s)] = nb::GridPattern::pack (red, juce::jlimit (0, 255, 128 + juce::roundToInt (fw.pan * 127.0f)), juce::jlimit (0, 255, 128 + juce::roundToInt (fw.semis / 12.0f * 128.0f)), nb::GridPattern::kOn);
+        }
+        fw.on = false; G.play = true;
+        ctx.changed();
     }
 
     // ---------------------------------------------------------------- a key-map zone
@@ -533,19 +618,19 @@ private:
         {
             juce::StringArray items { "None" }; items.addArray (fxMenuNames());
             f.combo ("EFFECT", items, fxIndex (z.fx) + 1, [this, zn] (int s) { if (auto* x = zn()) { x->fx = s <= 0 ? nb::CellFx() : fxFromIndex (s - 1); ctx.changed(); } });
-            f.text ("A zone's effect is rendered on its sound, so only the hits that land in this zone get it (hard hits freeze, soft ones don't).", 48);
+            f.text ("A zone's effect is only on the hits that land in this zone (hard hits freeze, soft ones don't). It runs live.", 40);
             fxKnobs (f, [zn] () -> nb::CellFx* { auto* x = zn(); return x ? &x->fx : nullptr; }, {}, nullptr);
             return;
         }
-        f.combo ("PLAYS", { "A pad", "A sample file", "A whole kit (across the keys)", "A One Shot cell", "A grid pattern (while held)" }, (int) z.src,
+        f.combo ("PLAYS", { "A lane", "A sample file", "A whole kit (across the keys)", "A node and its effect", "A Layermax pattern (while held)" }, (int) z.src,
                  [this, zn] (int s) { if (auto* x = zn()) { x->src = (nb::ZoneSource) s; x->index = 0; ctx.changed(); } });
         juce::StringArray idx;
         switch (z.src)
         {
-            case nb::ZoneSource::Pad: for (int p = 0; p < 16; ++p) idx.add ("Pad " + juce::String (p + 1) + " | " + ctx.proc.padName (p)); break;
+            case nb::ZoneSource::Pad: for (int p = 0; p < 16; ++p) idx.add ("Lane " + juce::String (p + 1) + " | " + ctx.proc.padName (p)); break;
             case nb::ZoneSource::Kit: for (const auto& k : nb::kits()) idx.add (k.name); break;
             case nb::ZoneSource::OneShot: for (int c = 0; c < (int) ctx.P().matrix.oneShot.cells.size(); ++c) idx.add (sourceLabel (ctx.P(), { nb::SourceKind::Cell, c })); break;
-            case nb::ZoneSource::GridPattern: for (int g = 0; g < 16; ++g) idx.add ("Grid pattern " + juce::String (g + 1)); break;
+            case nb::ZoneSource::GridPattern: for (int g = 0; g < 16; ++g) idx.add ("Layermax pattern " + juce::String (g + 1)); break;
             default: break;
         }
         if (! idx.isEmpty()) f.combo ("WHICH", idx, z.index, [this, zn] (int s) { if (auto* x = zn()) { x->index = s; ctx.changed(); } });

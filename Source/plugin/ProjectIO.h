@@ -4,7 +4,7 @@
 
 #include <juce_core/juce_core.h>
 #include "../engine/Project.h"
-#include "../engine/Sequencer.h"
+#include "../shared/PatternXml.h"
 
 namespace io
 {
@@ -136,6 +136,7 @@ inline void writeOneShot (juce::XmlElement& e, const nb::OneShotPreset& p)
     {
         auto* ce = e.createNewChildElement ("CELL");
         ce->setAttribute ("pad", c.pad); ce->setAttribute ("step", c.step); ce->setAttribute ("span", c.span); ce->setAttribute ("height", (double) c.height);
+        if (c.scene != 0) ce->setAttribute ("scene", c.scene);
         writeFx (*ce, "FX", c.fx);
     }
 }
@@ -146,10 +147,11 @@ inline void readOneShot (const juce::XmlElement& e, nb::OneShotPreset& p)
     for (auto* ce : e.getChildWithTagNameIterator ("CELL"))
     {
         nb::OneShotCell c;
-        c.pad = juce::jlimit (0, 15, ce->getIntAttribute ("pad")); c.step = juce::jlimit (0, 63, ce->getIntAttribute ("step"));
+        c.pad = juce::jlimit (0, 15, ce->getIntAttribute ("pad")); c.step = juce::jlimit (0, nb::Pattern::kMaxSteps - 1, ce->getIntAttribute ("step"));
+        c.scene = juce::jlimit (0, nb::kNumScenes - 1, ce->getIntAttribute ("scene", 0));
         c.span = juce::jlimit (1, 64, ce->getIntAttribute ("span", 2)); c.height = (float) juce::jlimit (0.0, 1.0, ce->getDoubleAttribute ("height", 0.5));
         c.fx = readFx (ce->getChildByName ("FX"));
-        if (p.cells.size() < 256) p.cells.push_back (c);
+        if (p.cells.size() < 2048) p.cells.push_back (c);
     }
 }
 inline void writeSample (juce::XmlElement& e, const nb::SamplePreset& p)
@@ -227,12 +229,21 @@ inline void readGridPattern (const juce::XmlElement& e, nb::GridPattern& g)
     if (mb.fromBase64Encoding (e.getStringAttribute ("cells")) && mb.getSize() == g.cells.size() * sizeof (uint32_t))
         std::memcpy (g.cells.data(), mb.getData(), mb.getSize());
 }
-inline void writeGrid (juce::XmlElement& e, const nb::GridState& g)
+inline void writeGrid (juce::XmlElement& e, const nb::GridState& g, bool withPatterns = true)
 {
     e.setAttribute ("folder", juce::String (g.folder)); e.setAttribute ("current", g.current); e.setAttribute ("play", g.play ? 1 : 0);
     e.setAttribute ("level", (double) g.level); e.setAttribute ("useKit", g.useKit ? 1 : 0);
     for (const auto& f : g.files) e.createNewChildElement ("FILE")->setAttribute ("path", juce::String (f));
-    for (const auto& p : g.patterns) writeGridPattern (*e.createNewChildElement ("PATTERN"), p);
+    if (withPatterns) for (const auto& p : g.patterns) writeGridPattern (*e.createNewChildElement ("PATTERN"), p);
+    for (int row = 0; row < (int) g.follow.size(); ++row)
+    {
+        const auto& f = g.follow[(size_t) row];
+        if (! f.on) continue;
+        auto* fe = e.createNewChildElement ("FOLLOW");
+        fe->setAttribute ("row", row); fe->setAttribute ("lane", f.lane); fe->setAttribute ("mode", f.mode); fe->setAttribute ("nth", f.nth);
+        fe->setAttribute ("offsetMs", (double) f.offsetMs); fe->setAttribute ("velocity", f.velocity ? 1 : 0); fe->setAttribute ("level", (double) f.level);
+        fe->setAttribute ("pan", (double) f.pan); fe->setAttribute ("semis", (double) f.semis);
+    }
 }
 inline void readGrid (const juce::XmlElement& e, nb::GridState& g)
 {
@@ -242,6 +253,35 @@ inline void readGrid (const juce::XmlElement& e, nb::GridState& g)
     for (auto* fe : e.getChildWithTagNameIterator ("FILE")) if (g.files.size() < 64) g.files.push_back (fe->getStringAttribute ("path").toStdString());
     int i = 0;
     for (auto* pe : e.getChildWithTagNameIterator ("PATTERN")) if (i < 16) readGridPattern (*pe, g.patterns[(size_t) i++]);
+    for (auto* fe : e.getChildWithTagNameIterator ("FOLLOW"))
+    {
+        const int row = fe->getIntAttribute ("row", -1);
+        if (row < 0 || row >= (int) g.follow.size()) continue;
+        auto& f = g.follow[(size_t) row];
+        f.on = true; f.lane = juce::jlimit (0, nb::kNumPads - 1, fe->getIntAttribute ("lane")); f.mode = juce::jlimit (0, 2, fe->getIntAttribute ("mode"));
+        f.nth = juce::jlimit (1, 16, fe->getIntAttribute ("nth", 2)); f.offsetMs = (float) juce::jlimit (-200.0, 200.0, fe->getDoubleAttribute ("offsetMs"));
+        f.velocity = fe->getIntAttribute ("velocity", 1) != 0; f.level = (float) juce::jlimit (0.0, 2.0, fe->getDoubleAttribute ("level", 0.8));
+        f.pan = (float) juce::jlimit (-1.0, 1.0, fe->getDoubleAttribute ("pan")); f.semis = (float) juce::jlimit (-24.0, 24.0, fe->getDoubleAttribute ("semis"));
+    }
+}
+
+inline void writeMidi (juce::XmlElement& e, const nb::MidiSettings& m)
+{
+    e.setAttribute ("mode", m.mode); e.setAttribute ("lengthSteps", (double) m.lengthSteps); e.setAttribute ("rolls", m.rolls ? 1 : 0); e.setAttribute ("transpose", m.transpose ? 1 : 0);
+    juce::String n, c; for (int i = 0; i < nb::kNumPads; ++i) { n << (int) m.note[(size_t) i] << " "; c << (int) m.channel[(size_t) i] << " "; }
+    e.setAttribute ("notes", n.trim()); e.setAttribute ("channels", c.trim());
+}
+inline void readMidi (const juce::XmlElement& e, nb::MidiSettings& m)
+{
+    m = {};
+    m.mode = juce::jlimit (0, 2, e.getIntAttribute ("mode")); m.lengthSteps = (float) juce::jlimit (0.05, 16.0, e.getDoubleAttribute ("lengthSteps", 0.5));
+    m.rolls = e.getIntAttribute ("rolls", 1) != 0; m.transpose = e.getIntAttribute ("transpose") != 0;
+    const auto n = juce::StringArray::fromTokens (e.getStringAttribute ("notes"), " ", ""), c = juce::StringArray::fromTokens (e.getStringAttribute ("channels"), " ", "");
+    for (int i = 0; i < nb::kNumPads; ++i)
+    {
+        if (i < n.size()) m.note[(size_t) i] = (uint8_t) juce::jlimit (0, 127, n[i].getIntValue());
+        if (i < c.size()) m.channel[(size_t) i] = (uint8_t) juce::jlimit (1, 16, c[i].getIntValue());
+    }
 }
 inline void writeMod (juce::XmlElement& e, const nb::ModState& m0)
 {
@@ -289,18 +329,18 @@ inline void readMod (const juce::XmlElement& e, nb::ModState& m)
 }
 
 // ---------------------------------------------------------------- the whole project
-inline std::unique_ptr<juce::XmlElement> toXml (const nb::Project& P)
+inline void writePadFx (juce::XmlElement& root, const nb::Project& P)
 {
-    auto root = std::make_unique<juce::XmlElement> ("PROJECT");
-    root->setAttribute ("version", 2);
-    root->setAttribute ("glue", (double) P.glue);
-    auto* pads = root->createNewChildElement ("PADFX");
+    auto* pads = root.createNewChildElement ("PADFX");
     for (int p = 0; p < nb::kNumPads; ++p)
     {
         auto* pe = pads->createNewChildElement ("PAD"); pe->setAttribute ("index", p);
         for (int i = 0; i < nb::kNumInserts; ++i) writeFx (*pe, "INSERT", P.padFx[(size_t) p].inserts[(size_t) i]);
     }
-    auto* win = root->createNewChildElement ("WINDOWS");
+}
+inline void writeWindows (juce::XmlElement& root, const nb::Project& P)
+{
+    auto* win = root.createNewChildElement ("WINDOWS");
     for (int s = 0; s < nb::kNumSlots; ++s)
     {
         const auto& f = P.fs[(size_t) s];
@@ -314,23 +354,38 @@ inline std::unique_ptr<juce::XmlElement> toXml (const nb::Project& P)
         be->setAttribute ("level", (double) b.level); be->setAttribute ("replace", b.replace ? 1 : 0);
         writeFx (*be, "FX", nb::CellFx::bouncing (b.p));
     }
-    writeKeyMap (*root->createNewChildElement ("KEYMAP"), P.keymap);
-    auto* mx = root->createNewChildElement ("MATRIX");
+}
+inline void writeMatrix (juce::XmlElement& root, const nb::Project& P)
+{
+    auto* mx = root.createNewChildElement ("MATRIX");
     mx->setAttribute ("view", P.matrix.view); mx->setAttribute ("seqOn", P.matrix.seqOn ? 1 : 0); mx->setAttribute ("oneShotOn", P.matrix.oneShotOn ? 1 : 0);
     mx->setAttribute ("sampleOn", P.matrix.sampleOn ? 1 : 0); mx->setAttribute ("seqIndex", P.matrix.seqIndex); mx->setAttribute ("oneShotIndex", P.matrix.oneShotIndex);
     mx->setAttribute ("sampleIndex", P.matrix.sampleIndex);
     writeSeq (*mx->createNewChildElement ("SEQ"), P.matrix.seq);
     writeOneShot (*mx->createNewChildElement ("ONESHOT"), P.matrix.oneShot);
     writeSample (*mx->createNewChildElement ("SAMPLE"), P.matrix.sample);
+}
+
+inline std::unique_ptr<juce::XmlElement> toXml (const nb::Project& P)
+{
+    auto root = std::make_unique<juce::XmlElement> ("PROJECT");
+    root->setAttribute ("version", 3);
+    root->setAttribute ("glue", (double) P.glue);
+    writeMidi (*root->createNewChildElement ("MIDI"), P.midi);
+    writeSong (*root->createNewChildElement ("SONG"), P.song);
+    writePadFx (*root, P);
+    writeWindows (*root, P);
+    writeKeyMap (*root->createNewChildElement ("KEYMAP"), P.keymap);
+    writeMatrix (*root, P);
     writeGrid (*root->createNewChildElement ("GRID"), P.grid);
     writeMod (*root->createNewChildElement ("MOD"), P.mod);
     return root;
 }
 
-inline void fromXml (const juce::XmlElement& root, nb::Project& P)
+// only the sections that are in root (undo restores one section at a time)
+inline void readInto (const juce::XmlElement& root, nb::Project& P)
 {
-    P = nb::Project();
-    P.glue = (float) juce::jlimit (0.0, 1.0, root.getDoubleAttribute ("glue", 0.4));
+    if (root.hasAttribute ("glue")) P.glue = (float) juce::jlimit (0.0, 1.0, root.getDoubleAttribute ("glue", 0.4));
     if (auto* pads = root.getChildByName ("PADFX"))
         for (auto* pe : pads->getChildWithTagNameIterator ("PAD"))
         {
@@ -370,39 +425,13 @@ inline void fromXml (const juce::XmlElement& root, nb::Project& P)
     }
     if (auto* g = root.getChildByName ("GRID")) readGrid (*g, P.grid);
     if (auto* m = root.getChildByName ("MOD")) readMod (*m, P.mod);
+    if (auto* m = root.getChildByName ("MIDI")) readMidi (*m, P.midi);
+    if (auto* sg = root.getChildByName ("SONG")) readSong (*sg, P.song);
+}
+inline void fromXml (const juce::XmlElement& root, nb::Project& P)
+{
+    P = nb::Project();
+    readInto (root, P);
 }
 
-// the main pattern as text (one hex word per step)
-inline void writePattern (juce::XmlElement& e, const nb::Pattern& p)
-{
-    e.setAttribute ("length", p.length);
-    for (int t = 0; t < nb::Pattern::kTracks; ++t)
-    {
-        juce::String row;
-        for (int s = 0; s < nb::Pattern::kMaxSteps; ++s)
-        {
-            const auto& st = p.steps[(size_t) t][(size_t) s];
-            const uint32_t v = (uint32_t) st.vel | ((uint32_t) st.roll << 8) | ((uint32_t) (uint8_t) st.nudge << 16);
-            row << juce::String::toHexString ((int) v) << (s + 1 < nb::Pattern::kMaxSteps ? " " : "");
-        }
-        e.setAttribute ("t" + juce::String (t), row);
-    }
-}
-inline void readPattern (const juce::XmlElement& e, nb::Pattern& p)
-{
-    p = {};
-    p.length = juce::jlimit (1, nb::Pattern::kMaxSteps, e.getIntAttribute ("length", 32));
-    for (int t = 0; t < nb::Pattern::kTracks; ++t)
-    {
-        auto cells = juce::StringArray::fromTokens (e.getStringAttribute ("t" + juce::String (t)), " ", "");
-        for (int s = 0; s < nb::Pattern::kMaxSteps && s < cells.size(); ++s)
-        {
-            const uint32_t v = (uint32_t) cells[s].getHexValue32();
-            auto& st = p.steps[(size_t) t][(size_t) s];
-            st.vel = (uint8_t) juce::jmin (127u, v & 0xffu); st.roll = (uint8_t) ((v >> 8) & 0xff); st.nudge = (int8_t) (uint8_t) ((v >> 16) & 0xff);
-            if (st.roll != 0 && st.roll != 2 && st.roll != 3 && st.roll != 4 && st.roll != 5) st.roll = 0;
-            st.nudge = (int8_t) juce::jlimit (-50, 50, (int) st.nudge);
-        }
-    }
-}
 } // namespace io

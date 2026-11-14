@@ -1,18 +1,63 @@
-# NeoBeat 2.0
+# NeoBeat 3.0
 
 A new jack swing drum machine built on the merged Liquid Swing / NeoSpectral /
 MaterialLab research: physically modelled rubber, metal and liquid hits, city
-sounds rebuilt as live models, a hollow chain on every pad, and now a full
-workstation around them: the Matrixxxer, a drawing grid, a key map with splits
-and layers, and modulation you drag onto any knob.
+sounds rebuilt as live models, a hollow chain on every lane, and a workstation
+around them: four scenes of up to 32 bars, the Matrixxxer, Layermax, a key map
+with splits and layers, and modulation you drag onto any knob.
 
 Private, archival use.
+
+## New in 3.0
+
+* **Effects are live.** The 24 library effects and Bounce Delay run as you play: turn a knob, swap an
+  effect, move a node, and the next block hears it, also on a tail that is still ringing. Nothing waits
+  for a render, and nothing needs the plugin reopened. Hits the sequencer plays through spectral effects
+  land exactly on the step (NeoBeat sees them coming and starts the effect a frame early).
+  **Friction Stretch** is the one effect still prepared ahead (it needs the whole hit before it can
+  start); a notice says so the first time you use it, and the header shows PREPARING while it works.
+  The one case a hit can sound late (a hit played by hand through a spectral effect before that lane's
+  sound is prepared, or through several spectral effects in a row) also gets a notice.
+  Limits: 24 effected hits at once, 4 per lane, 14 spectral effects sounding at once; beyond that the
+  oldest tail fades.
+* **Scenes.** Four scenes (A to D), each up to 32 bars. The grid shows 1, 2 or 4 bars at a time, so a
+  node is never too small to hit; the strip above it shows every bar and takes you there. While it
+  plays, a new scene starts on the next bar. **CHAIN** plays scenes one after another, each a number of
+  times (click + to add the scene shown; click a link to change its scene, wheel for repeats,
+  right-click for more).
+* **Undo and redo in every room** (the two buttons in the header; Ctrl+Z and Ctrl+Shift+Z in the
+  standalone). Each room keeps its own history of the last 100 steps.
+* **One set of words.** A *room* is one of the four tabs. A *lane* is one of the 16 rows of the
+  sequencer and its sound. A *node* is a box in a sequencer that holds a hit. You *send* a node, a lane
+  or a row to an effect; until then a node is *Init* (no effect). Right-click any node: **Send node
+  to**, Copy, Paste, Clear; its settings open in the inspector on the right.
+* **KIT / FILE** (header): load and save **.NJQ** files (a kit and its sequence in one file, samples
+  included, lossless), your sequences from the preset folder, a folder of samples into the lanes,
+  export, MIDI out. After saving or loading a .NJQ, NeoBeat asks whether to make it a **default
+  sequence**: *Add to my sequences* (it is listed in every project) or *Add and start with it* (new
+  NeoBeats open with it).
+* **Import a folder of samples.** NeoBeat listens to every file, works out which lane each could play
+  and puts them there in place of the stock sounds, each brought to the stock sounds' loudness.
+  *Import all* places every sound (the rest become Layermax's rows); *Pick the most musical* only takes
+  clean single hits, no two alike. Drop a file on another pad, or rate a lane's sample in the
+  inspector, and it learns: the learner is a small neural network kept on your computer
+  (`%APPDATA%\Marbelite\Shared\learner.txt`), shared with Batchcut.
+* **Export** the pattern as WAV (what you hear, effects and tails included; optionally one file per
+  lane) and as a MIDI file, into a folder you choose; drag the files straight into your host.
+* **MIDI out: NeoBeat as a sequencer.** A note and channel per lane (a Drum Rack from C1 by default),
+  note length, rolls as notes, and *MIDI only* (the lanes stay silent). The panel has the three-step
+  patch for Ableton Live and a TEST button per lane.
+* **Layermax** (the grid, renamed) has its own tab, and any row can **follow a lane** of the
+  sequencer: with every hit (layer), in the gaps (fill) or every Nth hit, early or late by milliseconds.
+  *Unlink and keep* writes it into the pattern.
+* **Sound:** WIDTH on every lane (mono to wide; the widening disappears in mono), LEVEL up to +24 dB,
+  and MATCH LEVEL for samples.
 
 ## Install (Windows)
 
 1. Unzip the `NeoBeat-Windows` download.
 2. Copy the `NeoBeat.vst3` folder to `C:\Program Files\Common Files\VST3\`
-   (replace build 1 if it is there; your saved Live sets still open).
+   (replace the older one; Live sets saved with 2.0 still open, their pattern becomes scene A).
 3. In Ableton: Options → Preferences → Plug-ins → turn on **Use VST3 Plug-In System Folders** and **Rescan**.
    NeoBeat appears under Plug-ins → Marbelite.
 4. `NeoBeat.exe` is the standalone version (press **PLAY** to run the sequencer at the standalone tempo).
@@ -24,8 +69,9 @@ samples a preset uses are copied into `Presets\Samples` so the preset still open
 
 Everything sits in one window, scaled to whatever size you drag it to:
 
-* **Header**: the four rooms (KIT, MATRIXXXER, GRID, KEY MAP), the display, the Friction Stretch and
-  Bounce Delay windows, the render status and the master level.
+* **Header**: the four rooms (SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP), undo and redo for the room
+  you are in, the display, KIT / FILE, the Friction Stretch and Bounce Delay windows, the status and
+  the master level.
 * **Tree** (left): every pad, the Matrixxxer views, the grid, the key map layers and the FS / BD slots.
   Click a line to go straight there.
 * **Room** (middle): the thing you are working on.
@@ -37,9 +83,9 @@ Everything sits in one window, scaled to whatever size you drag it to:
 
 ## The rooms
 
-### KIT
-16 pads, the step sequencer and the kit controls from build 1: 44 library sounds plus the MaterialLab
-bodies and Stretch & Snap rubbers, three kits, eight macros per pad, choke groups, 16/32/64 steps,
+### SEQUENCER
+16 lanes (their pads above, their nodes below), four scenes, and the kit controls: 44 library sounds plus the MaterialLab
+bodies and Stretch & Snap rubbers, three kits, eight macros per lane, choke groups, 1 to 32 bars per scene,
 swing, accents, ghosts, ratchets, triplet rolls, nudge. **128 patterns** (the 50 originals plus 78
 variations: Ghosts, Rolls, Push, Lift). Each pad has **three insert effects** and velocity layers
 for them (soft / medium / hard).
@@ -52,11 +98,11 @@ for them (soft / medium / hard).
 * **Sample**: pad 16's sound as a spectrogram. Draw boxes over time and frequency; each box sends just
   that band of that moment through an effect. A taller box (more octaves) pushes the main control
   further. 31 presets.
-* **Sequencer**: a drawn score with five brushes (dot, dash, warble, tick, spray) played by a synth
+* **Draw**: a drawn score with five brushes (dot, dash, warble, tick, spray) played by a synth
   with four engines (additive, FM, FFT bands, grains from a pad). Scales, mirror, 36 rows. 31 presets.
 
-### GRID
-A 64 × 64 drawing grid in the style of Blip: each row is a pad of the kit (or a sample from a folder
+### LAYERMAX
+A 64 × 64 drawing grid: each row is a pad of the kit (or a sample from a folder
 you choose), each column a step. Colour is the hit: red = volume, green = pan, blue = pitch. Tools:
 pencil, line, air (spray), erase, pick. 16 patterns, rates of 1/8, 1/16, 1/16 triplets and 1/32,
 and the kit's swing.
@@ -124,18 +170,18 @@ filter, fold) driven by a mod source; six starting presets.
 | Pads | No sequencer; play the pads (and the key map) from MIDI. |
 
 * MIDI notes go through the key map. The default layout is build 1's: **C1–D#2 (36–51)** play pads 1–16.
-* NeoBeat **sends its sequencer out as MIDI** (channel 10, notes 36–51).
+* NeoBeat **sends its sequencer out as MIDI**: see KIT / FILE > MIDI out (by default notes 36–51 on channel 1).
 
 ## Mouse reference
 
 | Where | Gesture |
 |-------|---------|
-| Step grid | click = hit, shift-click = accent, alt-click = ghost, drag = paint/erase, wheel = velocity, right-click = rolls and nudge |
+| Step grid | click = hit, shift-click = accent, alt-click = ghost, drag = paint/erase, wheel = velocity, right-click = the node's menu (Send node to, copy, paste, rolls, nudge) |
 | Pads | click to play (higher = harder), right-click to load a sample, drop an audio file to load it |
 | One Shot lanes | click an empty step to draw a cell with the current brush; drag a cell sideways to move it, up/down to set its height; drag its right edge for the span; right-click deletes |
 | Sample view | drag on empty space to draw a box; drag a box to move it in time and pitch, its edges to resize; right-click deletes |
-| Sequencer view | pick a brush and click/drag to draw a mark; drag a mark to move it; right-click deletes |
-| Grid | pencil/line/air paint, erase (or right-drag), pick copies a cell's colour |
+| Draw view | pick a brush and click/drag to draw a mark; drag a mark to move it; right-click deletes |
+| Layermax | pencil/line/air paint, erase (or right-drag), pick copies a cell's colour |
 | Key map | drag on empty space to draw a zone; drag a zone to move it, its edges for key and velocity range; click the keyboard to audition; right-click deletes |
 | Knobs | drag or wheel, double-click to reset, drop a mod tile to route, right-click for the routes |
 

@@ -2,7 +2,7 @@ name: Build NeoBeat (Windows)
 
 on:
   push:
-    branches: [ main, neobeat-2.0, fx-standalone ]
+    branches: [ main, neobeat-2.0, fx-standalone, neobeat-3.0 ]
   workflow_dispatch:
 
 jobs:
@@ -16,12 +16,18 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build plugin, standalone and tools
-        run: cmake --build build --config Release --parallel --target NeoBeat_VST3 NeoBeat_Standalone NeoBeatFriction_VST3 NeoBeatFriction_Standalone NeoBeatBounce_VST3 NeoBeatBounce_Standalone neobeat_cli test_sequencer test_workstation test_fx
+        run: cmake --build build --config Release --parallel --target NeoBeat_VST3 NeoBeat_Standalone NeoBeatFriction_VST3 NeoBeatFriction_Standalone NeoBeatBounce_VST3 NeoBeatBounce_Standalone neobeat_cli test_sequencer test_workstation test_fx test_livefx test_analysis
 
       - name: Sequencer timing test
         run: build\Release\test_sequencer.exe
 
-      - name: Workstation tests (Matrixxxer, grid, key map, modulation, threads)
+      - name: Live effects (all 24 and Bounce Delay as streaming processors)
+        run: build\Release\test_livefx.exe
+
+      - name: Sound analysis and the learner (roles, quality, ratings, choosing a kit)
+        run: build\Release\test_analysis.exe
+
+      - name: Workstation tests (live effects, scenes, MIDI out, Layermax, export, key map, modulation, threads)
         run: build\Release\test_workstation.exe
 
       - name: Effect plugin tests (Friction Stretch and Bounce Delay on their own)

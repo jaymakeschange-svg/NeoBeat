@@ -7,13 +7,17 @@ namespace ui
 class Header final : public juce::Component, public Part
 {
 public:
-    explicit Header (Ctx& c) : ctx (c), rooms ({ "KIT", "MATRIXXXER", "GRID", "KEY MAP" }),
+    explicit Header (Ctx& c) : ctx (c), rooms ({ "SEQUENCER", "MATRIXXXER", "LAYERMAX", "KEY MAP" }),
                                master (c, "MASTER", -30.0f, 6.0f, 0.0f)
     {
         addAndMakeVisible (rooms);
         rooms.onSelect = [this] (int i) { ctx.room = i; if (ctx.refreshAll) ctx.refreshAll(); };
         addAndMakeVisible (lcd);
-        for (auto* b : { &fsButton, &bdButton }) addAndMakeVisible (b);
+        for (auto* b : { &undo, &redo, &kit, &fsButton, &bdButton }) addAndMakeVisible (b);
+        undo.onClick = [this] { ctx.proc.undo (ctx.room); if (ctx.refreshAll) ctx.refreshAll(); };
+        redo.onClick = [this] { ctx.proc.redo (ctx.room); if (ctx.refreshAll) ctx.refreshAll(); };
+        kit.onClick = [this] { kitMenu(); };
+        kit.setTooltip ("Kits and sequences (.NJQ), a folder of samples, export, MIDI out");
         fsButton.onClick = [this] { ctx.openWindow (true, ctx.fsSlot); };
         bdButton.onClick = [this] { ctx.openWindow (false, ctx.bdSlot); };
         addAndMakeVisible (status);
@@ -32,24 +36,27 @@ public:
     {
         paintChassis (g, getLocalBounds().toFloat());
         g.setColour (juce::Colour (0xff7f8b85)); g.drawHorizontalLine (getHeight() - 1, 0, (float) getWidth());
-        auto brand = juce::Rectangle<float> (16, 10, 150, 52);
+        auto brand = juce::Rectangle<float> (12, 10, 138, 52);
         paintPearl (g, brand, 14.0f);
-        paintGem (g, { brand.getX() + 14, brand.getCentreY() - 5, 10, 10 });
-        g.setFont (caps (17.0f)); g.setColour (C::text());
-        g.drawText ("NEOBEAT", brand.toNearestInt().withTrimmedLeft (32).withTrimmedBottom (14), juce::Justification::centredLeft);
-        paintLabel (g, "2.0 | NJS WORKSTATION", brand.toNearestInt().withTrimmedLeft (32).withTrimmedTop (30), juce::Justification::centredLeft, 6.5f);
-        paintLabel (g, "WINDOWS", { 822, 4, 120, 12 }, juce::Justification::centredLeft, 7.0f, C::dim());
+        paintGem (g, { brand.getX() + 12, brand.getCentreY() - 5, 10, 10 });
+        g.setFont (caps (16.0f)); g.setColour (C::text());
+        g.drawText ("NEOBEAT", brand.toNearestInt().withTrimmedLeft (28).withTrimmedBottom (14), juce::Justification::centredLeft);
+        paintLabel (g, "3.0 | NJS WORKSTATION", brand.toNearestInt().withTrimmedLeft (28).withTrimmedTop (30), juce::Justification::centredLeft, 6.0f);
+        paintLabel (g, "THIS ROOM", { 568, 4, 92, 12 }, juce::Justification::centred, 6.5f, C::dim());
+        paintLabel (g, "WINDOWS", { 968, 4, 120, 12 }, juce::Justification::centredLeft, 6.5f, C::dim());
     }
 
     void resized() override
     {
-        rooms.setBounds (178, 18, 360, 36);
-        lcd.setBounds (548, 12, 230, 48);
-        fsButton.setBounds (822, 18, 124, 36);
-        bdButton.setBounds (952, 18, 124, 36);
-        status.setBounds (1084, 18, 190, 36);
-        master.setBounds (1280, 4, 70, 66);
-        play.setBounds (1366, 16, 40, 40);
+        rooms.setBounds (158, 18, 402, 36);
+        undo.setBounds (568, 18, 44, 36); redo.setBounds (614, 18, 44, 36);
+        lcd.setBounds (666, 12, 212, 48);
+        kit.setBounds (886, 18, 74, 36);
+        fsButton.setBounds (968, 18, 100, 36);
+        bdButton.setBounds (1072, 18, 100, 36);
+        status.setBounds (1180, 18, 122, 36);
+        master.setBounds (1306, 4, 64, 66);
+        play.setBounds (1384, 16, 40, 40);
     }
 
     void refresh() override
@@ -58,8 +65,8 @@ public:
         int fsN = 0, bdN = 0;
         for (const auto& s : ctx.P().fs) fsN += s.on ? 1 : 0;
         for (const auto& s : ctx.P().bd) bdN += s.on ? 1 : 0;
-        fsButton.setButtonText ("FRICTION " + juce::String (fsN) + "/8");
-        bdButton.setButtonText ("BOUNCE " + juce::String (bdN) + "/8");
+        fsButton.setButtonText ("FRICTION " + juce::String (fsN));
+        bdButton.setButtonText ("BOUNCE " + juce::String (bdN));
         fsButton.setToggleState (ctx.fsOpen, juce::dontSendNotification);
         bdButton.setToggleState (ctx.bdOpen, juce::dontSendNotification);
     }
@@ -69,22 +76,115 @@ public:
         const int idx = ctx.proc.currentPreset.load();
         const auto mode = (int) ctx.proc.apvts.getRawParameterValue ("mode")->load();
         const juce::String m = mode == 0 ? (ctx.proc.hostSynced.load() ? "HOST PLAYING" : "HOST") : mode == 1 ? "KEY" : "PADS";
-        lcd.set (juce::String (idx + 1).paddedLeft ('0', 3) + "  " + juce::String (nb::patternPreset (idx).name).toUpperCase(),
+        const juce::String name = ctx.proc.currentNjq.isNotEmpty() ? juce::File (ctx.proc.currentNjq).getFileNameWithoutExtension() : juce::String (nb::patternPreset (idx).name);
+        lcd.set ((ctx.proc.currentNjq.isNotEmpty() ? juce::String ("NJQ") : juce::String (idx + 1).paddedLeft ('0', 3)) + "  " + name.toUpperCase(),
                  juce::String (ctx.proc.displayBpm.load(), 1) + " BPM | SWING " + juce::String (juce::roundToInt (ctx.proc.apvts.getRawParameterValue ("swing")->load() * 100)) + "% | " + m);
         auto& r = ctx.proc.renderer();
-        if (r.busy()) status.set ("RENDERING " + juce::String (r.jobsDone()) + "/" + juce::String (r.jobsTotal()), juce::String (r.currentJob()).toUpperCase());
-        else status.set ("READY", "VOICES " + juce::String (ctx.proc.workstation().kit().activeVoices() + ctx.proc.workstation().activePlayers()));
+        const int fx = ctx.proc.workstation().activeUnits();
+        if (ctx.proc.exporting()) status.set ("EXPORTING", juce::String (juce::roundToInt (ctx.proc.exportProgress() * 100.0f)) + " %");
+        else if (r.busy()) status.set ("PREPARING " + juce::String (r.jobsDone()) + "/" + juce::String (r.jobsTotal()), juce::String (r.currentJob()).toUpperCase());
+        else status.set ("LIVE", "VOICES " + juce::String (ctx.proc.workstation().kit().activeVoices() + ctx.proc.workstation().activePlayers()) + " | FX " + juce::String (fx));
         master.syncFromParam();
         play.setToggleState (ctx.proc.apvts.getRawParameterValue ("run")->load() > 0.5f, juce::dontSendNotification);
         play.setButtonText (play.getToggleState() ? "||" : ">");
+        const bool cu = ctx.proc.canUndo (ctx.room), cr = ctx.proc.canRedo (ctx.room);
+        undo.setEnabled (cu); redo.setEnabled (cr);
+        undo.setTooltip (cu ? "Undo: " + ctx.proc.undoLabel (ctx.room) + "  (Ctrl+Z). Each room keeps its own history." : juce::String ("Nothing to undo in this room"));
+        redo.setTooltip (cr ? "Redo: " + ctx.proc.redoLabel (ctx.room) + "  (Ctrl+Shift+Z)" : juce::String ("Nothing to redo in this room"));
     }
 
 private:
+    void afterNjq (const juce::File& f)
+    {
+        if (shared::Settings::load().askDefault) { ctx.overlay = 4; ctx.overlayFile = f.getFullPathName(); }
+        ctx.commit();
+        if (ctx.refreshAll) ctx.refreshAll();
+    }
+    void kitMenu()
+    {
+        const auto st = shared::Settings::load();
+        njqList = ctx.proc.njqFiles();
+        juce::PopupMenu m, mine;
+        for (int i = 0; i < njqList.size() && i < 400; ++i)
+            mine.addItem (2000 + i, njqList[i].getFileNameWithoutExtension(), true, njqList[i].getFullPathName() == ctx.proc.currentNjq);
+        if (njqList.isEmpty()) mine.addItem (1999, "(none yet: save one, or make one in Batchcut's Kit room)", false);
+        m.addSectionHeader ("KITS AND SEQUENCES (.NJQ)");
+        m.addSubMenu ("My sequences", mine);
+        m.addItem (1, "Load a .NJQ file...");
+        m.addItem (2, "Save as .NJQ...");
+        m.addItem (7, "Make this a default sequence...", ctx.proc.currentNjq.isNotEmpty());
+        m.addItem (8, "Start with the stock pattern again", st.startupNjq.isNotEmpty());
+        m.addItem (6, "Preset folder: " + st.presets().getFullPathName() + " ...");
+        m.addSectionHeader ("SAMPLES");
+        m.addItem (3, "Import a folder of samples into the lanes...");
+        m.addSectionHeader ("OUT");
+        m.addItem (4, "Export the pattern as WAV and MIDI...");
+        m.addItem (5, "MIDI out: NeoBeat as a sequencer...");
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&kit), [this] (int r)
+        {
+            if (r <= 0) return;
+            const auto st2 = shared::Settings::load();
+            if (r >= 2000 && r - 2000 < njqList.size())
+            {
+                juce::String err; const auto f = njqList[r - 2000];
+                if (ctx.proc.loadNjq (f, err)) { ctx.commit(); if (ctx.refreshAll) ctx.refreshAll(); }
+                else ctx.notify ("njq:" + err, "COULD NOT LOAD", err);
+            }
+            if (r == 1)
+            {
+                chooser = std::make_unique<juce::FileChooser> ("Load a kit and its sequence", st2.presets(), "*.njq;*.NJQ");
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
+                {
+                    const auto f = fc.getResult();
+                    if (! f.existsAsFile()) return;
+                    juce::String err;
+                    if (ctx.proc.loadNjq (f, err)) afterNjq (f); else { ctx.noticesShown.removeString ("njq"); ctx.notify ("njq", "COULD NOT LOAD", err); }
+                });
+            }
+            if (r == 2)
+            {
+                chooser = std::make_unique<juce::FileChooser> ("Save the kit and its sequence", st2.presets().getChildFile ("My sequence.NJQ"), "*.NJQ");
+                chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc)
+                {
+                    auto f = fc.getResult();
+                    if (f == juce::File()) return;
+                    f = f.withFileExtension ("NJQ");
+                    juce::String err;
+                    if (ctx.proc.saveNjq (f, f.getFileNameWithoutExtension(), err)) afterNjq (f); else { ctx.noticesShown.removeString ("njq"); ctx.notify ("njq", "COULD NOT SAVE", err); }
+                });
+            }
+            if (r == 3)
+            {
+                chooser = std::make_unique<juce::FileChooser> ("A folder of samples", st2.importFolder.isNotEmpty() ? juce::File (st2.importFolder) : juce::File());
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc)
+                {
+                    if (! fc.getResult().isDirectory()) return;
+                    ctx.overlay = 3; ctx.overlayFile = fc.getResult().getFullPathName();
+                    if (ctx.refreshAll) ctx.refreshAll();
+                });
+            }
+            if (r == 4 || r == 5) { ctx.overlay = r == 4 ? 1 : 2; if (ctx.refreshAll) ctx.refreshAll(); }
+            if (r == 6)
+            {
+                chooser = std::make_unique<juce::FileChooser> ("The folder your .NJQ kits live in (Batchcut saves there too)", st2.presets());
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [] (const juce::FileChooser& fc)
+                {
+                    if (! fc.getResult().isDirectory()) return;
+                    auto st3 = shared::Settings::load(); st3.presetFolder = fc.getResult().getFullPathName(); st3.save();
+                });
+            }
+            if (r == 7) { ctx.overlay = 4; ctx.overlayFile = ctx.proc.currentNjq; if (ctx.refreshAll) ctx.refreshAll(); }
+            if (r == 8) { auto st3 = shared::Settings::load(); st3.startupNjq.clear(); st3.save(); }
+        });
+    }
+
     Ctx& ctx;
-    Segmented rooms;   // the HOST / KEY / PADS modes live in the kit room's toolbar
+    Segmented rooms;   // the HOST / KEY / PADS modes live in the sequencer room's toolbar
     LcdBox lcd, status;
-    Pill fsButton, bdButton, play;
+    Pill undo { "UNDO" }, redo { "REDO" }, kit { "KIT / FILE" }, fsButton, bdButton, play;
     Knob master;
+    juce::Array<juce::File> njqList;
+    std::unique_ptr<juce::FileChooser> chooser;
 };
 
 // ================================================================== tree
@@ -101,21 +201,21 @@ public:
         rows.clear();
         auto& P = ctx.P();
         const auto& ks = nb::kits();
-        rows.add ({ Head, 0, "KIT | " + juce::String (ks[(size_t) juce::jlimit (0, (int) ks.size() - 1, ctx.proc.currentKit.load())].name).toUpperCase(), {}, false, true, 0, true });
+        rows.add ({ Head, 0, "LANES | " + juce::String (ks[(size_t) juce::jlimit (0, (int) ks.size() - 1, ctx.proc.currentKit.load())].name).toUpperCase(), {}, false, true, 0, true });
         for (int p = 0; p < nb::kNumPads; ++p)
         {
             Row r { PadRow, p, juce::String (p + 1).paddedLeft ('0', 2) + "  " + ctx.proc.padName (p), {}, ctx.room == 0 && ctx.pad == p, false, 0, true };
             for (const auto& ins : P.padFx[(size_t) p].inserts) if (ins.kind != nb::CellFx::None) r.dots.add (C::fxColour (ins));
-            for (const auto& c : P.matrix.oneShot.cells) if (c.pad == p && r.dots.size() < 5) r.dots.add (C::fxColour (c.fx));
+            for (const auto& c : P.matrix.oneShot.cells) if (c.pad == p && c.scene == ctx.scene() && r.dots.size() < 5) r.dots.add (C::fxColour (c.fx));
             for (const auto& s : P.fs) if (s.on && s.src.kind == nb::SourceKind::Pad && s.src.index == p) r.dots.add (C::amber());
             for (const auto& s : P.bd) if (s.on && s.src.kind == nb::SourceKind::Pad && s.src.index == p) r.dots.add (C::family ("BOUNCE"));
             rows.add (r);
         }
         rows.add ({ Head, 0, "MATRIXXXER", {}, false, true, 0, true });
-        const juce::String vn[3] = { "Sequencer | " + juce::String (P.matrix.seq.name), "One Shot | " + juce::String (P.matrix.oneShot.name), "Sample | " + juce::String (P.matrix.sample.name) };
+        const juce::String vn[3] = { "Draw | " + juce::String (P.matrix.seq.name), "One Shot | " + juce::String (P.matrix.oneShot.name), "Sample | " + juce::String (P.matrix.sample.name) };
         const bool on[3] = { P.matrix.seqOn, P.matrix.oneShotOn, P.matrix.sampleOn };
         for (int v = 0; v < 3; ++v) rows.add ({ ViewRow, v, vn[v], {}, ctx.room == 1 && P.matrix.view == v, false, 0, on[v] });
-        rows.add ({ Head, 0, "GRID", {}, false, true, 0, true });
+        rows.add ({ Head, 0, "LAYERMAX", {}, false, true, 0, true });
         rows.add ({ GridRow, 0, "Pattern " + juce::String (P.grid.current + 1) + (P.grid.play ? " | playing" : " | off"), {}, ctx.room == 2, false, 0, P.grid.play });
         rows.add ({ Head, 0, "KEY MAP", {}, false, true, 0, true });
         for (int l = 0; l < (int) P.keymap.layers.size() && l < 5; ++l)
@@ -195,7 +295,7 @@ class Dock final : public juce::Component, public Part
 {
 public:
     explicit Dock (Ctx& c) : ctx (c), rate (c, "RATE", 0.0625f, 16.0f, 1.0f, true), envA (c, "ATTACK", 0.0005f, 1.0f, 0.004f, true),
-                             envD (c, "DECAY", 0.01f, 4.0f, 0.35f, true), scope ({ "KIT", "PAD", "CELL" })
+                             envD (c, "DECAY", 0.01f, 4.0f, 0.35f, true), scope ({ "KIT", "LANE", "NODE" })
     {
         for (auto* k : { &rate, &envA, &envD }) addChildComponent (k);
         addChildComponent (shape); addChildComponent (sync); addChildComponent (scope);
@@ -342,7 +442,7 @@ public:
         if (s == nb::ModSrc::Velocity || s == nb::ModSrc::Key || s == nb::ModSrc::Height || s == nb::ModSrc::Step)
         {
             const char* what[] = { "How hard each hit is (0 to 1).", "The key that played it, around C3 (-1 to 1).",
-                                   "A One Shot cell's height (0 to 1). Height already sets each cell's main control; route it to reach a second knob.",
+                                   "A node's height (0 to 1). Height already sets each node's main control; route it to reach a second knob.",
                                    "Where the hit sits in the main pattern (0 to 1)." };
             const int wi = s == nb::ModSrc::Velocity ? 0 : s == nb::ModSrc::Key ? 1 : s == nb::ModSrc::Height ? 2 : 3;
             g.setColour (C::text()); g.setFont (font (12.0f));
@@ -489,9 +589,14 @@ Shell::Shell (NeoBeatProcessor& p) : ctx (p)
     header = makeHeader (ctx); tree = makeTree (ctx); inspector = makeInspector (ctx); dock = makeDock (ctx);
     rooms[0] = makeKitRoom (ctx); rooms[1] = makeMatrixRoom (ctx); rooms[2] = makeGridRoom (ctx); rooms[3] = makeKeyMapRoom (ctx);
     fsWindow = makeFrictionWindow (ctx); bdWindow = makeBounceWindow (ctx); routeList = makeRouteList (ctx);
+    overlays[0] = makeExportPanel (ctx); overlays[1] = makeMidiPanel (ctx); overlays[2] = makeImportPanel (ctx); overlays[3] = makeDefaultPrompt (ctx); overlays[4] = makeNotice (ctx);
     for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get() }) addAndMakeVisible (c);
     for (auto& r : rooms) addChildComponent (r.get());
     for (auto* c : { fsWindow.get(), bdWindow.get(), routeList.get() }) addChildComponent (c);
+    for (auto& o : overlays) { addChildComponent (o.get()); if (auto* part = dynamic_cast<Part*> (o.get())) parts.push_back (part); }
+    addMouseListener (this, true);       // every child's mouse-up ends a gesture
+    setWantsKeyboardFocus (true);
+    lateSeen = ctx.proc.lateHits();
     for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get(), rooms[0].get(), rooms[1].get(), rooms[2].get(), rooms[3].get(), fsWindow.get(), bdWindow.get(), routeList.get() })
         if (auto* part = dynamic_cast<Part*> (c)) parts.push_back (part);
     ctx.refreshAll = [this] { triggerAsyncUpdate(); };
@@ -505,6 +610,7 @@ Shell::~Shell()
 {
     stopTimer();
     cancelPendingUpdate();
+    removeMouseListener (this);
     juce::PopupMenu::dismissAllActiveMenus();   // their callbacks get 0 and touch nothing
     ctx.refreshAll = nullptr; ctx.refreshNow = nullptr;
     setLookAndFeel (nullptr);
@@ -522,6 +628,31 @@ void Shell::resized()
     fsWindow->setBounds (130, 60, 1180, 760);
     bdWindow->setBounds (130, 60, 1180, 760);
     routeList->setBounds (250, 120, 880, 560);
+    overlays[0]->setBounds (390, 150, 660, 520);
+    overlays[1]->setBounds (300, 96, 840, 700);
+    overlays[2]->setBounds (390, 150, 660, 560);
+    overlays[3]->setBounds (420, 250, 600, 300);
+    overlays[4]->setBounds (420, 270, 600, 260);
+}
+
+bool Shell::keyPressed (const juce::KeyPress& k)
+{
+    const int code = juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k.getKeyCode());
+    if (k.getModifiers().isCommandDown() && code == 'z')
+    {
+        if (k.getModifiers().isShiftDown()) ctx.proc.redo (ctx.room); else ctx.proc.undo (ctx.room);
+        refresh();
+        return true;
+    }
+    if (k.getModifiers().isCommandDown() && code == 'y') { ctx.proc.redo (ctx.room); refresh(); return true; }
+    return false;
+}
+
+void Shell::mouseUp (const juce::MouseEvent&)
+{
+    // after the handlers that this mouse-up runs (and any change they make) are done
+    juce::Component::SafePointer<Shell> safe (this);
+    juce::MessageManager::callAsync ([safe] { if (safe != nullptr) { safe->ctx.commit(); safe->sinceCommit = 0; } });
 }
 
 void Shell::refresh()
@@ -533,11 +664,26 @@ void Shell::refresh()
     if (ctx.fsOpen) fsWindow->toFront (false);
     if (ctx.bdOpen) bdWindow->toFront (false);
     if (ctx.listOpen) routeList->toFront (false);
+    for (int i = 0; i < 4; ++i) { overlays[(size_t) i]->setVisible (ctx.overlay == i + 1); if (ctx.overlay == i + 1) overlays[(size_t) i]->toFront (false); }
+    overlays[4]->setVisible (ctx.noticeText.isNotEmpty());
+    if (ctx.noticeText.isNotEmpty()) overlays[4]->toFront (false);
     for (auto* p : parts) p->refresh();
 }
 
 void Shell::timerCallback()
 {
     for (auto* p : parts) p->tick();
+    // anything that changed without a mouse-up (a menu's choice, a key, a dropped file) still becomes an undo step
+    if (++sinceCommit >= 15 && ! juce::ModifierKeys::currentModifiers.isAnyMouseButtonDown()) { sinceCommit = 0; ctx.commit(); }
+    // the one case a hit has to be late: say so, once
+    const uint32_t late = ctx.proc.lateHits();
+    if (late != lateSeen)
+    {
+        lateSeen = late;
+        ctx.notify ("late", "ONE HIT NEEDED A SHORT BUFFER",
+                    "A hit played by hand (a key, a click) went through a spectral effect before NeoBeat had a copy of that lane's sound ready, or through several spectral effects in a row. "
+                    "Those effects need the sound 43 ms ahead, so that hit sounded late by up to that much per effect.\n\n"
+                    "Hits the sequencer plays are never late (it sees them coming), and neither are hand-played hits through one spectral effect once the lane's sound is prepared, which takes a moment after you change it.");
+    }
 }
 } // namespace ui

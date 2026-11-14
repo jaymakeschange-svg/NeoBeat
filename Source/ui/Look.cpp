@@ -513,12 +513,12 @@ juce::String destLabel (const juce::String& dest)
 {
     auto p = juce::StringArray::fromTokens (dest, "/", "");
     if (p.isEmpty()) return dest;
-    if (p[0] == "pad" && p.size() == 3) return (p[1] == "*" ? juce::String ("All pads") : "Pad " + juce::String (p[1].getIntValue() + 1)) + " " + p[2];
-    if (p[0] == "cell" && p.size() == 3) return "Cell " + juce::String (p[1].getIntValue() + 1) + " main";
+    if (p[0] == "pad" && p.size() == 3) return (p[1] == "*" ? juce::String ("All lanes") : "Lane " + juce::String (p[1].getIntValue() + 1)) + " " + p[2];
+    if (p[0] == "cell" && p.size() == 3) return "Node " + juce::String (p[1].getIntValue() + 1) + " main";
     if (p[0] == "fs" && p.size() == 3) return "Friction " + juce::String (p[1].getIntValue() + 1) + " " + p[2];
     if (p[0] == "bd" && p.size() == 3) return "Bounce " + juce::String (p[1].getIntValue() + 1) + " " + p[2];
     if (p[0] == "seq" && p.size() == 2) return "Sequencer view " + p[1];
-    if (p[0] == "grid" && p.size() == 2) return "Grid " + p[1];
+    if (p[0] == "grid" && p.size() == 2) return "Layermax " + p[1];
     if (p[0] == "master") return "Master";
     return dest;
 }
@@ -527,16 +527,16 @@ juce::String sourceLabel (const nb::Project& P, const nb::SlotSource& s)
 {
     switch (s.kind)
     {
-        case nb::SourceKind::Pad: return "Pad " + juce::String (s.index + 1);
-        case nb::SourceKind::GridRow: return "Grid row " + juce::String (s.index + 1);
+        case nb::SourceKind::Pad: return "Lane " + juce::String (s.index + 1);
+        case nb::SourceKind::GridRow: return "Layermax row " + juce::String (s.index + 1);
         case nb::SourceKind::Cell:
         {
             if (s.index >= 0 && s.index < (int) P.matrix.oneShot.cells.size())
             {
                 const auto& c = P.matrix.oneShot.cells[(size_t) s.index];
-                return "Cell " + juce::String (s.index + 1) + " (pad " + juce::String (c.pad + 1) + ", step " + juce::String (c.step + 1) + ")";
+                return "Node " + juce::String (s.index + 1) + " (scene " + juce::String::charToString ((juce::juce_wchar) ('A' + c.scene)) + ", lane " + juce::String (c.pad + 1) + ", step " + juce::String (c.step + 1) + ")";
             }
-            return "Cell " + juce::String (s.index + 1);
+            return "Node " + juce::String (s.index + 1);
         }
         default: return "Nothing";
     }
@@ -546,12 +546,12 @@ juce::PopupMenu sourceMenu (const nb::Project& P, int base)
 {
     juce::PopupMenu m, pads, rows, cells;
     m.addItem (base, "Nothing");
-    for (int p = 0; p < nb::kNumPads; ++p) pads.addItem (base + 1000 + p, "Pad " + juce::String (p + 1));
-    for (int r = 0; r < 64; ++r) rows.addItem (base + 2000 + r, "Grid row " + juce::String (r + 1));
+    for (int p = 0; p < nb::kNumPads; ++p) pads.addItem (base + 1000 + p, "Lane " + juce::String (p + 1));
+    for (int r = 0; r < 64; ++r) rows.addItem (base + 2000 + r, "Layermax row " + juce::String (r + 1));
     for (int c = 0; c < (int) P.matrix.oneShot.cells.size(); ++c) cells.addItem (base + 3000 + c, sourceLabel (P, { nb::SourceKind::Cell, c }));
-    m.addSubMenu ("A pad (every hit)", pads);
-    m.addSubMenu ("A grid row (tagged cells)", rows);
-    m.addSubMenu ("A One Shot cell", cells, ! P.matrix.oneShot.cells.empty());
+    m.addSubMenu ("A lane (every hit)", pads);
+    m.addSubMenu ("A Layermax row (tagged boxes)", rows);
+    m.addSubMenu ("A node", cells, ! P.matrix.oneShot.cells.empty());
     return m;
 }
 
