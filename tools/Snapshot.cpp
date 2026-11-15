@@ -133,6 +133,45 @@ int main (int argc, char** argv)
     ed->setSize (960, 600); pump (*proc, 100);
     shot (*ed, outDir, "10_kit_room_small");
 
+    // LOOPS: an empty loop, then four layers rolled from the pool
+    ed->setSize (1280, 800);
+    ed->showRoom (2); pump (*proc, 150);
+    shot (*ed, outDir, "11_loops_empty");
+    auto& lp = proc->loops;
+    lp.name = "Yard loop"; lp.bpm = 104.0; lp.root = 9; lp.scale = 10;
+    lp.layers[0].mode = bc::LoopMode::Pool; lp.layers[0].bars = 2; lp.layers[0].density = 0.55f; lp.layers[0].dejavu = 0.7f; lp.layers[0].seed = 11;
+    proc->loopsRoll (0, false);
+    const int l1 = proc->loopsAddLayer(); lp.layers[(size_t) l1].mode = bc::LoopMode::Stutter; lp.layers[(size_t) l1].seed = 12; lp.layers[(size_t) l1].levelDb = -4.0f; proc->loopsRoll (l1, false);
+    const int l2 = proc->loopsAddLayer(); lp.layers[(size_t) l2].mode = bc::LoopMode::Slice; lp.layers[(size_t) l2].source.kind = bc::LoopSource::From; lp.layers[(size_t) l2].source.from = "yard clanks";
+    lp.layers[(size_t) l2].bars = 1; lp.layers[(size_t) l2].perBar = 12; lp.layers[(size_t) l2].seed = 13; lp.layers[(size_t) l2].pan = -0.4f; proc->loopsRoll (l2, false);
+    const int l3 = proc->loopsAddLayer(); lp.layers[(size_t) l3].mode = bc::LoopMode::Melody; lp.layers[(size_t) l3].bars = 4; lp.layers[(size_t) l3].seed = 14; lp.layers[(size_t) l3].density = 0.4f; proc->loopsRoll (l3, false);
+    proc->loopsMark();
+    ed->getView().loopLayer = 0; ed->getView().loopHit = 2;
+    proc->loopPlayer.playing.store (true);
+    pump (*proc, 1300);
+    ed->getLoopsRoom().refresh(); pump (*proc, 60);
+    shot (*ed, outDir, "12_loops");
+    proc->loopPlayer.playing.store (false);
+    ed->setSize (960, 600); pump (*proc, 100);
+    shot (*ed, outDir, "13_loops_small");
+
+    // KEYS: empty, then horns tuned across the keys, a chord held
+    ed->setSize (1280, 800);
+    ed->showRoom (3); pump (*proc, 150);
+    shot (*ed, outDir, "14_keys_empty");
+    proc->kitAddFolder (testaudio::horns (dir));
+    proc->keysSource.kind = bc::LoopSource::From; proc->keysSource.from = "horns";
+    proc->keys.name = "City horns"; proc->keys.sustain = bc::KeysSustain::Loop; proc->keys.releaseMs = 600.0f;
+    proc->keysBuild();
+    ed->getView().keysZone = 3;
+    proc->keyboard.noteOn (1, 57, 0.8f); proc->keyboard.noteOn (1, 60, 0.8f); proc->keyboard.noteOn (1, 64, 0.8f);
+    pump (*proc, 400);
+    ed->getKeysRoom().refresh(); pump (*proc, 60);
+    shot (*ed, outDir, "15_keys");
+    proc->keyboard.allNotesOff (1);
+    ed->setSize (960, 600); pump (*proc, 100);
+    shot (*ed, outDir, "16_keys_small");
+
     ed.reset();
     proc.reset();
     dir.deleteRecursively();

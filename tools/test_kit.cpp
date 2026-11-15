@@ -135,6 +135,107 @@ int main()
     bool ok = true; for (float v : big) ok = ok && std::isfinite (v);
     CHECK (ok, "odd block sizes, and a sound replaced while it rings");
 
+    std::printf ("5. the dealer (RANDOM)\n");
+    {
+        gen::Dealer d; std::vector<int> cards; for (int i = 0; i < 50; ++i) cards.push_back (i);
+        d.reset (cards, 7u);
+        std::vector<int> seq; for (int k = 0; k < 150; ++k) seq.push_back (d.deal());
+        bool rounds = true, noTwice = true;
+        for (int r = 0; r < 3; ++r) { std::vector<int> one (seq.begin() + r * 50, seq.begin() + (r + 1) * 50); std::sort (one.begin(), one.end()); rounds = rounds && one == cards; }
+        for (size_t k = 1; k < seq.size(); ++k) noTwice = noTwice && seq[k] != seq[k - 1];
+        CHECK (rounds, "a deck of 50: every card once a round, three rounds running");
+        CHECK (noTwice, "a round never opens with the card that closed the last one");
+        d.reset (cards, 9u);
+        std::vector<int> even; for (int k = 0; k < 25; ++k) even.push_back (d.deal ([] (int c) { return c % 2 == 0; }));
+        std::vector<int> odd; for (int k = 0; k < 25; ++k) odd.push_back (d.deal());
+        bool evens = true, odds = true; for (int c : even) evens = evens && c % 2 == 0; for (int c : odd) odds = odds && c % 2 == 1;
+        std::sort (even.begin(), even.end()); std::sort (odd.begin(), odd.end());
+        CHECK (evens && odds && std::adjacent_find (even.begin(), even.end()) == even.end() && std::adjacent_find (odd.begin(), odd.end()) == odd.end(),
+               "cards turned down wait for later in the same round");
+        d.reset ({ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }, 3u);
+        std::vector<int> first; for (int k = 0; k < 5; ++k) first.push_back (d.deal());
+        d.add ({ 100, 101 });
+        std::vector<int> rest; for (int k = 0; k < 7; ++k) rest.push_back (d.deal());
+        bool fresh = std::find (rest.begin(), rest.end(), 100) != rest.end() && std::find (rest.begin(), rest.end(), 101) != rest.end();
+        for (int c : rest) fresh = fresh && std::find (first.begin(), first.end(), c) == first.end();
+        CHECK (fresh && d.size() == 12, "cards added mid-round join the cards still to come");
+        CHECK (d.deal ([] (int) { return false; }) == -1, "nothing accepted: no card");
+    }
+
+    std::printf ("6. RANDOM and Clear lanes on the kit\n");
+    {
+        KitModel rk; rk.pool = kit.pool;
+        rk.lanes[0].layers[0].item = 0; rk.lanes[0].locked = true;
+        int hatDeck = 0; for (const auto& it : rk.pool) hatDeck += KitModel::fits (*it, 4) ? 1 : 0;
+        std::vector<int> hats; bool lockedKept = true, twice = false;
+        for (int k = 0; k < hatDeck; ++k)
+        {
+            rk.randomize (false, 1234u);
+            lockedKept = lockedKept && rk.lanes[0].layers[0].item == 0;
+            hats.push_back (rk.lanes[4].layers[0].item);
+            std::vector<int> on; for (const auto& ln : rk.lanes) if (ln.layers[0].item >= 0) on.push_back (ln.layers[0].item);
+            std::sort (on.begin(), on.end()); twice = twice || std::adjacent_find (on.begin(), on.end()) != on.end();
+        }
+        std::vector<int> h = hats; std::sort (h.begin(), h.end());
+        bool allHats = true; for (int i : hats) allHats = allHats && i >= 0 && KitModel::fits (*rk.pool[(size_t) i], 4);
+        CHECK (hatDeck >= 8 && allHats && std::adjacent_find (h.begin(), h.end()) == h.end(), "the closed-hat lane hears all %d sounds that fit it, one each, before any repeats", hatDeck);
+        CHECK (lockedKept && ! twice, "a locked lane keeps its sound, and no sound sits on two lanes");
+        // what you asked for: Shuffle keeps to each lane's best four, RANDOM does not
+        KitModel sk; sk.pool = kit.pool;
+        std::vector<int> shuffled; for (uint32_t s = 1; s <= 8; ++s) { sk.shuffle (learner, s); shuffled.push_back (sk.lanes[4].layers[0].item); }
+        std::sort (shuffled.begin(), shuffled.end()); shuffled.erase (std::unique (shuffled.begin(), shuffled.end()), shuffled.end());
+        CHECK (shuffled.size() <= 6 && h.size() >= 8, "8 presses: Shuffle gave the hat lane %zu different sounds, RANDOM %zu", shuffled.size(), h.size());
+        // a sound added to the pool joins the deal under way
+        rk.pool.push_back (kit.pool[14]);    // (the same hat again, as a new pool sound)
+        bool joined = false;
+        for (int k = 0; k < 3 * hatDeck && ! joined; ++k) { rk.randomize (false, 99u); joined = rk.lanes[4].layers[0].item == (int) rk.pool.size() - 1; }
+        CHECK (joined, "a sound added to the pool turns up in the deal");
+        rk.lanes[3].locked = true;
+        const auto before3 = rk.lanes[3];
+        const int cleared = rk.clearLanes();
+        bool empty = true; for (int l = 1; l < kLanes; ++l) if (l != 3) empty = empty && rk.lanes[(size_t) l].empty();
+        CHECK (cleared >= 10 && empty && rk.lanes[0].layers[0].item == 0 && rk.lanes[3] == before3, "Clear lanes empties %d lanes; the two locked ones keep theirs", cleared);
+    }
+
+    std::printf ("7. RANDOM in a pool of 2,000\n");
+    {
+        // 2,000 sounds whose likeliest roles are spread over the sixteen lanes (no listening: only the roles count here)
+        KitModel big; PortableRandom rng (77u);
+        for (int i = 0; i < 2000; ++i)
+        {
+            auto it = std::make_shared<PoolItem>(); it->name = "s" + std::to_string (i); it->f.valid = true;
+            float total = 0.0f;
+            for (auto& r : it->roles) { r = (float) rng.uni (0.0, 0.2); total += r; }
+            it->roles[(size_t) (i % kLanes)] += 1.0f; total += 1.0f;
+            for (auto& r : it->roles) r /= total;
+            big.pool.push_back (it);
+        }
+        // any lane: one deck of 2,000 for all sixteen lanes
+        std::vector<int> dealt; std::vector<char> seen (2000, 0); int firstRepeat = -1;
+        for (int press = 0; press < 140 && firstRepeat < 0; ++press)
+        {
+            big.randomize (true, 4242u);
+            for (const auto& ln : big.lanes)
+            {
+                const int i = ln.layers[0].item;
+                if (i < 0) continue;
+                if (seen[(size_t) i] && firstRepeat < 0) firstRepeat = (int) dealt.size();
+                seen[(size_t) i] = 1; dealt.push_back (i);
+            }
+        }
+        CHECK (firstRepeat >= 2000 - kLanes, "any lane: %d sounds dealt before the first repeat (of 2,000)", firstRepeat);
+        // by role: the snare lane's own deck, no repeats in its first half, and every one of its sounds heard within three rounds
+        KitModel byRole; byRole.pool = big.pool;
+        byRole.randomize (false, 5u);
+        const int deck = byRole.deckSize (2, false);
+        std::vector<int> lane2 { byRole.lanes[2].layers[0].item };
+        for (int k = 1; k < 3 * deck; ++k) { byRole.randomize (false, 5u); lane2.push_back (byRole.lanes[2].layers[0].item); }
+        std::vector<int> half (lane2.begin(), lane2.begin() + deck / 2); std::sort (half.begin(), half.end());
+        std::vector<int> all = lane2; std::sort (all.begin(), all.end()); all.erase (std::unique (all.begin(), all.end()), all.end());
+        CHECK (deck >= 240 && std::adjacent_find (half.begin(), half.end()) == half.end(), "the snare lane deals from %d sounds that fit it, no repeats in the first %d", deck, deck / 2);
+        CHECK ((int) all.size() == deck, "within three rounds every one of them reached the snare lane (%zu of %d)", all.size(), deck);
+    }
+
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
 }

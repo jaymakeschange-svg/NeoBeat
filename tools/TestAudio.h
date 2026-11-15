@@ -94,4 +94,29 @@ inline Made longTake (const juce::File& dir)
     write (m.file, l, {}, m.sr);
     return m;
 }
+
+// A folder of tuned horn notes (for KEYS): a few pitches from C2 up, one played softly and one twice
+inline juce::File horns (const juce::File& dir)
+{
+    const auto d = dir.getChildFile ("horns");
+    d.createDirectory();
+    const double sr = 48000.0;
+    const struct { const char* name; double note; float amp; float bright; } notes[] = {
+        { "horn C2", 48, 0.5f, 0.5f }, { "horn G2", 55, 0.5f, 0.5f }, { "horn C3", 60, 0.5f, 0.5f }, { "horn C3 soft", 60, 0.12f, 0.3f },
+        { "horn C3 again", 60, 0.5f, 0.8f }, { "horn E3", 64, 0.5f, 0.55f }, { "horn G3", 67, 0.5f, 0.5f }, { "horn C4", 72, 0.5f, 0.45f } };
+    for (const auto& n : notes)
+    {
+        const double hz = 440.0 * std::exp2 ((n.note - 69.0) / 12.0);
+        std::vector<float> x ((size_t) (sr * 1.3), 0.0f);
+        for (size_t i = 0; i < x.size(); ++i)
+        {
+            const double t = (double) i / sr, env = std::min (1.0, t / 0.004) * std::exp (-t / 0.9);
+            double v = 0.0; for (int h = 1; h <= 4; ++h) v += std::sin (6.283185307179586 * hz * h * t) * std::pow ((double) n.bright, h - 1) / h;
+            x[i] = n.amp * (float) (env * v * 0.6);
+        }
+        std::string err;
+        BcProcessor::writeWav (d.getChildFile (juce::String (n.name) + ".wav"), x, x, sr, 24, err);
+    }
+    return d;
+}
 } // namespace testaudio

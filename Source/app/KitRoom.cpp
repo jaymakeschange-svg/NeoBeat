@@ -202,7 +202,7 @@ public:
             m.addItem (1, "Put the selected pool sound here", p.kit.item (view.kitItem) != nullptr);
             m.addItem (2, "Next best sound"); m.addItem (3, "Previous");
             m.addSeparator();
-            m.addItem (4, "Lock (auto-fill and shuffle leave it alone)", true, p.kit.lanes[(size_t) l].locked);
+            m.addItem (4, "Lock (Auto-fill, Shuffle, Random and Clear lanes leave it alone)", true, p.kit.lanes[(size_t) l].locked);
             m.addItem (5, "Clear the lane", ! p.kit.lanes[(size_t) l].empty());
             m.showMenuAsync (juce::PopupMenu::Options(), [this, l] (int r)
             {
@@ -317,10 +317,11 @@ struct KitRoom::Parts
 {
     explicit Parts (View& v) : pool (v), lanes (v), wave (v) {}
     PoolList pool; LaneList lanes; WaveView wave; StarRow stars;
-    Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" }, clear { "Clear" };
+    Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" }, clear { "Clear all" };
     Segmented sort { { "Fits the lane", "As gathered" } };
     juce::TextEditor name;
-    Pill fill { "Auto-fill" }, shuffle { "Shuffle" }, undo { "Undo" }, redo { "Redo" };
+    Pill fill { "Auto-fill" }, shuffle { "Shuffle" }, random { "Random" }, clearLanes { "Clear lanes" }, undo { "Undo" }, redo { "Redo" };
+    Gem anyLane { "Any lane" };
     Pill play { "Play", true }, pPrev { "<" }, pNext { ">" }, save { "Save .NJQ" };
     juce::ComboBox patternBox;
     Knob bpm { "BPM", 50.0f, 200.0f, 100.0f }, swing { "SWING", 50.0f, 75.0f, 62.0f };
@@ -338,7 +339,7 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
 {
     auto& p = *parts; auto& proc = view.proc;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &p.pool, &p.lanes, &p.wave, &p.stars, &p.fromFile, &p.fromAll, &p.folder, &p.clear, &p.sort, &p.name,
-            &p.fill, &p.shuffle, &p.undo, &p.redo, &p.play, &p.pPrev, &p.pNext, &p.save, &p.patternBox, &p.bpm, &p.swing, &p.laneLevel, &p.lanePan, &p.laneWidth,
+            &p.fill, &p.shuffle, &p.random, &p.anyLane, &p.clearLanes, &p.undo, &p.redo, &p.play, &p.pPrev, &p.pNext, &p.save, &p.patternBox, &p.bpm, &p.swing, &p.laneLevel, &p.lanePan, &p.laneWidth,
             &p.layerTabs, &p.level, &p.offset, &p.pitch, &p.fade, &p.reverse, &p.usePool, &p.clearLayer })
         addAndMakeVisible (c);
 
@@ -346,7 +347,7 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.fromFile.setTooltip ("Gather the one-shots of the open file: the same cuts EXPORT would write");
     p.fromAll.setTooltip ("Gather the one-shots of every file in the list (this takes as long as exporting them)");
     p.folder.setTooltip ("Add a folder of one-shots you already have (its sub-folders too)");
-    p.clear.setTooltip ("Empty the pool. The lanes keep their sounds.");
+    p.clear.setTooltip ("Clear all: empty the pool. Sounds still on a lane stay (Clear lanes first to empty it completely).");
     p.sort.setItemTooltip (0, "Best for the selected lane first: how well it fits, how usable it is, how you rate sounds like it");
     p.sort.setItemTooltip (1, "In the order they were gathered");
     p.fromFile.onClick = [this] { view.proc.kitGather (false); refresh(); };
@@ -376,12 +377,18 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.name.onReturnKey = [this] { unfocusAllComponents(); };
     p.fill.setTooltip ("A sound on every lane that is not locked: the best fit for each, no sound twice, no two alike");
     p.shuffle.setTooltip ("Another kit from the same pool: each open lane takes one of its four best");
+    p.random.setTooltip ("Fresh sounds on every open lane (R): dealt from every sound that fits the lane, ignoring stars and ranking. No sound comes back until all of them have played.");
+    p.anyLane.setTooltip ("Random ignores the lanes' roles: any sound can land on any lane, for stranger kits");
+    p.clearLanes.setTooltip ("Empty every lane that is not locked (Undo brings them back)");
     p.fill.onClick = [this] { view.proc.kitChoose(); refresh(); };
     p.shuffle.onClick = [this] { view.proc.kitShuffle(); refresh(); };
+    p.random.onClick = [this] { view.proc.kitRandom (view.kitLane); refresh(); };
+    p.anyLane.onClick = [this] { view.proc.kitAnyLane = parts->anyLane.getToggleState(); view.proc.stateChanged(); };
+    p.clearLanes.onClick = [this] { view.proc.kitClearLanes(); refresh(); };
     p.undo.onClick = [this] { view.proc.kitUndo(); refresh(); };
     p.redo.onClick = [this] { view.proc.kitRedo(); refresh(); };
     p.undo.setTooltip ("Undo the last change to the lanes (Ctrl+Z)"); p.redo.setTooltip ("Redo (Ctrl+Shift+Z)");
-    p.lanes.setTooltip ("Click a lane to hear it. < and > step through the sounds that fit. LOCK keeps a lane through auto-fill and shuffle. M mutes it in the pattern. Right-click for more.");
+    p.lanes.setTooltip ("Click a lane to hear it. < and > step through the sounds that fit. LOCK keeps a lane through Auto-fill, Shuffle, Random and Clear lanes. M mutes it in the pattern. Right-click for more.");
     p.lanes.onChange = [this] { refresh(); };
 
     // ---- the pattern
@@ -487,7 +494,11 @@ void KitRoom::refresh()
     p.stars.stars = has ? proc.kitRating (ly.item) : 0.0f;
     const bool busy = proc.session.status().busy;
     p.fromFile.setEnabled (view.doc != nullptr && ! busy); p.fromAll.setEnabled (! proc.session.files.empty() && ! busy);
-    p.fill.setEnabled (! kit.pool.empty()); p.shuffle.setEnabled (! kit.pool.empty());
+    p.fill.setEnabled (! kit.pool.empty()); p.shuffle.setEnabled (! kit.pool.empty()); p.random.setEnabled (! kit.pool.empty());
+    p.anyLane.setToggleState (proc.kitAnyLane, juce::dontSendNotification);
+    bool clearable = false; for (const auto& l : kit.lanes) clearable = clearable || (! l.locked && ! l.empty());
+    p.clearLanes.setEnabled (clearable);
+    p.clear.setEnabled (! kit.pool.empty());
     p.undo.setEnabled (proc.kitCanUndo()); p.redo.setEnabled (proc.kitCanRedo());
     bool any = false; for (const auto& l : kit.lanes) any = any || ! l.empty();
     p.save.setEnabled (any);
@@ -520,6 +531,7 @@ bool KitRoom::key (const juce::KeyPress& key)
     if (c == juce::KeyPress::leftKey) { proc.kitNext (view.kitLane, -1); refresh(); return true; }
     if (c == juce::KeyPress::rightKey) { proc.kitNext (view.kitLane, 1); refresh(); return true; }
     if (c == juce::KeyPress::returnKey) { proc.kitPlayLane (view.kitLane); return true; }
+    if (letter == 'r' && ! mods.isCommandDown() && ! mods.isAltDown()) { if (! proc.kit.pool.empty()) proc.kitRandom (view.kitLane); refresh(); return true; }
     return false;
 }
 
@@ -529,7 +541,7 @@ void KitRoom::paint (juce::Graphics& g)
     for (auto r : { p.poolPlate, p.kitPlate, p.lanePlate }) paintPlate (g, r.toFloat(), 12.0f);
     paintLabel (g, "Pool", { p.poolPlate.getX() + 14, p.poolPlate.getY() + 8, 120, 16 }, juce::Justification::centredLeft, 9.5f);
     paintLabel (g, juce::String ((int) kit.pool.size()) + (kit.pool.size() == 1 ? " sound" : " sounds"), { p.poolPlate.getRight() - 134, p.poolPlate.getY() + 8, 120, 16 }, juce::Justification::centredRight, 8.0f, C::dim());
-    paintLabel (g, "Kit", { p.kitPlate.getX() + 14, p.kitPlate.getY() + 12, 30, 16 }, juce::Justification::centredLeft, 9.5f);
+    paintLabel (g, "Kit", { p.kitPlate.getX() + 14, p.kitPlate.getY() + 10, 30, 16 }, juce::Justification::centredLeft, 9.5f);
     paintLabel (g, "Pattern", { p.patternBox.getX(), p.patternBox.getY() - 16, 120, 14 }, juce::Justification::centredLeft, 8.0f);
     g.setFont (font (10.5f)); g.setColour (C::dim());
     g.drawFittedText (p.preset != nullptr ? juce::String (p.preset->family) + ",  " + juce::String (std::max (1, p.preset->pattern.length / 16)) + (p.preset->pattern.length > 16 ? " bars" : " bar") : juce::String(),
@@ -563,9 +575,12 @@ void KitRoom::resized()
       p.hint = { x + 4, 690, p.poolPlate.getWidth() - 28, 32 }; }
     // the kit
     { const int x = p.kitPlate.getX();
-      p.name.setBounds (x + 46, 14, 204, 26);
-      p.fill.setBounds (x + 262, 13, 84, 28); p.shuffle.setBounds (x + 350, 13, 76, 28); p.undo.setBounds (x + 438, 13, 54, 28); p.redo.setBounds (x + 496, 13, 54, 28);
-      p.lanes.setBounds (x + 8, 48, p.kitPlate.getWidth() - 16, 576);
+      p.name.setBounds (x + 46, 12, 300, 26);
+      // the tools: three ways to fill the lanes, the switch for the third, and the way to empty them
+      p.fill.setBounds (x + 14, 46, 80, 28); p.shuffle.setBounds (x + 98, 46, 70, 28); p.random.setBounds (x + 172, 46, 74, 28);
+      p.anyLane.setBounds (x + 252, 48, 88, 24); p.clearLanes.setBounds (x + 344, 46, 92, 28);
+      p.undo.setBounds (x + 488, 46, 54, 28); p.redo.setBounds (x + 546, 46, 54, 28);
+      p.lanes.setBounds (x + 8, 82, p.kitPlate.getWidth() - 16, 544);
       p.play.setBounds (x + 14, 662, 76, 34);
       p.pPrev.setBounds (x + 100, 664, 26, 30); p.patternBox.setBounds (x + 130, 665, 214, 28); p.pNext.setBounds (x + 348, 664, 26, 30);
       p.bpm.setBounds (x + 384, 634, 66, 88); p.swing.setBounds (x + 452, 634, 66, 88);

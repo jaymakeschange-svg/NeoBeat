@@ -2,12 +2,23 @@
 // and the state saved with the project. The same code runs as the standalone app and as the VST3.
 #pragma once
 
+#include <set>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../core/Player.h"
 #include "../core/Session.h"
 #include "../core/Kit.h"
+#include "../core/Loops.h"
+#include "../core/Keys.h"
 #include "../neobeat/shared/LearnerStore.h"
+#include <deque>
+
+// A pool sound in the project's state, and back (KitProc.cpp)
+namespace bcxml
+{
+std::unique_ptr<juce::XmlElement> sound (const bc::PoolItem& it);
+std::shared_ptr<bc::PoolItem> sound (const juce::XmlElement& e, double maxSeconds = 30.0);
+}
 
 // The input recorder: the audio thread writes into chunks the message thread allocates ahead of it.
 class Recorder
@@ -110,7 +121,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
     const juce::String getName() const override { return "Batchcut"; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }          // LOOPS and KEYS play from a keyboard
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
     int getNumPrograms() override { return 1; }
@@ -131,6 +142,8 @@ public:
     static bool isAudioFile (const juce::File& f);
     int addPaths (const juce::StringArray& paths);              // files or folders (searched for audio files); returns how many were new
     void open (int file, int part = 0);
+    void removeFiles (std::vector<int> rows);                    // off the list (the files themselves are not touched)
+    void clearFiles();                                           // Clear all: every file off the list
 
     // playback of the open part. What plays and from where, for the playhead.
     void playEvent (const bc::Event& e);                         // as it will be exported (fades, level)
@@ -160,9 +173,12 @@ public:
     bc::KitPlayer kitPlayer;
     void kitGather (bool allFiles);                              // the open file's one-shots, or every file's, into the pool
     int kitAddFolder (const juce::File& folder);                 // a folder of one-shots into the pool; how many
-    void kitClearPool();
+    void kitClearPool();                                         // Clear all: the pool empties (sounds still in lanes stay)
+    void kitClearLanes();                                        // every lane that is not locked loses its sounds
     void kitChoose();                                            // a sound on every lane that is not locked
     void kitShuffle();                                           // another kit out of the same pool
+    void kitRandom (int lane = 0);                               // RANDOM: fresh sounds dealt with no repeats, no ranking (lane: the one the message counts)
+    bool kitAnyLane = false;                                     // RANDOM ignores the lanes' roles
     void kitAssign (int lane, int layer, int item, bool teach);  // teach: you put it there, so that is what it is
     void kitNext (int lane, int dir);                            // the next (or last) best sound for a lane
     void kitRate (int item, float stars);
@@ -180,6 +196,66 @@ public:
     std::shared_ptr<const bc::KitSound> kitSound (int lane) const { return lane >= 0 && lane < bc::kLanes ? laneSounds[(size_t) lane] : nullptr; }
     juce::String kitMessage;
     int kitVersion = 0;                                          // changes with the kit (the room repaints)
+
+    // ---- LOOPS: the light sample sequencer (message thread). The pool is the Kit room's.
+    bc::LoopSet loops;
+    bc::LoopPlayer loopPlayer;
+    juce::String loopsMessage;
+    int loopsVersion = 0;
+    int loopsAddLayer();                                         // a new layer (from the whole pool), rolled; its index, or -1 (8 already)
+    void loopsRemoveLayer (int layer);
+    void loopsRoll (int layer, bool newSeed = true);             // layer -1: every layer (ROLL ALL); newSeed false: the same roll, new settings
+    bool loopsRerollHit (int layer, int hit);
+    void loopsChanged();                                         // anything changed: the player and the project hear of it
+    void loopsMark();                                            // a change is complete: undoable from here
+    void loopsUndo(); void loopsRedo();
+    bool loopsCanUndo() const noexcept { return ! loopsUndoStack.empty(); }
+    bool loopsCanRedo() const noexcept { return ! loopsRedoStack.empty(); }
+    void loopsPlayHit (int layer, int hit);                      // one chop, as it plays in the loop
+    std::vector<std::string> loopsSources() const;               // the recordings and folders the pool holds sounds from
+    bool loopsExportAudio (const juce::File& dir, bool stems, juce::String& error);   // WAV loops of the mix (and each layer)
+    bool loopsExportMidi (const juce::File& file, juce::String& error);
+    bool loopsSaveNjq (const juce::File& file, juce::String& error);                  // for NeoBeat: the chops as lanes, the loop as a pattern
+    bool loopsBounce (juce::String& error);                      // the loop as one new sound in the pool
+    double loopsRate() const noexcept { return hostRate > 0 ? hostRate : 48000.0; }
+
+    // ---- KEYS: sounds made into an instrument for MidiJaQ (message thread)
+    bc::Instrument keys;
+    bc::KeysPlayer keysPlayer;
+    bc::LoopSource keysSource;                                   // where its sounds come from (in the pool)
+    std::set<std::shared_ptr<const bc::PoolItem>> keysLeftOut;   // sounds LEAVE OUT took out (until the source or the pool changes)
+    juce::MidiKeyboardState keyboard;                            // the on-screen keys
+    std::atomic<int> keysChord { 0 };                            // the on-screen and MIDI keys play chords (0: single notes)
+    std::atomic<int> midiTarget { 2 };                           // where the keys go: 2 LOOPS, 3 KEYS (the last of the two shown)
+    juce::String keysMessage;
+    int keysVersion = 0;
+    std::vector<std::shared_ptr<const bc::PoolItem>> keysSounds() const;
+    void keysBuild();                                            // the instrument from its source's sounds, in its mode
+    void keysChanged();
+    void keysMark();
+    void keysUndo(); void keysRedo();
+    bool keysCanUndo() const noexcept { return ! keysUndoStack.empty(); }
+    bool keysCanRedo() const noexcept { return ! keysRedoStack.empty(); }
+    bool keysSaveNjq (const juce::File& file, juce::String& error);
+    bool keysOpenNjq (const juce::File& file, juce::String& error);
+    static int numChords();
+    static const char* chordName (int i);
+
+private:
+    std::unique_ptr<juce::XmlElement> loopsToXml();
+    void loopsFromXml (const juce::XmlElement&);
+    std::vector<bc::LoopSet> loopsUndoStack, loopsRedoStack;
+    bc::LoopSet loopsSaved;
+    std::deque<std::pair<juce::uint32, std::shared_ptr<const bc::LoopSnapshot>>> loopKeep;   // never freed on the audio thread
+    std::atomic<double> hostBpm { 0.0 };
+    std::unique_ptr<juce::XmlElement> loopsXmlCache; int loopsXmlVersion = -1;
+    std::unique_ptr<juce::XmlElement> keysToXml();
+    void keysFromXml (const juce::XmlElement&);
+    std::vector<bc::Instrument> keysUndoStack, keysRedoStack;
+    bc::Instrument keysSaved;
+    std::deque<std::pair<juce::uint32, std::shared_ptr<const bc::Instrument>>> keysKeep;
+    std::unique_ptr<juce::XmlElement> keysXmlCache; int keysXmlVersion = -1;
+    std::atomic<int> chordRoot { 0 }, chordScale { 3 };         // "In key" chords follow LOOPS' key
 
 private:
     void handleAsyncUpdate() override;

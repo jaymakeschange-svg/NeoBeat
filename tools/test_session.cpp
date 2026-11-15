@@ -286,6 +286,21 @@ int main()
     CHECK (s.status().lastError == "export stopped" || ! s.status().busy, "an export can be stopped");
     s.removeFile (1);
     CHECK (s.files.size() == 3 && (! s.doc() || s.doc()->file != 1), "removing the open file closes it");
+
+    std::printf ("8. Clear all (2.1)\n");
+    {
+        std::vector<std::string> paths; for (const auto& f : s.files) paths.push_back (f.info.path);
+        s.open (0, 0);
+        s.clearFiles();                       // with an open still on its way
+        pump (s);
+        CHECK (s.files.empty() && ! s.doc(), "every file off the list, and nothing opens afterwards");
+        s.addFiles (paths); pump (s);
+        bool read = s.files.size() == paths.size(); int yard = -1;
+        for (int i = 0; i < (int) s.files.size(); ++i) { const auto& f = s.files[(size_t) i]; read = read && (f.info.sr > 0 || ! f.error.empty()); if (f.info.name == "yard") yard = i; }
+        CHECK (read && yard >= 0, "the same files can come straight back (%zu, read again)", s.files.size());
+        s.open (yard, 0); pump (s);
+        CHECK (s.doc() && s.doc()->file == yard && ! s.doc()->events.empty(), "and open, with their events");
+    }
     s.stop();
 
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);

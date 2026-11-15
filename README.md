@@ -1,17 +1,28 @@
-# Batchcut 2.0
+# Batchcut 3.0
 
 Batchcut finds the events in a recording (a ball bouncing in a noisy yard, the hits of a drum loop, clanks in a
-field recording) and cuts them into one-shots, as many files as you like at once. It is a standalone app and a
-VST3 plugin.
+field recording) and cuts them into one-shots, as many files as you like at once. Then it makes things out of
+them: drum kits, loops and playable instruments. It is a standalone app and a VST3 plugin.
 
-**New in 2.0: the kit room.** The **CUT | KIT** switch at the top opens a second room that builds a drum kit for
-NeoBeat out of the one-shots: it works out which of them could be a kick, a snare, a hat and so on, lets you hear
-and change every pick, layers up to three sounds on a lane, plays the kit inside NeoBeat's 128 patterns, and saves
-kit, pattern and tempo as one `.NJQ` file that NeoBeat loads.
+The switch at the top opens its four rooms, which share one pool of one-shots:
+
+* **CUT**: find the events and export the one-shots (and gather them into the pool).
+* **KIT**: a drum kit for NeoBeat, played in NeoBeat's 128 patterns, saved as a `.NJQ` file.
+* **LOOPS** (new in 3.0): loops of up to 8 bars and 8 layers, rolled from the pool by rules you set.
+* **KEYS** (new in 3.0): an instrument to play from a keyboard, built from the pool, saved as a `.NJQ` instrument
+  for MidiJaQ.
+
+**Also new in 3.0, for big batches.** **CLEAR ALL** takes every file off the list (and **REMOVE** takes several at
+once: Shift or Ctrl-click them). In the kit room, **RANDOM** (or **R**) deals fresh sounds: every sound that fits a
+lane, ignoring stars and ranking, and none comes back until all of them have played. **CLEAR LANES** empties every
+lane that is not locked, and the pool's **CLEAR ALL** empties the pool. Batchcut now takes MIDI in (a keyboard, or
+the track in a DAW): LOOPS and KEYS play from it.
 
 ## Quick start
 
 1. Drop recordings or whole folders onto Batchcut (or **ADD FILES**). The first one opens and its events are found.
+   **REMOVE** takes the selected files off the list (Shift or Ctrl-click selects several), **CLEAR ALL** every
+   file, after asking. The files themselves are never touched.
 2. Click an event (the coloured blocks above the spectrogram) to hear it as it will be exported. Arrow keys step through them.
 3. **EXPORT** writes the one-shots of the open file; **EXPORT ALL** does every file in the list.
 
@@ -80,13 +91,18 @@ input back.
 **1. Fill the pool** (left). **THIS FILE** and **ALL FILES** gather the one-shots exactly as EXPORT would cut them
 (the same events, fades and layers), without writing anything. **FOLDER** adds one-shots you already have; dropping
 a folder on the kit room does the same. Each sound is listened to once: what it could play in a kit (the coloured
-tag), how usable it is, how loud it is. The list shows what fits the selected lane first.
+tag), how usable it is, how loud it is. The list shows what fits the selected lane first. The pool holds up to 2,000
+sounds; **CLEAR ALL** empties it (sounds still on a lane stay: CLEAR LANES first to empty it completely).
 
 **2. Fill the lanes** (middle). The 16 lanes are NeoBeat's: kick, kick 2, snare, snare 2, closed hat, open hat,
 hat 3, rim, thud, clank, junk, drop, horn, stab, bell, FX. **AUTO-FILL** puts the best fit on every lane, each sound
-once and no two alike. **SHUFFLE** makes another kit from the same pool. **LOCK** keeps a lane through both.
-**<** and **>** step a lane through its candidates; double-clicking a pool sound puts it on the selected lane.
-**M** mutes a lane in the pattern.
+once and no two alike. **SHUFFLE** makes another kit from each lane's four best, so your favourites come back.
+**RANDOM** (or **R**) is for hearing fresh sounds: each lane deals from every sound that fits it (kick-like sounds
+for the kicks, hats for the hats), ignoring stars and ranking, and no sound comes back until all of them have
+played, the way Tetris deals all seven pieces before it repeats one. The message says how many are still to come.
+**ANY LANE** lets any sound land on any lane, for stranger kits. **CLEAR LANES** empties the lanes. **LOCK** keeps
+a lane through all of these. **<** and **>** step a lane through its candidates; double-clicking a pool sound puts
+it on the selected lane. **M** mutes a lane in the pattern.
 
 **3. Layer** (right). A lane holds up to three layers, each with its own level, offset (earlier or later than the
 others), pitch, fade, the part of the sound that plays (drag the edges of the waveform) and reverse. The lane has a
@@ -106,8 +122,85 @@ both apps. Putting a sound on a lane yourself also teaches it what that lane's k
 is a small file on your computer (`%APPDATA%/Marbelite/Shared/learner.txt`); nothing leaves it.
 
 The kit (lanes, layers and their sounds) is kept with the project; the rest of the pool is gathered again with a
-click. Kit room keys: Space plays, up and down walk the lanes, left and right step through candidates, Enter hears
-the lane, Ctrl+Z / Ctrl+Shift+Z undo and redo changes to the lanes.
+click. Kit room keys: Space plays, R deals RANDOM sounds, up and down walk the lanes, left and right step through
+candidates, Enter hears the lane, Ctrl+Z / Ctrl+Shift+Z undo and redo changes to the lanes.
+
+## The loops room (LOOPS)
+
+A loop is up to **8 layers**, each **1, 2, 4 or 8 bars** long on a grid of 8ths, 16ths or their triplets. A shorter
+layer repeats under a longer one, so a 1-bar hat under a 4-bar melody makes a 4-bar loop. Each layer is filled
+with **chops** (sounds from the pool, cut to note values at the loop's tempo) by its **mode**:
+
+| Mode | What it rolls |
+|---|---|
+| **Slice** | One source's chops in a new order, each running into the next (a break, re-cut) |
+| **Pool** | Low, heavy chops on the strong beats, short bright ones between |
+| **Stutter** | A few chops, repeated and ratcheted |
+| **Melody** | Tuned chops, played in the loop's key and scale (32 scales) |
+
+**1. Choose the sounds** (left): the whole pool, the one-shots of one recording, or one kind (kicks, hats, bells…).
+Each layer takes its sounds from what is chosen when it is rolled. **THIS FILE**, **ALL FILES** and **FOLDER** fill
+the pool as in the kit room.
+
+**2. Roll** (right, for the selected layer). **DENSITY** is how many steps play. **DEJA VU** is how often the layer
+repeats itself: at 0 every bar is new, all the way up one bar loops for ever, in between it comes back to what it
+played before now and then. The rhythm can be the layer's own or **borrowed** from a lane of one of NeoBeat's 128
+patterns. **RANDOM** deals chops from every sound of the source, none again until all have played (as RANDOM in the
+kit room). **ROLL** (**R**) rolls the layer again, **ROLL ALL** (**Shift+R**) every layer; **LOCK** (**L**) keeps a
+chop where it is through every roll. **+ ADD A LAYER** adds one (rolled from what is chosen on the left).
+
+**3. Shape** (the grid, middle). Click a chop to hear it, drag it to move it, double-click an empty step to add one.
+Right-click a chop to re-roll it, lock it, play it backwards, or ratchet it (2 to 4 hits in its step); **PITCH** and
+**LEVEL** change it. Each layer has a level and a pan, **M** mutes it, **S** solos it. **BPM** and **SWING** are the
+loop's (in a DAW the tempo follows the song, and PLAY follows the song's position while the song plays).
+
+**4. Take it out.** **WAV** writes the loop so it loops seamlessly (tails wrap round to the start); **STEMS** writes
+the loop and each layer as its own WAV, all the same length; **MIDI** writes the chops as notes on NeoBeat's lane
+notes (C1 up); **.NJQ** saves it for NeoBeat (up to 16 chops as lanes, the loop as a pattern, and the layers
+written into it too); **BOUNCE TO POOL** makes the loop one new sound in the pool, to layer or put on a kit
+lane. Files go to *Music/Batchcut/Loops*; `.NJQ` files to your NeoBeat preset folder.
+
+**From MIDI.** **Trigger**: a key plays the loop from its start, transposed (C3 as it is). **Slices**: each key from
+C3 up plays one of the selected layer's chops.
+
+The loop (layers, chops, seeds and their sounds) is kept with the project. LOOPS keys: Space plays, R / Shift+R
+roll, up and down choose the layer, left and right step through its chops, Enter hears the chop, Delete removes it,
+L locks it, Ctrl+Z / Ctrl+Shift+Z undo and redo.
+
+## The keys room (KEYS)
+
+KEYS builds an instrument out of the pool and plays it from a MIDI keyboard, the keys on screen or your computer
+keyboard (**A** to **K** play C3 to C4, **W E T Y U** the black keys).
+
+**1. Choose the sounds** (left), as in LOOPS, and **how it plays** (right):
+
+| Mode | The instrument |
+|---|---|
+| **Tuned** | Sounds with a clear pitch, spread over the keys: each covers the keys nearest its own pitch. Sounds of the same pitch become **velocity layers** if one is 4 dB or more louder than another (up to four), and **round robins** (played in turn) if they are alike in loudness. Pitches are measured to a fraction of a cent, so every key is in tune |
+| **Resonator** | Any sound, pitched or not (a drill, a tyre screech, a kick), struck into a resonator tuned to the key: up to 16 sounds, played in turn. **RING** is how long a note rings (50 ms to 6 s, high notes as long as low ones); **BRIGHT** how many overtones ring with it. Only what rings is heard, so a long noise or a kick's boom does not blur the note. Each sound is levelled by how it rings, so a click and a long drill come out alike |
+| **Chops** | A different sound on each key from C2 up, as it is (a kit on the keys) |
+
+**SUSTAIN**: **As recorded** (each sound plays out once), **Loop** (a loop found in the sound's body holds it while
+the key is down, without a click at the seam) or **Hold** (the sound's body frozen, in tune, while the key is down).
+**ATTACK**, **RELEASE**, **GLIDE** and **MONO** (one note at a time, a new key glides from the held one) shape how it
+plays. **CHORDS** makes each key play a chord (major, minor, sevenths, sus, power, or **In key**: three notes of
+LOOPS' key, a third apart).
+
+**2. BUILD** (**B**). The map shows every sound's keys (across) and velocities (up); round robins share a cell. Click
+a sound in the map or the list to hear it and choose it: **TUNE** retunes it in cents, **LEVEL** sets its level,
+**LEAVE OUT** builds the instrument again without it.
+
+**3. SAVE .NJQ** writes the instrument, its sounds lossless, into *Documents/Marbelite/Instruments*, where MidiJaQ
+finds it. **OPEN .NJQ** opens one to play or change. The instrument is also kept with the project.
+
+KEYS keys: B builds, up and down choose a sound, Ctrl+Z / Ctrl+Shift+Z undo and redo, and the computer keyboard
+plays.
+
+## MIDI
+
+Batchcut takes MIDI in: in the standalone app from the MIDI input chosen under Options, in a DAW from its track.
+The room shown last of LOOPS and KEYS gets it, and keeps it while you work in CUT or KIT, so a DAW track can play
+your instrument while you build a kit.
 
 ## Keys
 
@@ -139,6 +232,14 @@ the lane, Ctrl+Z / Ctrl+Shift+Z undo and redo changes to the lanes.
   tonal and transient share, with what was already sounding taken off) and where its onset rose, clustered by
   leader clustering and k-means.
 * Loudness: ITU-R BS.1770 K-weighting at every sample rate, momentary (400 ms) loudness.
+* LOOPS: each layer rolls from its own seed (the same seed always gives the same layer, on every computer). DEJA VU
+  is a loop of remembered steps that a step is drawn from instead of a new one, with the chance set by the knob, in
+  the spirit of the déjà vu of Mutable Instruments' Marbles. Borrowed rhythms are NeoBeat's own patterns.
+* KEYS: pitch by autocorrelation, refined between samples (parabolic interpolation); loops where the sound's body
+  is most alike one period apart, with a crossfade; Hold from overlapping grains started whole periods apart, so they
+  add up in phase. The resonator is a tuned delay line with a damping filter in it, in the manner of Karplus and
+  Strong: its length allows for the delay of the filter and of the in-between read at the note's pitch (else high
+  notes go flat), and its feedback for what they take away each time round.
 
 ## Tested
 
@@ -152,21 +253,38 @@ the lane, Ctrl+Z / Ctrl+Shift+Z undo and redo changes to the lanes.
   gathering one-shots for the kit room (the same cuts as EXPORT).
 * `test_kit`: the kit room's model without any framework: choosing a kit (each sound once, locked lanes kept),
   layers (offset, pitch, trim, reverse, no clipping), the audition player (32 steps in two bars, under the ceiling,
-  silent after STOP).
+  silent after STOP), the dealer and RANDOM (in a pool of 2,000, every sound is dealt before the first repeat),
+  Clear lanes.
+* `test_gen`: the generators LOOPS shares with MidiJaQ: the same seed gives the same numbers on every platform,
+  déjà vu, the shift register, Euclidean rhythms, conditions, swing, the 32 scales.
+* `test_loops`: rolling in every mode, locks and re-rolls, borrowed rhythms, the player against the offline render
+  (sample for sample), tails wrapped round, MIDI Trigger and Slices.
+* `test_keys`: an instrument from seven horns (zones by pitch, a velocity layer, round robins), in tune within a
+  tenth of a cent from C1 to C6, loops and holds that sustain without a click and stay in tune, the release, the
+  resonator (in tune within 2 cents from A1 to A5, dark or bright; a kick rings at the key, not at its boom; it
+  glides), chops on keys, mono with glide.
 * `BatchcutHostTest` (Linux): the plugin and its editor driven as a DAW would, with the real mouse handlers, the
-  kit room end to end (gather, auto-fill, layers, undo, rate, save `.NJQ`, read it back, the kit in the project)
-  and a long random session. The `.NJQ` it writes is loaded and played by NeoBeat 3.0's own host test.
+  kit room end to end (gather, auto-fill, layers, undo, rate, save `.NJQ`, read it back, the kit in the project),
+  RANDOM, Clear lanes, Remove and Clear all (with an export under way), LOOPS (roll, edit, play from MIDI, every
+  export, the loop in the project), KEYS (build, play from MIDI in tune, chords, save and open a `.NJQ` instrument,
+  the instrument in the project, keys let go on leaving the room), and a long random session in all four rooms. The
+  `.NJQ` files it writes are loaded and played by NeoBeat 3.0's own host test.
 * pluginval at strictness 10 on the Windows build.
 
-## Batchcut and NeoBeat
+## Batchcut, NeoBeat and MidiJaQ
 
-The two are separate programs. They share one file format and one learner, through a handful of headers kept
-identical in both source trees (`Source/neobeat/` here): the sequencer and its 128 patterns, the sound analysis,
-the learner, the loudness meter and the `.NJQ` reader and writer. Neither needs the other installed.
+They are separate programs. They share one file format and one learner, through a handful of headers kept
+identical in every source tree (`Source/neobeat/` here): the sequencer and its 128 patterns, the sound analysis,
+the learner, the loudness meter, the generators and the `.NJQ` reader and writer. None needs another installed.
+
+`.NJQ` files are version 2 from 3.0 on. A file says what it is: a **kit** (16 lanes and a pattern, from the kit
+room), a **loop** (the same, plus the loop's layers) or an **instrument** (from
+KEYS, for MidiJaQ). NeoBeat 3.0 opens kits and loops (and older, version 1 files); instruments it leaves to
+MidiJaQ.
 
 ## Building
 
 ```
 cmake -B build                      # fetches JUCE 8.0.15 (or -DJUCE_DIR=path/to/JUCE)
-cmake --build build --config Release --target Batchcut_VST3 Batchcut_Standalone test_engine test_session test_kit
+cmake --build build --config Release --target Batchcut_VST3 Batchcut_Standalone test_engine test_session test_kit test_gen test_loops test_keys
 ```

@@ -4,6 +4,13 @@
 //   manifest.xml       name, tempo, swing, the 16 lanes (what each plays and how it is set), scenes A-D, the chain
 //   samples/laneNN.flac   each lane's own sound, lossless (a lane that plays one of NeoBeat's stock sounds has none)
 // Batchcut's Kit room writes them; NeoBeat reads and writes them.
+//
+// Version 2 (Batchcut 3.0) adds, without taking anything away (NeoBeat 3.0 opens a version 2 kit as it is):
+//   kind               "kit" (the default), "loop" (a LOOPS loop: its chops as lanes, the loop as scene A, and
+//                      a LOOP part describing the layers), "instrument" (KEYS: a playable instrument for
+//                      MidiJaQ; no lanes), and later "pattern" and "rack"
+//   extra parts        any other element in the manifest is kept as it is and handed back on loading
+//   files              extra entries in the zip (an instrument's zones) travel with the file
 #pragma once
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -27,6 +34,10 @@ struct Lane
 struct Kit
 {
     juce::String name = "Untitled", author, madeWith;
+    juce::String kind = "kit";                                       // "kit", "loop", "instrument" ... (version 2)
+    std::vector<std::shared_ptr<juce::XmlElement>> extras;          // other parts of the manifest (version 2)
+    std::vector<std::pair<juce::String, std::shared_ptr<juce::MemoryBlock>>> files;   // other entries of the zip (version 2)
+    const juce::XmlElement* extra (const juce::String& tag) const { for (const auto& e : extras) if (e != nullptr && e->hasTagName (tag)) return e.get(); return nullptr; }
     double bpm = 120.0;
     float swing = 0.62f;
     std::array<Lane, 16> lanes;
@@ -38,7 +49,8 @@ struct Kit
 inline bool save (const juce::File& file, const Kit& kit, juce::String& error)
 {
     juce::XmlElement root ("NJQ");
-    root.setAttribute ("version", 1);
+    root.setAttribute ("version", 2);
+    if (kit.kind.isNotEmpty() && kit.kind != "kit") root.setAttribute ("kind", kit.kind);
     root.setAttribute ("name", kit.name); root.setAttribute ("author", kit.author); root.setAttribute ("madeWith", kit.madeWith);
     root.setAttribute ("bpm", kit.bpm); root.setAttribute ("swing", (double) kit.swing); root.setAttribute ("patternIndex", kit.patternIndex);
     juce::ZipFile::Builder zip;
@@ -82,6 +94,8 @@ inline bool save (const juce::File& file, const Kit& kit, juce::String& error)
         io::writePattern (*e, kit.scenes[(size_t) s]);
     }
     io::writeSong (*root.createNewChildElement ("SONG"), kit.song);
+    for (const auto& e : kit.extras) if (e != nullptr) root.addChildElement (new juce::XmlElement (*e));
+    for (const auto& f : kit.files) if (f.second != nullptr) zip.addEntry (new juce::MemoryInputStream (*f.second, false), 0, f.first, juce::Time::getCurrentTime());
     const juce::String xml = root.toString();
     zip.addEntry (new juce::MemoryInputStream (xml.toRawUTF8(), xml.getNumBytesAsUTF8(), true), 9, "manifest.xml", juce::Time::getCurrentTime());
     // write beside the target, then move it into place: a failed save never leaves half a file
@@ -113,6 +127,18 @@ inline bool load (const juce::File& file, Kit& kit, juce::String& error, bool sa
     kit.bpm = juce::jlimit (30.0, 300.0, xml->getDoubleAttribute ("bpm", 120.0));
     kit.swing = (float) juce::jlimit (0.5, 0.75, xml->getDoubleAttribute ("swing", 0.62));
     kit.patternIndex = xml->getIntAttribute ("patternIndex", -1);
+    kit.kind = xml->getStringAttribute ("kind", "kit");
+    for (auto* e : xml->getChildIterator())
+        if (! e->hasTagName ("LANE") && ! e->hasTagName ("SCENE") && ! e->hasTagName ("SONG")) kit.extras.push_back (std::make_shared<juce::XmlElement> (*e));
+    if (samples)
+        for (int i = 0; i < zip.getNumEntries(); ++i)
+        {
+            const auto* ze = zip.getEntry (i);
+            if (ze == nullptr || ze->filename == "manifest.xml" || ze->filename.startsWith ("samples/")) continue;
+            auto mb = std::make_shared<juce::MemoryBlock>();
+            std::unique_ptr<juce::InputStream> zs (zip.createStreamForEntry (i));
+            if (zs != nullptr) { zs->readIntoMemoryBlock (*mb); kit.files.push_back ({ ze->filename, mb }); }
+        }
     juce::FlacAudioFormat flac;
     for (auto* e : xml->getChildWithTagNameIterator ("LANE"))
     {

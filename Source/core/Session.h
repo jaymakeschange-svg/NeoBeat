@@ -203,6 +203,19 @@ public:
         else if (d && d->file > i) { auto c = std::make_shared<Doc> (*d); --c->file; setDoc (c); }
     }
 
+    // Clear all: every file off the list. What is still waiting to read or open them is dropped (an export or
+    // a gather already under way finishes: it has its own copy of the files).
+    void clearFiles()
+    {
+        files.clear();
+        setDoc (nullptr);
+        {
+            std::lock_guard<std::mutex> lock (mutex);
+            tasks.erase (std::remove_if (tasks.begin(), tasks.end(), [] (const Task& x) { return x.kind == Task::Open || x.kind == Task::Detect || x.kind == Task::Probe; }), tasks.end());
+            if (runningKind == Task::Open || runningKind == Task::Detect) cancel = true;
+        }
+    }
+
     // opens part `part` of file i (read and analysed on the worker)
     void open (int i, int part = 0)
     {

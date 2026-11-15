@@ -3,6 +3,8 @@
 #include "State.h"
 #include "Editor.h"
 
+int bcExpandChord (int chord, int root, int scaleIndex, const bc::KeysNote& in, bc::KeysNote* out, int room);   // KeysProc.cpp
+
 juce::AudioProcessorValueTreeState::ParameterLayout BcProcessor::layout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout l;
@@ -84,13 +86,35 @@ void BcProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     recorder.prepare (hostRate);
     kitPlayer.prepare (hostRate);
     kitSetPattern (kit.pattern);
+    loopPlayer.prepare (hostRate);
+    loopsChanged();
+    keysPlayer.prepare (hostRate);
+    keysChanged();
     scratch.assign ((size_t) std::max (1, samplesPerBlock), 0.0f);
 }
 
 void BcProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+    // the keys played (LOOPS: Trigger and Slices; KEYS), the on-screen keys among them, and where the host is
+    keyboard.processNextMidiBuffer (midi, 0, buffer.getNumSamples(), true);
+    std::array<bc::LoopNote, 128> notes; int numNotes = 0;
+    for (const auto meta : midi)
+    {
+        if (numNotes >= (int) notes.size()) break;
+        const auto m = meta.getMessage();
+        if (m.isNoteOn()) notes[(size_t) numNotes++] = { meta.samplePosition, m.getNoteNumber(), m.getFloatVelocity(), true };
+        else if (m.isNoteOff()) notes[(size_t) numNotes++] = { meta.samplePosition, m.getNoteNumber(), 0.0f, false };
+    }
     midi.clear();
+    bc::LoopHost host;
+    if (auto* ph = getPlayHead())
+        if (const auto pos = ph->getPosition())
+        {
+            if (const auto ppq = pos->getPpqPosition()) { host.valid = true; host.ppq = *ppq; host.playing = pos->getIsPlaying(); }
+            if (const auto bpm = pos->getBpm()) host.bpm = *bpm; else host.valid = false;
+        }
+    hostBpm.store (host.valid && wrapperType != wrapperType_Standalone ? host.bpm : 0.0);
     const int n = buffer.getNumSamples();
     const int inCh = getTotalNumInputChannels(), outCh = getTotalNumOutputChannels();
     if (n <= 0 || outCh <= 0) return;
@@ -108,6 +132,19 @@ void BcProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         preview.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, hostRate, gain);
         kitPlayer.level.store (gain);
         kitPlayer.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
+        // the keys go to LOOPS or to KEYS, whichever of the two was shown last
+        const bool toKeys = midiTarget.load() == 3;
+        std::array<bc::KeysNote, 512> kn; int numKn = 0;
+        if (toKeys)
+            for (int i = 0; i < numNotes; ++i)
+            {
+                const bc::KeysNote e { notes[(size_t) i].offset, notes[(size_t) i].note, notes[(size_t) i].velocity, notes[(size_t) i].on };
+                numKn += bcExpandChord (keysChord.load(), chordRoot.load(), chordScale.load(), e, kn.data() + numKn, (int) kn.size() - numKn);
+            }
+        loopPlayer.level.store (gain);
+        loopPlayer.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, host, toKeys ? nullptr : notes.data(), toKeys ? 0 : numNotes);
+        keysPlayer.level.store (gain);
+        keysPlayer.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, kn.data(), numKn);
     }
     else
     {
@@ -163,6 +200,45 @@ void BcProcessor::open (int file, int part)
     viewStart = viewEnd = 0.0;   // the editor fits the new part
     session.open (file, openPart);
     stateChanged();
+}
+
+void BcProcessor::removeFiles (std::vector<int> rows)
+{
+    std::sort (rows.begin(), rows.end());
+    rows.erase (std::unique (rows.begin(), rows.end()), rows.end());
+    rows.erase (std::remove_if (rows.begin(), rows.end(), [this] (int r) { return r < 0 || r >= (int) session.files.size(); }), rows.end());
+    if (rows.empty()) return;
+    const auto d = session.doc();
+    const int openRow = d ? d->file : -1;
+    const bool openGoes = openRow >= 0 && std::binary_search (rows.begin(), rows.end(), openRow);
+    if (openGoes) stopPlayback();
+    for (auto r = rows.rbegin(); r != rows.rend(); ++r)
+    {
+        session.removeFile (*r);
+        if (openFile == *r) openFile = -1; else if (openFile > *r) --openFile;
+    }
+    const int n = (int) rows.size();
+    lastMessage = "Took " + juce::String (n) + (n == 1 ? " file" : " files") + " off the list";
+    stateChanged();
+    sendChangeMessage();
+    if (openGoes && ! session.files.empty())
+    {
+        // the first file left after the one that was open
+        const int below = (int) (std::lower_bound (rows.begin(), rows.end(), openRow) - rows.begin());
+        open (std::min (openRow - below, (int) session.files.size() - 1), 0);
+    }
+}
+
+void BcProcessor::clearFiles()
+{
+    const int n = (int) session.files.size();
+    if (n == 0) return;
+    stopPlayback();
+    session.clearFiles();
+    openFile = -1; openPart = 0; viewStart = viewEnd = 0.0;
+    lastMessage = "Took all " + juce::String (n) + (n == 1 ? " file" : " files") + " off the list (the files themselves are untouched; the kit pool keeps its sounds)";
+    stateChanged();
+    sendChangeMessage();
 }
 
 // ---------------------------------------------------------------- playback
@@ -286,6 +362,10 @@ void BcProcessor::refreshStateCache()
     v->setAttribute ("start", viewStart); v->setAttribute ("end", viewEnd);
     if (kitXmlVersion != kitVersion || kitXmlCache == nullptr) { kitXmlCache = kitToXml(); kitXmlVersion = kitVersion; }   // (its sounds are encoded only when the kit changed)
     root.addChildElement (new juce::XmlElement (*kitXmlCache));
+    if (loopsXmlVersion != loopsVersion || loopsXmlCache == nullptr) { loopsXmlCache = loopsToXml(); loopsXmlVersion = loopsVersion; }
+    root.addChildElement (new juce::XmlElement (*loopsXmlCache));
+    if (keysXmlVersion != keysVersion || keysXmlCache == nullptr) { keysXmlCache = keysToXml(); keysXmlVersion = keysVersion; }
+    root.addChildElement (new juce::XmlElement (*keysXmlCache));
     juce::MemoryBlock mb;
     copyXmlToBinary (root, mb);
     const juce::ScopedLock sl (stateLock);
@@ -316,6 +396,8 @@ void BcProcessor::applyState (const juce::XmlElement& root)
     stopPlayback();
     if (recorder.isRecording()) stopRecording();
     if (auto* k = root.getChildByName ("KIT")) kitFromXml (*k);
+    if (auto* lp = root.getChildByName ("LOOPS")) loopsFromXml (*lp);
+    if (auto* ks = root.getChildByName ("KEYS")) keysFromXml (*ks);
     if (auto* s = root.getChildByName ("SESSION"))
     {
         std::vector<std::string> paths;
@@ -357,6 +439,13 @@ void BcProcessor::timerCallback()
     if (playDoc != nullptr && ! preview.playing()) { playDoc = nullptr; playingEvent = false; }
     // a host that asks for the state from another thread still gets a recent one
     if (++ticks % 20 == 0 && stateDirty) refreshStateCache();
+    // LOOPS: the snapshots the player may still be reading stay alive 15 s; in a DAW the loop takes the song's tempo
+    const auto now = juce::Time::getMillisecondCounter();
+    while (loopKeep.size() > 1 && now - loopKeep.front().first > 15000) loopKeep.pop_front();
+    while (keysKeep.size() > 1 && now - keysKeep.front().first > 30000) keysKeep.pop_front();
+    chordRoot.store (loops.root); chordScale.store (loops.scale);
+    const double hb = hostBpm.load();
+    if (hb > 1.0 && std::fabs (hb - loops.bpm) > 0.01) { loops.bpm = hb; loopsSaved.bpm = hb; ++loopsVersion; stateDirty = true; }
 }
 
 juce::AudioProcessorEditor* BcProcessor::createEditor() { return new BcEditor (*this); }

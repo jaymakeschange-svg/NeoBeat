@@ -24,8 +24,10 @@ struct View
     std::function<void()> repaintAll;     // something on screen changed
     std::function<void()> refreshPanels;  // the panels show something that changed
     std::function<void()> hoverChanged;   // the readout under the display changed
-    int room = 0;                         // 0 the cut room, 1 the kit room
+    int room = 0;                         // 0 the cut room, 1 the kit room, 2 LOOPS, 3 KEYS
     int kitLane = 0, kitLayer = 0, kitItem = -1;   // what is selected in the kit room
+    int loopLayer = 0, loopHit = -1;      // what is selected in LOOPS
+    int keysZone = -1;                    // what is selected in KEYS
     std::function<void()> roomChanged;
 
     double length() const noexcept { return doc && doc->audio ? (double) doc->audio->size() / doc->audio->sr : 0.0; }
@@ -181,9 +183,14 @@ private:
     void listBoxItemClicked (int row, const juce::MouseEvent&) override;
     void deleteKeyPressed (int row) override;
     juce::String getTooltipForRow (int row) override;
+    void removeSelected();
+public:
+    void confirmClearAll();                  // Clear all, after asking (the host test answers for itself)
+    std::function<void (std::function<void (bool)>)> ask;   // set by tests: replaces the question
+private:
     View& view;
     juce::ListBox list;
-    bcui::Pill addFiles { "Add files" }, addFolder { "Add folder" }, remove { "Remove" };
+    bcui::Pill addFiles { "Add files" }, addFolder { "Add folder" }, remove { "Remove" }, clearAll { "Clear all" };
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
@@ -294,7 +301,7 @@ public:
     void refresh();
 private:
     View& view;
-    bcui::Segmented rooms { { "Cut", "Kit" } };
+    bcui::Segmented rooms { { "Cut", "Kit", "Loops", "Keys" } };
     bcui::Pill play { "Play" }, rec { "Record" }, exp { "Export" }, expAll { "Export all" };
     bcui::Gem loop { "Loop" };
     juce::Rectangle<int> lcd;
@@ -322,6 +329,52 @@ private:
     bool wasBusy = false;
 };
 
+// ---------------------------------------------------------------- LOOPS (LoopsRoom.cpp)
+// The light sample sequencer: where the sounds come from on the left, the layers of chops in the middle,
+// the selected layer and chop on the right.
+class LoopsRoom final : public juce::Component, private juce::Timer
+{
+public:
+    explicit LoopsRoom (View& v);
+    ~LoopsRoom() override;
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void visibilityChanged() override;
+    void refresh();
+    bool key (const juce::KeyPress&);
+    juce::Component& grid();                // for the tests
+private:
+    void timerCallback() override;
+    struct Parts;
+    View& view;
+    std::unique_ptr<Parts> parts;
+    int seenVersion = -1, seenPool = -1;
+    double seenBeat = -2.0;
+};
+
+// ---------------------------------------------------------------- KEYS (KeysRoom.cpp)
+// Sounds made into an instrument: where they come from on the left, the keyboard map and the keys to play in
+// the middle, how it plays on the right.
+class KeysRoom final : public juce::Component, private juce::Timer
+{
+public:
+    explicit KeysRoom (View& v);
+    ~KeysRoom() override;
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void refresh();
+    bool key (const juce::KeyPress&);
+    bool keyState (bool isKeyDown);                 // the computer keyboard as keys (A to K: C3 to C4)
+    void letGo();                                   // every key up
+    juce::Component& map();                 // for the tests
+private:
+    void timerCallback() override;
+    struct Parts;
+    View& view;
+    std::unique_ptr<Parts> parts;
+    int seenVersion = -1, seenPool = -1;
+};
+
 // ---------------------------------------------------------------- the editor
 
 class BcEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::ChangeListener, private juce::Timer
@@ -333,6 +386,8 @@ public:
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+    bool keyStateChanged (bool isKeyDown) override;
+    void focusLost (FocusChangeType) override;
     bool isInterestedInFileDrag (const juce::StringArray&) override;
     void filesDropped (const juce::StringArray&, int, int) override;
     void fileDragEnter (const juce::StringArray&, int, int) override { dropping = true; repaint(); }
@@ -342,6 +397,9 @@ public:
     View& getView() noexcept { return view; }
     Inspector& getInspector() noexcept { return content.inspector; }
     KitRoom& getKitRoom() noexcept { return content.kitRoom; }
+    LoopsRoom& getLoopsRoom() noexcept { return content.loopsRoom; }
+    KeysRoom& getKeysRoom() noexcept { return content.keysRoom; }
+    FileList& getFiles() noexcept { return content.files; }
     void showRoom (int room) { view.room = room; if (view.roomChanged) view.roomChanged(); }
     SpecView& getSpec() noexcept { return content.spec; }
     EventLane& getLane() noexcept { return content.lane; }
@@ -362,7 +420,7 @@ private:
         juce::String toolHint() const;
         View& view;
         void showRoom();
-        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; KitRoom kitRoom;
+        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; KitRoom kitRoom; LoopsRoom loopsRoom; KeysRoom keysRoom;
         bcui::Segmented tools { { "Box", "Brush", "Lasso", "Wand" } };
         juce::ComboBox layerBox;
         bcui::Pill erase { "Erase" }, down { "-6 dB" }, up { "+6 dB" }, toLayer { "To layer" }, undo { "Undo" }, redo { "Redo" };

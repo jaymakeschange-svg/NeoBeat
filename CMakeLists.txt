@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.22)
-project (Batchcut VERSION 2.0.0 LANGUAGES C CXX)
+project (Batchcut VERSION 3.0.0 LANGUAGES C CXX)
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,7 +31,7 @@ juce_add_plugin (Batchcut
     FORMATS VST3 Standalone
     PRODUCT_NAME "Batchcut"
     IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
@@ -44,7 +44,11 @@ set (BATCHCUT_APP_SOURCES
     Source/app/Display.cpp
     Source/app/Panels.cpp
     Source/app/KitProc.cpp
-    Source/app/KitRoom.cpp)
+    Source/app/KitRoom.cpp
+    Source/app/LoopsProc.cpp
+    Source/app/LoopsRoom.cpp
+    Source/app/KeysProc.cpp
+    Source/app/KeysRoom.cpp)
 
 set (BATCHCUT_DEFINITIONS
     JUCE_WEB_BROWSER=0
@@ -52,7 +56,8 @@ set (BATCHCUT_DEFINITIONS
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
-    JUCE_REPORT_APP_USAGE=0)
+    JUCE_REPORT_APP_USAGE=0
+    BATCHCUT_VERSION="${PROJECT_VERSION}")
 
 target_sources (Batchcut PRIVATE ${BATCHCUT_APP_SOURCES})
 target_include_directories (Batchcut PRIVATE Source)
@@ -67,7 +72,7 @@ target_link_libraries (Batchcut
 # Framework-free tests: the engine (detection, layers, loudness, player), the session (files, parts, export)
 # and the detection benchmark, all on the exact code the plugin uses.
 find_package (Threads REQUIRED)
-foreach (t test_engine test_session test_kit bench_detect)
+foreach (t test_engine test_session test_kit test_gen test_loops test_keys bench_detect)
     add_executable (${t} tools/${t}.cpp)
     target_include_directories (${t} PRIVATE Source)
     target_link_libraries (${t} PRIVATE Threads::Threads)

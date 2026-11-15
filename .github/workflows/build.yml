@@ -2,7 +2,7 @@ name: Build Batchcut (Windows)
 
 on:
   push:
-    branches: [ batchcut, batchcut-2.0 ]
+    branches: [ batchcut, batchcut-2.0, batchcut-3.0 ]
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build the app, the plugin and the tests
-        run: cmake --build build --config Release --parallel --target Batchcut_VST3 Batchcut_Standalone test_engine test_session test_kit bench_detect
+        run: cmake --build build --config Release --parallel --target Batchcut_VST3 Batchcut_Standalone test_engine test_session test_kit test_gen test_loops test_keys bench_detect
 
       - name: Engine tests (detection, layers, edits, export, loudness, the preview player)
         run: build\Release\test_engine.exe
@@ -28,6 +28,18 @@ jobs:
       - name: Kit room tests (choosing a kit, layers, the audition player)
         if: ${{ !cancelled() }}
         run: build\Release\test_kit.exe
+
+      - name: Generator tests (the same numbers on every platform, deja vu, Euclid, scales)
+        if: ${{ !cancelled() }}
+        run: build\Release\test_gen.exe
+
+      - name: LOOPS tests (rolling, locks, the player against the render, MIDI)
+        if: ${{ !cancelled() }}
+        run: build\Release\test_loops.exe
+
+      - name: KEYS tests (in tune, loops and holds, velocity layers, the resonator)
+        if: ${{ !cancelled() }}
+        run: build\Release\test_keys.exe
 
       - name: Detection benchmark (field scenes, for the record)
         if: ${{ !cancelled() }}

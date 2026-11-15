@@ -6,10 +6,12 @@
 //                 usable it is (SoundAnalysis.h), how much you are likely to like it (Learner.h)
 //   a lane        up to three layers of pool sounds, each with level, offset, pitch, trim, fade, reverse
 //   flatten       a lane as one sound, the way NeoBeat will play it
+//   randomize     RANDOM: every sound that fits a lane, dealt with no repeats and no ranking (2.1)
 //   KitPlayer     the kit played by one of NeoBeat's 128 patterns, at the kit's tempo and swing
 #pragma once
 
 #include "../neobeat/engine/PatternBank.h"
+#include "../neobeat/gen/Dealer.h"
 #include "../neobeat/shared/Learner.h"
 #include "../neobeat/shared/Loudness.h"
 #include <algorithm>
@@ -148,6 +150,63 @@ struct KitModel
         }
     }
 
+    // Clear lanes: every lane that is not locked loses its sounds
+    int clearLanes()
+    {
+        int n = 0;
+        for (auto& ln : lanes) if (! ln.locked && ! ln.empty()) { ln.layers = {}; ++n; }
+        return n;
+    }
+
+    // ---- RANDOM (Batchcut 3.0)
+    // Shuffle picks among each lane's four best, so the same favourites keep coming back. RANDOM deals:
+    // each lane has a deck of every sound that fits it, shuffled, and no sound comes round again until the
+    // whole deck has played. Stars and ranking are not asked. With anyLane every sound fits every lane, and
+    // one deck serves all sixteen.
+    //
+    // A sound fits a lane when it is heard as that kind of sound: the lanes come in families (the two kicks,
+    // the two snares, the three hats, then one lane each), and a sound fits every lane of each family it
+    // is nearly as likely to be as its likeliest (at least 60% as likely).
+    static int familyOf (int lane) noexcept
+    {
+        static const int fam[nbk::kRoles] = { 0, 0, 1, 1, 2, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+        return fam[std::max (0, std::min (lane, nbk::kRoles - 1))];
+    }
+    static bool fits (const PoolItem& it, int lane)
+    {
+        if (! it.f.valid) return false;
+        std::array<float, 12> fp {};
+        for (int k = 0; k < nbk::kRoles; ++k) fp[(size_t) familyOf (k)] += it.roles[(size_t) k];
+        const float top = *std::max_element (fp.begin(), fp.end());
+        return fp[(size_t) familyOf (lane)] >= 0.6f * top;
+    }
+
+    // the pool was replaced or cleared (its numbers changed): the decks start again
+    void poolReplaced() noexcept { ++poolGen; }
+
+    // returns how many lanes were dealt a sound
+    int randomize (bool anyLane, uint32_t seed)
+    {
+        syncDecks (seed);
+        std::vector<char> taken (pool.size(), 0);
+        for (const auto& ln : lanes) if (ln.locked) for (const auto& ly : ln.layers) if (ly.item >= 0 && ly.item < (int) taken.size()) taken[(size_t) ly.item] = 1;
+        int dealt = 0;
+        for (int l = 0; l < kLanes; ++l)
+        {
+            auto& ln = lanes[(size_t) l];
+            if (ln.locked) continue;
+            auto& deck = anyLane ? anyDeck : decks[(size_t) l];
+            const int i = deck.deal ([&] (int c) { return c >= 0 && c < (int) taken.size() && ! taken[(size_t) c]; });
+            ln.layers = {};
+            if (i < 0) continue;
+            ln.layers[0].item = i; taken[(size_t) i] = 1; ++dealt;
+        }
+        return dealt;
+    }
+    // for the message: how many of a lane's sounds have still to come before one repeats, out of how many
+    int deckRemaining (int lane, bool anyLane) const { return anyLane ? anyDeck.remaining() : decks[(size_t) std::max (0, std::min (lane, kLanes - 1))].remaining(); }
+    int deckSize (int lane, bool anyLane) const { return anyLane ? anyDeck.size() : decks[(size_t) std::max (0, std::min (lane, kLanes - 1))].size(); }
+
     // A lane as one sound: its layers trimmed, turned, tuned, placed and mixed. False when it is empty.
     bool flatten (int lane, KitSound& out) const
     {
@@ -197,6 +256,43 @@ struct KitModel
         out.pan = ln.pan;
         return true;
     }
+
+private:
+    // the decks follow the pool: sounds added since the last deal join the rounds under way
+    void syncDecks (uint32_t seed)
+    {
+        if (decksGen != poolGen || dealtFor > pool.size())
+        {
+            for (int l = 0; l < kLanes; ++l) decks[(size_t) l].reset (fitting (l, 0), seed + 7919u * (uint32_t) l);
+            std::vector<int> all; for (int i = 0; i < (int) pool.size(); ++i) if (pool[(size_t) i]->f.valid) all.push_back (i);
+            anyDeck.reset (all, seed ^ 0x9e3779b9u);
+            decksGen = poolGen; dealtFor = pool.size();
+            return;
+        }
+        if (dealtFor == pool.size()) return;
+        for (int l = 0; l < kLanes; ++l) decks[(size_t) l].add (fitting (l, (int) dealtFor));
+        std::vector<int> fresh; for (int i = (int) dealtFor; i < (int) pool.size(); ++i) if (pool[(size_t) i]->f.valid) fresh.push_back (i);
+        anyDeck.add (fresh);
+        dealtFor = pool.size();
+    }
+    // the sounds from `from` on that fit a lane; a lane nothing fits takes the four nearest
+    std::vector<int> fitting (int lane, int from) const
+    {
+        std::vector<int> out;
+        for (int i = from; i < (int) pool.size(); ++i) if (fits (*pool[(size_t) i], lane)) out.push_back (i);
+        if (from == 0 && out.size() < 4)
+        {
+            std::vector<std::pair<float, int>> near;
+            for (int i = 0; i < (int) pool.size(); ++i) if (pool[(size_t) i]->f.valid) near.push_back ({ pool[(size_t) i]->roles[(size_t) lane], i });
+            std::stable_sort (near.begin(), near.end(), [] (const std::pair<float, int>& a, const std::pair<float, int>& b) { return a.first > b.first; });
+            for (const auto& n : near) { if (out.size() >= 4) break; if (std::find (out.begin(), out.end(), n.second) == out.end()) out.push_back (n.second); }
+        }
+        return out;
+    }
+    std::array<gen::Dealer, kLanes> decks {};
+    gen::Dealer anyDeck;
+    uint64_t poolGen = 0, decksGen = ~(uint64_t) 0;
+    size_t dealtFor = 0;
 };
 
 // ------------------------------------------------------------------ the audition player (audio thread)

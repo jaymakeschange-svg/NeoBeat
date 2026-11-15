@@ -37,11 +37,13 @@ FileList::FileList (View& v) : view (v)
     list.setRowHeight (38);
     list.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
     list.setColour (juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
+    list.setMultipleSelectionEnabled (true);
     addAndMakeVisible (list);
-    for (auto* b : { &addFiles, &addFolder, &remove }) addAndMakeVisible (b);
+    for (auto* b : { &addFiles, &addFolder, &remove, &clearAll }) addAndMakeVisible (b);
     addFiles.setTooltip ("Add audio files (or drop them anywhere on Batchcut)");
     addFolder.setTooltip ("Add every audio file in a folder and the folders inside it");
-    remove.setTooltip ("Take the selected file off the list (the file itself is not touched)");
+    remove.setTooltip ("Take the selected files off the list (Shift or Ctrl-click selects several). The files themselves are not touched.");
+    clearAll.setTooltip ("Take every file off the list. The files themselves are not touched, and the kit pool keeps its sounds.");
     addFiles.onClick = [this]
     {
         chooser = std::make_unique<juce::FileChooser> ("Add audio files", juce::File::getSpecialLocation (juce::File::userMusicDirectory), kAudioWildcard);
@@ -63,7 +65,36 @@ FileList::FileList (View& v) : view (v)
                                   view.refreshPanels();
                               });
     };
-    remove.onClick = [this] { deleteKeyPressed (list.getSelectedRow()); };
+    remove.onClick = [this] { removeSelected(); };
+    clearAll.onClick = [this] { confirmClearAll(); };
+}
+
+void FileList::removeSelected()
+{
+    std::vector<int> rows;
+    const auto sel = list.getSelectedRows();
+    for (int i = 0; i < sel.size(); ++i) rows.push_back (sel[i]);
+    list.deselectAllRows();
+    view.proc.removeFiles (rows);
+    view.refreshPanels();
+}
+
+void FileList::confirmClearAll()
+{
+    const int n = getNumRows();
+    if (n == 0) return;
+    auto go = [safe = juce::Component::SafePointer<FileList> (this)] (bool yes)
+    {
+        if (safe == nullptr || ! yes) return;
+        safe->list.deselectAllRows();
+        safe->view.proc.clearFiles();
+        safe->view.refreshPanels();
+    };
+    if (ask) { ask (go); return; }
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon).withTitle ("Clear all")
+                                      .withMessage ("Take all " + juce::String (n) + (n == 1 ? " file" : " files") + " off the list?\n\nTheir cuts and edits go with them. The files themselves stay where they are, and the kit pool keeps its sounds.")
+                                      .withButton ("Clear all").withButton ("Cancel").withAssociatedComponent (this),
+                                  [go] (int r) { go (r == 1); });
 }
 
 void FileList::paint (juce::Graphics& g)
@@ -81,18 +112,23 @@ void FileList::paint (juce::Graphics& g)
 void FileList::resized()
 {
     list.setBounds (12, 30, getWidth() - 24, getHeight() - 30 - 82);
-    const int y = getHeight() - 76;
-    addFiles.setBounds (10, y, (getWidth() - 24) / 2, 30);
-    addFolder.setBounds (14 + (getWidth() - 24) / 2, y, (getWidth() - 24) / 2, 30);
-    remove.setBounds (10, y + 36, getWidth() - 20, 28);
+    const int y = getHeight() - 76, half = (getWidth() - 24) / 2;
+    addFiles.setBounds (10, y, half, 30);
+    addFolder.setBounds (14 + half, y, half, 30);
+    remove.setBounds (10, y + 36, half, 28);
+    clearAll.setBounds (14 + half, y + 36, half, 28);
 }
 
 void FileList::refresh()
 {
     list.updateContent();
     const int open = view.doc ? view.doc->file : view.proc.openFile;
-    if (open >= 0 && open < getNumRows()) list.selectRow (open, true, true); else list.deselectAllRows();
-    remove.setEnabled (list.getSelectedRow() >= 0);
+    // several files picked for Remove stay picked; otherwise the open file is the one selected
+    bool keep = list.getNumSelectedRows() > 1;
+    for (int i = 0; keep && i < list.getNumSelectedRows(); ++i) keep = list.getSelectedRow (i) < getNumRows();
+    if (! keep) { if (open >= 0 && open < getNumRows()) list.selectRow (open, true, true); else list.deselectAllRows(); }
+    remove.setEnabled (list.getNumSelectedRows() > 0 && getNumRows() > 0);
+    clearAll.setEnabled (getNumRows() > 0);
     list.repaint();
     repaint();
 }
@@ -130,31 +166,32 @@ void FileList::listBoxItemClicked (int row, const juce::MouseEvent& e)
     remove.setEnabled (true);
     if (e.mods.isPopupMenu())
     {
-        juce::PopupMenu m; m.addItem (1, "Open"); m.addItem (2, "Show in folder"); m.addItem (3, "Take off the list");
-        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [this, row] (int r)
+        const int picked = list.isRowSelected (row) ? list.getNumSelectedRows() : 1;
+        juce::PopupMenu m; m.addItem (1, "Open"); m.addItem (2, "Show in folder");
+        m.addItem (3, picked > 1 ? "Take the " + juce::String (picked) + " selected files off the list" : juce::String ("Take off the list"));
+        m.addSeparator(); m.addItem (4, "Clear all (every file off the list)...");
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [this, row, picked] (int r)
         {
             if (row >= getNumRows()) return;
             if (r == 1) view.proc.open (row, 0);
             else if (r == 2) juce::File (juce::String::fromUTF8 (view.proc.session.files[(size_t) row].info.path.c_str())).revealToUser();
-            else if (r == 3) deleteKeyPressed (row);
+            else if (r == 3) { if (picked > 1) removeSelected(); else { view.proc.removeFiles ({ row }); view.refreshPanels(); } }
+            else if (r == 4) confirmClearAll();
         });
         return;
     }
+    // Shift and Ctrl (Cmd) pick several files for Remove; a plain click opens the file
+    if (e.mods.isShiftDown() || e.mods.isCommandDown()) { remove.setEnabled (list.getNumSelectedRows() > 0); return; }
     if (! view.doc || view.doc->file != row) view.proc.open (row, 0);
     view.refreshPanels();
 }
 
 void FileList::deleteKeyPressed (int row)
 {
-    auto& s = view.proc.session;
-    if (row < 0 || row >= (int) s.files.size()) return;
-    const bool wasOpen = view.doc && view.doc->file == row;
-    if (wasOpen) view.proc.stopPlayback();
-    s.removeFile (row);
-    if (view.proc.openFile == row) view.proc.openFile = -1; else if (view.proc.openFile > row) --view.proc.openFile;
-    view.proc.stateChanged();
-    view.proc.sendChangeMessage();
-    if (wasOpen && ! s.files.empty()) view.proc.open (std::min (row, (int) s.files.size() - 1), 0);
+    if (list.getNumSelectedRows() > 1) { removeSelected(); return; }
+    if (row < 0 || row >= getNumRows()) return;
+    view.proc.removeFiles ({ row });
+    view.refreshPanels();
 }
 
 juce::String FileList::getTooltipForRow (int row)
@@ -699,6 +736,8 @@ Header::Header (View& v) : view (v)
     for (juce::Component* c : std::initializer_list<juce::Component*> { &rooms, &play, &rec, &exp, &expAll, &loop }) addAndMakeVisible (c);
     rooms.setItemTooltip (0, "The cut room: find the events in your recordings and cut the one-shots");
     rooms.setItemTooltip (1, "The kit room: build a NeoBeat kit out of the one-shots and save it as a .NJQ file");
+    rooms.setItemTooltip (2, "LOOPS: quick loops of up to 8 bars, layered from the sounds in the pool, for your productions");
+    rooms.setItemTooltip (3, "KEYS: pitched sounds made into instruments that MidiJaQ plays");
     rooms.onSelect = [this] (int i) { view.room = i; if (view.roomChanged) view.roomChanged(); };
     rec.setColour (juce::TextButton::buttonOnColourId, C::red());
     play.setTooltip ("Play the open file from the cursor (Space). Click an event to hear just it.");
@@ -719,7 +758,7 @@ Header::Header (View& v) : view (v)
 
 void Header::refresh()
 {
-    const bool kit = view.room == 1;
+    const bool kit = view.room != 0;
     rooms.setSelected (view.room);
     for (juce::Component* c : std::initializer_list<juce::Component*> { &play, &rec, &exp, &expAll, &loop }) c->setVisible (! kit);
     play.setButtonText (view.proc.isPlaying() ? "Stop" : "Play");
@@ -753,7 +792,22 @@ void Header::paint (juce::Graphics& g)
     juce::String l1, l2;
     if (view.proc.recorder.isRecording()) { l1 = "RECORDING  " + mmss (view.proc.recorder.seconds()); l2 = "Press STOP to save it, then it opens here"; }
     else if (s.busy) l1 = juce::String::fromUTF8 (s.what.c_str());
-    else if (view.room == 1)
+    else if (view.room == 2)
+    {
+        const auto& lp = view.proc.loops;
+        int chops = 0; for (int i = 0; i < lp.numLayers; ++i) chops += (int) lp.layers[(size_t) i].hits.size();
+        l1 = view.proc.loopsMessage.isNotEmpty() ? view.proc.loopsMessage : juce::String ("Pick where a layer's sounds come from, then ROLL it");
+        l2 = plural (lp.numLayers, "layer") + ",  " + plural (chops, "chop") + ",  " + plural (lp.bars(), "bar") + ",  " + juce::String (lp.bpm, 1) + " BPM,  "
+           + gen::pitchName (lp.root) + " " + gen::scale (lp.scale).name + ",  " + plural ((int) view.proc.kit.pool.size(), "sound") + " in the pool";
+    }
+    else if (view.room == 3)
+    {
+        const auto& ks = view.proc.keys;
+        l1 = view.proc.keysMessage.isNotEmpty() ? view.proc.keysMessage : juce::String ("Pick where the sounds come from, then BUILD the instrument");
+        l2 = plural ((int) ks.zones.size(), "sound") + ",  " + bc::keysModeName (ks.mode) + ",  sustain: " + bc::keysSustainName (ks.sustain) + ",  "
+           + plural ((int) view.proc.kit.pool.size(), "sound") + " in the pool,  " + juce::String (view.proc.keysPlayer.active.load()) + " playing";
+    }
+    else if (view.room >= 1)
     {
         const auto& k = view.proc.kit;
         int lanes = 0; for (const auto& ln : k.lanes) lanes += ln.empty() ? 0 : 1;
@@ -784,12 +838,12 @@ void Header::paint (juce::Graphics& g)
 
 void Header::resized()
 {
-    rooms.setBounds (244, 16, 112, 32);
-    const bool kit = view.room == 1;
-    play.setBounds (364, 16, 70, 32);
-    loop.setBounds (440, 20, 66, 24);
-    rec.setBounds (510, 16, 100, 32);
-    lcd = kit ? juce::Rectangle<int> (368, 10, 900, 44) : juce::Rectangle<int> (620, 10, 384, 44);
+    rooms.setBounds (244, 16, 216, 32);
+    const bool kit = view.room != 0;
+    play.setBounds (468, 16, 70, 32);
+    loop.setBounds (544, 20, 64, 24);
+    rec.setBounds (612, 16, 98, 32);
+    lcd = kit ? juce::Rectangle<int> (472, 10, 796, 44) : juce::Rectangle<int> (718, 10, 288, 44);
     exp.setBounds (1016, 16, 118, 32);
     expAll.setBounds (1142, 16, 126, 32);
 }

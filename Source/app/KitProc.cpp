@@ -1,5 +1,8 @@
 // Batchcut 2.0 - the Kit room's side of the processor: the pool, the lanes, the audition, the .NJQ file.
 #include "Processor.h"
+#ifndef BATCHCUT_VERSION
+ #define BATCHCUT_VERSION "3.0.0"
+#endif
 
 namespace
 {
@@ -13,6 +16,47 @@ std::shared_ptr<bc::PoolItem> makeItem (std::vector<float> l, std::vector<float>
     bc::analyseItem (*it, nbkstore::learner());
     return it;
 }
+}
+
+// a pool sound in the project: lossless (FLAC), base64 in the XML; a hotter-than-full-scale sound keeps its
+// level as a gain. Shared by the kit and LOOPS.
+std::unique_ptr<juce::XmlElement> bcxml::sound (const bc::PoolItem& it)
+{
+    auto ie = std::make_unique<juce::XmlElement> ("SOUND");
+    ie->setAttribute ("name", juce::String (it.name)); ie->setAttribute ("source", juce::String (it.source));
+    juce::FlacAudioFormat flac;
+    juce::MemoryBlock mb;
+    {
+        auto* os = new juce::MemoryOutputStream (mb, false);
+        std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (os, it.sr, 2, 24, {}, 5));
+        if (w == nullptr) { delete os; return ie; }
+        const int n = (int) it.l.size();
+        juce::AudioBuffer<float> buf (2, n);
+        buf.copyFrom (0, 0, it.l.data(), n); buf.copyFrom (1, 0, it.r.size() == it.l.size() ? it.r.data() : it.l.data(), n);
+        const float pk = buf.getMagnitude (0, n);
+        if (pk > 0.999f) { buf.applyGain (0.999f / pk); ie->setAttribute ("gain", (double) (pk / 0.999f)); }
+        w->writeFromAudioSampleBuffer (buf, 0, n);
+    }
+    ie->addTextElement (mb.toBase64Encoding());
+    return ie;
+}
+
+std::shared_ptr<bc::PoolItem> bcxml::sound (const juce::XmlElement& ie, double maxSeconds)
+{
+    juce::MemoryBlock mb;
+    if (! mb.fromBase64Encoding (ie.getAllSubText().trim())) return nullptr;
+    juce::FlacAudioFormat flac;
+    std::unique_ptr<juce::AudioFormatReader> r (flac.createReaderFor (new juce::MemoryInputStream (mb, false), true));
+    if (r == nullptr || r->lengthInSamples < 2) return nullptr;
+    const int n = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (r->sampleRate * maxSeconds));
+    juce::AudioBuffer<float> buf (2, n);
+    r->read (&buf, 0, n, 0, true, true);
+    buf.applyGain ((float) ie.getDoubleAttribute ("gain", 1.0));
+    auto it = std::make_shared<bc::PoolItem>();
+    it->l.assign (buf.getReadPointer (0), buf.getReadPointer (0) + n); it->r.assign (buf.getReadPointer (1), buf.getReadPointer (1) + n);
+    it->sr = r->sampleRate; it->name = ie.getStringAttribute ("name").toStdString(); it->source = ie.getStringAttribute ("source").toStdString();
+    bc::analyseItem (*it, nbkstore::learner());
+    return it;
 }
 
 void BcProcessor::kitGather (bool allFiles)
@@ -79,10 +123,36 @@ void BcProcessor::kitClearPool()
             if (map[(size_t) ly.item] < 0) { map[(size_t) ly.item] = (int) keep.size(); keep.push_back (kit.pool[(size_t) ly.item]); }
             ly.item = map[(size_t) ly.item];
         }
+    const int gone = (int) (map.size() - keep.size());
     kit.pool = std::move (keep);
-    kitMessage = "The pool is cleared (the lanes keep their sounds)";
+    kit.poolReplaced();
+    keysLeftOut.clear();
+    kitMessage = kit.pool.empty() ? juce::String ("The pool is empty")
+                                  : juce::String (gone) + (gone == 1 ? " sound" : " sounds") + " cleared; the " + juce::String ((int) kit.pool.size()) + " the lanes use stay (Clear lanes first to empty it)";
     kitUndoStack.clear(); kitRedoStack.clear(); kitSaved = kit.lanes;     // (the sounds' numbers changed)
     kitChanged();
+}
+
+void BcProcessor::kitClearLanes()
+{
+    const int n = kit.clearLanes();
+    int locked = 0; for (const auto& ln : kit.lanes) locked += ln.locked && ! ln.empty() ? 1 : 0;
+    kitMessage = n == 0 ? juce::String ("No lane to clear") + (locked > 0 ? " (locked lanes keep their sounds)" : "")
+                        : "Cleared " + juce::String (n) + (n == 1 ? " lane" : " lanes") + (locked > 0 ? "; " + juce::String (locked) + " locked kept theirs" : juce::String()) + ". Undo brings them back.";
+    kitChanged(); kitMark();
+}
+
+void BcProcessor::kitRandom (int messageLane)
+{
+    if (kit.pool.empty()) { kitMessage = "The pool is empty: gather one-shots or add a folder first"; return; }
+    const int n = kit.randomize (kitAnyLane, (uint32_t) juce::Random::getSystemRandom().nextInt());
+    const int lane = juce::jlimit (0, bc::kLanes - 1, messageLane);
+    const int left = kit.deckRemaining (lane, kitAnyLane), all = kit.deckSize (lane, kitAnyLane);
+    kitMessage = "Random: fresh sounds on " + juce::String (n) + (n == 1 ? " lane. " : " lanes. ")
+               + (kitAnyLane ? juce::String ("Any lane: ") : juce::String (nb::roleName (lane)) + ": ")
+               + (left > 0 ? juce::String (left) + " of " + juce::String (all) + " still to come before one repeats"
+                           : "all " + juce::String (all) + " have played; the next press starts a new round");
+    kitChanged(); kitMark();
 }
 
 void BcProcessor::kitChoose()
@@ -199,7 +269,7 @@ void BcProcessor::kitPlayItem (int item)
 bool BcProcessor::kitSaveNjq (const juce::File& file, juce::String& error)
 {
     auto k = std::make_unique<njq::Kit>();
-    k->name = juce::String (kit.name); k->madeWith = "Batchcut 2.0";
+    k->name = juce::String (kit.name); k->madeWith = "Batchcut " BATCHCUT_VERSION;
     k->bpm = kit.bpm; k->swing = kit.swing; k->patternIndex = kit.pattern;
     k->scenes[0] = nb::patternPreset (kit.pattern).pattern;
     for (int s = 1; s < nb::kNumScenes; ++s) { k->scenes[(size_t) s] = nb::Pattern(); k->scenes[(size_t) s].length = k->scenes[0].length; }
@@ -232,6 +302,7 @@ std::unique_ptr<juce::XmlElement> BcProcessor::kitToXml()
 {
     auto root = std::make_unique<juce::XmlElement> ("KIT");
     root->setAttribute ("name", juce::String (kit.name)); root->setAttribute ("bpm", kit.bpm); root->setAttribute ("swing", (double) kit.swing); root->setAttribute ("pattern", kit.pattern);
+    root->setAttribute ("anyLane", kitAnyLane ? 1 : 0);
     std::vector<int> used; auto ref = [&] (int item) { for (int i = 0; i < (int) used.size(); ++i) if (used[(size_t) i] == item) return i; used.push_back (item); return (int) used.size() - 1; };
     for (int l = 0; l < bc::kLanes; ++l)
     {
@@ -247,26 +318,7 @@ std::unique_ptr<juce::XmlElement> BcProcessor::kitToXml()
             ye->setAttribute ("semis", (double) ly.semis); ye->setAttribute ("start", (double) ly.start); ye->setAttribute ("end", (double) ly.end); ye->setAttribute ("fade", (double) ly.fadeMs); ye->setAttribute ("reverse", ly.reverse ? 1 : 0);
         }
     }
-    juce::FlacAudioFormat flac;
-    for (int item : used)
-    {
-        const auto& it = *kit.pool[(size_t) item];
-        auto* ie = root->createNewChildElement ("SOUND");
-        ie->setAttribute ("name", juce::String (it.name)); ie->setAttribute ("source", juce::String (it.source));
-        juce::MemoryBlock mb;
-        {
-            auto* os = new juce::MemoryOutputStream (mb, false);
-            std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (os, it.sr, 2, 24, {}, 5));
-            if (w == nullptr) { delete os; continue; }
-            const int n = (int) it.l.size();
-            juce::AudioBuffer<float> buf (2, n);
-            buf.copyFrom (0, 0, it.l.data(), n); buf.copyFrom (1, 0, it.r.data(), n);
-            const float pk = buf.getMagnitude (0, n);
-            if (pk > 0.999f) { buf.applyGain (0.999f / pk); ie->setAttribute ("gain", (double) (pk / 0.999f)); }
-            w->writeFromAudioSampleBuffer (buf, 0, n);
-        }
-        ie->addTextElement (mb.toBase64Encoding());
-    }
+    for (int item : used) root->addChildElement (bcxml::sound (*kit.pool[(size_t) item]).release());
     return root;
 }
 
@@ -276,21 +328,14 @@ void BcProcessor::kitFromXml (const juce::XmlElement& root)
     kit.name = root.getStringAttribute ("name", "My kit").toStdString();
     kit.bpm = juce::jlimit (30.0, 300.0, root.getDoubleAttribute ("bpm", 100.0)); kit.swing = (float) juce::jlimit (0.5, 0.75, root.getDoubleAttribute ("swing", 0.62));
     kit.pattern = juce::jlimit (0, nb::numPatterns() - 1, root.getIntAttribute ("pattern"));
-    juce::FlacAudioFormat flac;
+    kitAnyLane = root.getIntAttribute ("anyLane") != 0;
     std::vector<int> index;    // the file's sound number -> the pool's (or -1 when it could not be read)
     for (auto* ie : root.getChildWithTagNameIterator ("SOUND"))
     {
         index.push_back (-1);
-        juce::MemoryBlock mb;
-        if (! mb.fromBase64Encoding (ie->getAllSubText().trim())) continue;
-        std::unique_ptr<juce::AudioFormatReader> r (flac.createReaderFor (new juce::MemoryInputStream (mb, false), true));
-        if (r == nullptr || r->lengthInSamples < 2) continue;
-        const int n = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (r->sampleRate * 12.0));
-        juce::AudioBuffer<float> buf (2, n);
-        r->read (&buf, 0, n, 0, true, true);
-        buf.applyGain ((float) ie->getDoubleAttribute ("gain", 1.0));
-        std::vector<float> l (buf.getReadPointer (0), buf.getReadPointer (0) + n), rr (buf.getReadPointer (1), buf.getReadPointer (1) + n);
-        kit.pool.push_back (makeItem (std::move (l), std::move (rr), r->sampleRate, ie->getStringAttribute ("name").toStdString(), ie->getStringAttribute ("source").toStdString()));
+        auto it = bcxml::sound (*ie, 12.0);
+        if (it == nullptr) continue;
+        kit.pool.push_back (it);
         index.back() = (int) kit.pool.size() - 1;
     }
     for (auto* le : root.getChildWithTagNameIterator ("LANE"))
