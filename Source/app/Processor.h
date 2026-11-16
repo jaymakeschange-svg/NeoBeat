@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <memory>
 
+#include "../core/Inst.h"
 #include "../core/Player.h"
 
 class MjqProcessor final : public juce::AudioProcessor
@@ -18,6 +19,13 @@ public:
     mjq::ClockMode clockMode = mjq::ClockMode::Pattern;
     std::atomic<int> version { 0 };                  // the editor redraws when this moves
     juce::String message;                            // one line under the window
+
+    // ---- the instrument it plays, when one is loaded (a .NJQ from Batchcut's KEYS room)
+    mjq::InstrumentPlayer voices;
+    juce::String instrumentFile;                     // where it came from, so the project can open it again
+    bool openInstrument (const juce::File&, juce::String& error);
+    void closeInstrument();
+    std::shared_ptr<const mjq::Instrument> instrument() const { return std::atomic_load (&loaded); }
 
     void lineChanged();                              // rebuild the snapshot and bump the version
     void roll();                                     // JAQ: a new family from a new seed
@@ -51,11 +59,14 @@ public:
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 
-    static juce::String toXml (const mjq::Line&, mjq::ClockMode);
-    static bool fromXml (const juce::String&, mjq::Line&, mjq::ClockMode&);
+    static juce::String toXml (const mjq::Line&, mjq::ClockMode, const juce::String& instrumentFile);
+    static bool fromXml (const juce::String&, mjq::Line&, mjq::ClockMode&, juce::String& instrumentFile);
 
 private:
     std::shared_ptr<const mjq::Pass> shown;          // swapped under the audio thread's feet, never edited
+    std::shared_ptr<const mjq::Instrument> loaded;
+    std::vector<std::shared_ptr<const mjq::Instrument>> keep;   // the one just replaced, until the audio thread is past it
+    double keepSince = 0.0;
     std::atomic<int> lastStep { -1 };
     std::vector<mjq::Line> undoStack, redoStack;
     mjq::Line marked;

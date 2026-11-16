@@ -68,6 +68,13 @@ foreach (t test_jaq test_clock)
     target_link_libraries (${t} PRIVATE Threads::Threads)
 endforeach()
 
+# Reading and playing a .NJQ instrument needs JUCE (the file format), so this one is a console app.
+juce_add_console_app (test_inst PRODUCT_NAME "test_inst")
+target_sources (test_inst PRIVATE tools/test_inst.cpp)
+target_include_directories (test_inst PRIVATE Source)
+target_compile_definitions (test_inst PRIVATE ${MIDIJAQ_DEFINITIONS})
+target_link_libraries (test_inst PRIVATE juce::juce_audio_formats juce::juce_events juce::juce_recommended_config_flags)
+
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
     foreach (tool HostTest Snapshot)

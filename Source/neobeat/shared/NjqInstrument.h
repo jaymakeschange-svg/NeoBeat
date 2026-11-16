@@ -19,6 +19,7 @@ struct Zone
     float root = 60.0f, gainDb = 0.0f;
     int lowKey = 0, highKey = 127, lowVel = 1, highVel = 127, rr = 0, rrCount = 1;
     int loopStart = -1, loopEnd = -1, holdAt = 0;
+    bool tuned = false;                 // the sound has a pitch of its own (so Hold can stay in tune)
 };
 
 struct InstrumentFile
@@ -91,6 +92,7 @@ inline bool saveInstrument (const juce::File& file, const InstrumentFile& ins, j
         ze->setAttribute ("lowKey", z.lowKey); ze->setAttribute ("highKey", z.highKey); ze->setAttribute ("lowVel", z.lowVel); ze->setAttribute ("highVel", z.highVel);
         ze->setAttribute ("rr", z.rr); ze->setAttribute ("rrCount", z.rrCount);
         ze->setAttribute ("loopStart", z.loopStart); ze->setAttribute ("loopEnd", z.loopEnd); ze->setAttribute ("holdAt", z.holdAt);
+        ze->setAttribute ("tuned", z.tuned ? 1 : 0);
     }
     k.extras.push_back (e);
     // (no scenes: an instrument plays no pattern of its own)
@@ -126,6 +128,7 @@ inline bool loadInstrument (const juce::File& file, InstrumentFile& ins, juce::S
         z.loopStart = juce::jlimit (-1, n - 1, ze->getIntAttribute ("loopStart", -1)); z.loopEnd = juce::jlimit (-1, n - 1, ze->getIntAttribute ("loopEnd", -1));
         if (z.loopEnd <= z.loopStart) z.loopStart = z.loopEnd = -1;
         z.holdAt = juce::jlimit (0, std::max (0, n - 1), ze->getIntAttribute ("holdAt"));
+        z.tuned = ze->getIntAttribute ("tuned", ins.mode == 0 ? 1 : 0) != 0;      // older files: a Tuned instrument's sounds are pitched
         ins.zones.push_back (std::move (z));
     }
     if (ins.zones.empty()) { error = "No sound in " + file.getFileName() + " could be read."; return false; }

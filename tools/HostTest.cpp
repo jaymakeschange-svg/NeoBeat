@@ -3,6 +3,7 @@
 // Usage: MidiJaQHostTest [seed]
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "app/Processor.h"
+#include "neobeat/shared/NjqInstrument.h"
 #include "app/Editor.h"
 
 static int failures = 0;
@@ -24,15 +25,19 @@ struct Transport final : public juce::AudioPlayHead
 };
 
 // what a host does: audio blocks, and the message loop in between
+static float lastPeak = 0.0f;                     // how loud the plugin's own instrument played
+
 static std::vector<juce::MidiMessage> run (MjqProcessor& p, Transport& t, int blocks, int blockSize = 512)
 {
     std::vector<juce::MidiMessage> out;
     juce::AudioBuffer<float> buf (2, blockSize);
+    lastPeak = 0.0f;
     for (int b = 0; b < blocks; ++b)
     {
         buf.clear();
         juce::MidiBuffer midi;
         p.processBlock (buf, midi);
+        lastPeak = std::max (lastPeak, buf.getMagnitude (0, blockSize));
         for (const auto m : midi) out.push_back (m.getMessage());
         if (t.playing) t.ppq += (double) blockSize * t.bpm / (60.0 * 48000.0);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
@@ -177,12 +182,74 @@ int main (int argc, char** argv)
         other->releaseResources();
     }
 
-    std::printf ("5. a long random session (seed %d)\n", seed);
+    std::printf ("5. a .NJQ instrument from Batchcut\n");
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mjq_host_inst");
+    {
+        dir.deleteRecursively(); dir.createDirectory();
+        // an instrument as Batchcut's KEYS room writes them
+        njq::InstrumentFile f;
+        f.name = "Host tones"; f.mode = 0; f.sustain = 0; f.releaseMs = 150.0f;
+        for (int k = 0; k < 3; ++k)
+        {
+            njq::Zone z;
+            z.name = "tone " + juce::String (k); z.sampleRate = 48000.0; z.root = (float) (48 + 12 * k); z.tuned = true;
+            z.lowKey = 24 + 12 * k; z.highKey = 35 + 12 * k;
+            const double hz = 440.0 * std::exp2 ((z.root - 69.0f) / 12.0);
+            z.l.assign (24000, 0.0f);
+            for (int i = 0; i < 24000; ++i) z.l[(size_t) i] = (float) (0.5 * std::sin (6.283185307179586 * hz * i / 48000.0) * std::exp (-i / 20000.0));
+            z.r = z.l;
+            f.zones.push_back (std::move (z));
+        }
+        const auto file = dir.getChildFile ("Host tones.njq");
+        juce::String err;
+        CHECK (njq::saveInstrument (file, f, err), "an instrument written for the test %s", err.toRawUTF8());
+
+        proc->line.numSteps = 16; proc->line.traffic = 1.0f; proc->line.transpose = 0; proc->line.base = 36;
+        proc->line.mode = mjq::Mode::Free; proc->clockMode = mjq::ClockMode::Pattern;
+        mjq::generate (proc->line, 99);
+        proc->lineChanged();
+        host.playing = true; host.ppq = 0.0;
+        run (*proc, host, 20);
+        CHECK (lastPeak < 1.0e-6f, "with no instrument the plugin makes no sound of its own (%.6f)", lastPeak);
+
+        const bool opened = proc->openInstrument (file, err);
+        CHECK (opened && proc->instrument() != nullptr, "it opens the instrument: %s", proc->message.toRawUTF8());
+        run (*proc, host, 100);
+        CHECK (lastPeak > 0.01f, "and now plays its own line out loud (peak %.2f)", lastPeak);
+
+        // the project remembers where the instrument came from, and opens it again
+        juce::MemoryBlock state;
+        proc->getStateInformation (state);
+        auto other = std::make_unique<MjqProcessor>();
+        other->setPlayConfigDetails (0, 2, 48000.0, 512);
+        other->prepareToPlay (48000.0, 512);
+        other->setStateInformation (state.getData(), (int) state.getSize());
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+        CHECK (other->instrument() != nullptr && other->instrument()->zones.size() == 3,
+               "a project opened again brings the instrument back (%d sounds)", other->instrument() == nullptr ? 0 : (int) other->instrument()->zones.size());
+        other->releaseResources();
+
+        // and a sequence is refused as an instrument, with a message that says what it is
+        njq::Kit kit; kit.name = "not an instrument";
+        const auto kitFile = dir.getChildFile ("kit.njq");
+        juce::String e2;
+        njq::save (kitFile, kit, e2);
+        const bool refused = ! proc->openInstrument (kitFile, e2);
+        const bool kept = proc->instrument() != nullptr && proc->message.contains ("not an instrument");
+        CHECK (refused && kept, "a NeoBeat sequence is refused and the one that was open stays: \"%s\"", proc->message.toRawUTF8());
+
+        proc->closeInstrument();
+        run (*proc, host, 40);                       // what was sounding dies away over its release
+        run (*proc, host, 20);
+        CHECK (proc->instrument() == nullptr && lastPeak < 1.0e-6f, "and it can be put away again (%.6f)", lastPeak);
+    }
+
+    std::printf ("6. a long random session (seed %d)\n", seed);
     {
         proc->line.mode = mjq::Mode::Free;
         for (int i = 0; i < 400; ++i)
         {
-            switch (r.nextInt (12))
+            switch (r.nextInt (13))
             {
                 case 0: proc->roll(); break;
                 case 1: proc->rollLane ((mjq::Lane) r.nextInt (mjq::numLanes)); break;
@@ -194,6 +261,12 @@ int main (int argc, char** argv)
                 case 7: proc->line.mode = (mjq::Mode) r.nextInt (3); proc->clockMode = (mjq::ClockMode) r.nextInt (3); proc->lineChanged(); break;
                 case 8: proc->line.direction = (mjq::Direction) r.nextInt (3); proc->line.gate = 0.1f + 1.9f * r.nextFloat(); proc->lineChanged(); break;
                 case 9: if (r.nextBool()) proc->undo(); else proc->redo(); break;
+                case 11:
+                {
+                    if (r.nextBool()) proc->closeInstrument();
+                    else { juce::String e; proc->openInstrument (dir.getChildFile ("Host tones.njq"), e); }
+                    break;
+                }
                 case 10:
                 {
                     host.playing = r.nextBool();
@@ -231,6 +304,7 @@ int main (int argc, char** argv)
     }
 
     ed.reset();
+    dir.deleteRecursively();
     proc->setPlayHead (nullptr);
     proc->releaseResources();
     proc.reset();

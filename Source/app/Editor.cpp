@@ -1,6 +1,7 @@
 // MidiJaQ's window: the line across the middle, one row a lane, and the knobs that move through the
 // family around it.
 #include "Editor.h"
+#include "../neobeat/shared/NjqInstrument.h"
 
 using namespace mjqui;
 
@@ -157,6 +158,9 @@ struct MjqEditor::Parts
     Knob steps { "STEPS", 1.0f, 32.0f, 16.0f }, offset { "OFFSET", 0.0f, 31.0f, 0.0f }, transpose { "TRANSPOSE", -24.0f, 24.0f, 0.0f };
     Segmented mode { { "Free", "Follow", "Bass" } }, clock { { "Pattern", "Song", "Gate" } }, direction { { "Forward", "Back", "Pendulum" } };
     juce::ComboBox rootBox, scaleBox, gridBox;
+    Pill openInst { "Open .NJQ" }, closeInst { "Send MIDI only" };
+    Knob level { "LEVEL", 0.0f, 1.5f, 0.8f };
+    std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> head, body, side;
 };
 
@@ -165,7 +169,8 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     setLookAndFeel (&look);
     auto& q = *parts;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &q.grid, &q.jaq, &q.undo, &q.redo, &q.lane, &q.dialect, &q.traffic,
-            &q.accent, &q.gate, &q.swing, &q.steps, &q.offset, &q.transpose, &q.mode, &q.clock, &q.direction, &q.rootBox, &q.scaleBox, &q.gridBox })
+            &q.accent, &q.gate, &q.swing, &q.steps, &q.offset, &q.transpose, &q.mode, &q.clock, &q.direction, &q.rootBox, &q.scaleBox, &q.gridBox,
+            &q.openInst, &q.closeInst, &q.level })
         addAndMakeVisible (c);
 
     auto done = [this] { proc.lineChanged(); refresh(); };
@@ -211,6 +216,27 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     q.clock.onSelect = [this, done] (int i) { proc.clockMode = (mjq::ClockMode) i; done(); };
     q.direction.onSelect = [this, done] (int i) { proc.line.direction = (mjq::Direction) i; done(); };
 
+    q.openInst.setTooltip ("Open an instrument made in Batchcut's KEYS room: MidiJaQ then plays its own line, "
+                           "instead of only sending MIDI to another plugin");
+    q.openInst.onClick = [this]
+    {
+        auto& pr = *parts;
+        pr.chooser = std::make_unique<juce::FileChooser> ("Open an instrument", shared::instrumentsFolder(), "*.njq");
+        pr.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
+        {
+            const auto f = fc.getResult();
+            if (! f.existsAsFile()) return;
+            juce::String err;
+            proc.openInstrument (f, err);
+            refresh();
+        });
+    };
+    q.closeInst.setTooltip ("Put the instrument away and go back to sending MIDI alone");
+    q.closeInst.onClick = [this] { proc.closeInstrument(); refresh(); };
+    q.level.setTooltip ("How loud the instrument plays");
+    q.level.toText = [] (float v) { return juce::String ((int) std::round (v * 100.0f)) + "%"; };
+    q.level.onChange = [this] (float v) { proc.voices.level.store (v); };
+
     for (int i = 0; i < 12; ++i) q.rootBox.addItem (gen::pitchName (i), i + 1);
     for (int i = 0; i < gen::numScales(); ++i) q.scaleBox.addItem (gen::scale (i).name, i + 1);
     q.gridBox.addItem ("8ths", 1); q.gridBox.addItem ("8th triplets", 2); q.gridBox.addItem ("16ths", 3); q.gridBox.addItem ("16th triplets", 4);
@@ -247,6 +273,10 @@ void MjqEditor::refresh()
     q.scaleBox.setSelectedId (L.scaleIndex + 1, juce::dontSendNotification);
     q.gridBox.setSelectedId (L.perBar == 8 ? 1 : L.perBar == 12 ? 2 : L.perBar == 24 ? 4 : 3, juce::dontSendNotification);
     q.undo.setEnabled (proc.canUndo()); q.redo.setEnabled (proc.canRedo());
+    const bool hasInst = proc.instrument() != nullptr;
+    q.closeInst.setEnabled (hasInst);
+    q.level.setEnabled (hasInst);
+    q.level.setValue (proc.voices.level.load());
     if (chosenStep >= L.numSteps) chosenStep = -1;
     seenVersion = proc.version.load();
     repaint();
@@ -301,6 +331,7 @@ void MjqEditor::paint (juce::Graphics& g)
     paintLabel (g, "Key", { q.rootBox.getX(), q.rootBox.getY() - 14, 60, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Scale", { q.scaleBox.getX(), q.scaleBox.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Step", { q.gridBox.getX(), q.gridBox.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
+    paintLabel (g, "Instrument", { q.openInst.getX(), q.openInst.getY() - 14, 110, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Mode", { q.mode.getX(), q.mode.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Clock", { q.clock.getX(), q.clock.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Direction", { q.direction.getX(), q.direction.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
@@ -343,4 +374,7 @@ void MjqEditor::resized()
     q.rootBox.setBounds (x, q.side.getY() + 202, w / 2 - 4, 26);
     q.scaleBox.setBounds (x + w / 2 + 4, q.side.getY() + 202, w / 2 - 4, 26);
     q.gridBox.setBounds (x, q.side.getY() + 254, w, 26);
+    q.openInst.setBounds (x, q.side.getY() + 310, w - 76, 28);
+    q.level.setBounds (x + w - 70, q.side.getY() + 296, 70, 56);
+    q.closeInst.setBounds (x, q.side.getY() + 342, w - 76, 24);
 }

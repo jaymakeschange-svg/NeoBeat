@@ -57,10 +57,38 @@ bool MjqProcessor::redo()
     return true;
 }
 
+bool MjqProcessor::openInstrument (const juce::File& file, juce::String& error)
+{
+    mjq::Instrument ins;
+    if (! mjq::loadInstrument (file, ins, error)) { message = "Not opened: " + error; return false; }
+
+    auto shared = std::make_shared<const mjq::Instrument> (std::move (ins));
+    if (auto old = std::atomic_load (&loaded)) keep.push_back (old);   // the audio thread may still be in it
+    std::atomic_store (&loaded, shared);
+    voices.setInstrument (shared);
+    instrumentFile = file.getFullPathName();
+    message = mjq::describe (*shared);
+    version.fetch_add (1);
+    return true;
+}
+
+void MjqProcessor::closeInstrument()
+{
+    if (auto old = std::atomic_load (&loaded)) keep.push_back (old);
+    std::atomic_store (&loaded, std::shared_ptr<const mjq::Instrument>());
+    voices.setInstrument (nullptr);
+    voices.letGo.store (true);
+    instrumentFile.clear();
+    message = "No instrument: MidiJaQ is sending MIDI to whatever you point it at.";
+    version.fetch_add (1);
+}
+
 void MjqProcessor::prepareToPlay (double sampleRate, int)
 {
     player.prepare (sampleRate);
     player.allKeysUp();
+    voices.prepare (sampleRate);
+    if (auto cur = std::atomic_load (&loaded)) voices.setInstrument (cur);
 }
 
 void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
@@ -98,11 +126,18 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
                                  : juce::MidiMessage::noteOff (1, out[i].note),
                        out[i].sample);
 
+    // the same notes play the instrument, when one is loaded: MidiJaQ makes its own sound as well as MIDI
+    mjq::PlayNote notes[256];
+    for (int i = 0; i < n; ++i)
+        notes[i] = { out[i].sample, out[i].note, (float) out[i].velocity / 127.0f, out[i].on };
+    voices.process (audio.getWritePointer (0), audio.getNumChannels() > 1 ? audio.getWritePointer (1) : audio.getWritePointer (0),
+                    audio.getNumSamples(), notes, n);
+
     lastStep.store (player.stepNow (*snapshot));
 }
 
 // ------------------------------------------------------------------ the line in the project
-juce::String MjqProcessor::toXml (const mjq::Line& L, mjq::ClockMode clock)
+juce::String MjqProcessor::toXml (const mjq::Line& L, mjq::ClockMode clock, const juce::String& instrumentFile)
 {
     juce::XmlElement root ("MIDIJAQ");
     root.setAttribute ("version", 1);
@@ -128,6 +163,7 @@ juce::String MjqProcessor::toXml (const mjq::Line& L, mjq::ClockMode clock)
     juce::String locks;
     for (int i = 0; i < mjq::numLanes; ++i) locks << (L.locked[(size_t) i] ? "1" : "0");
     root.setAttribute ("locks", locks);
+    if (instrumentFile.isNotEmpty()) root.setAttribute ("instrument", instrumentFile);
 
     for (int i = 0; i < mjq::kMaxSteps; ++i)
     {
@@ -146,7 +182,7 @@ juce::String MjqProcessor::toXml (const mjq::Line& L, mjq::ClockMode clock)
     return root.toString();
 }
 
-bool MjqProcessor::fromXml (const juce::String& xml, mjq::Line& L, mjq::ClockMode& clock)
+bool MjqProcessor::fromXml (const juce::String& xml, mjq::Line& L, mjq::ClockMode& clock, juce::String& instrumentFile)
 {
     auto root = juce::parseXML (xml);
     if (root == nullptr || ! root->hasTagName ("MIDIJAQ")) return false;
@@ -171,6 +207,7 @@ bool MjqProcessor::fromXml (const juce::String& xml, mjq::Line& L, mjq::ClockMod
     L.tie = root->getBoolAttribute ("tie", true);
     L.perBar = juce::jlimit (1, 64, root->getIntAttribute ("perBar", 16));
     L.swing = (float) root->getDoubleAttribute ("swing", 0.5);
+    instrumentFile = root->getStringAttribute ("instrument");
     const auto locks = root->getStringAttribute ("locks");
     for (int i = 0; i < mjq::numLanes && i < locks.length(); ++i) L.locked[(size_t) i] = locks[i] == '1';
 
@@ -194,7 +231,7 @@ bool MjqProcessor::fromXml (const juce::String& xml, mjq::Line& L, mjq::ClockMod
 
 void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    const auto xml = toXml (line, clockMode);
+    const auto xml = toXml (line, clockMode, instrumentFile);
     dest.replaceAll (xml.toRawUTF8(), xml.getNumBytesAsUTF8());
 }
 
@@ -203,10 +240,20 @@ void MjqProcessor::setStateInformation (const void* data, int size)
     if (data == nullptr || size <= 0) return;
     mjq::Line L;
     auto clock = clockMode;
-    if (! fromXml (juce::String::fromUTF8 ((const char*) data, size), L, clock)) return;
+    juce::String wants;
+    if (! fromXml (juce::String::fromUTF8 ((const char*) data, size), L, clock, wants)) return;
     line = L;
     clockMode = clock;
     lineChanged();
+
+    // the instrument travels as a path: the project opens it again if it is still there
+    if (wants.isNotEmpty() && wants != instrumentFile)
+    {
+        const juce::File f (wants);
+        juce::String err;
+        if (f.existsAsFile()) openInstrument (f, err);
+        else { instrumentFile = wants; message = "The instrument " + f.getFileName() + " was not where it was: open it again."; version.fetch_add (1); }
+    }
 }
 
 juce::AudioProcessorEditor* MjqProcessor::createEditor() { return new MjqEditor (*this); }
