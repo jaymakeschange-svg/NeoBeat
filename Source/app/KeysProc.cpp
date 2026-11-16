@@ -97,7 +97,7 @@ bool BcProcessor::keysSaveNjq (const juce::File& file, juce::String& error)
         o.name = juce::String (z.sound->name); o.source = juce::String (z.sound->source);
         o.l = z.sound->l; o.r = z.sound->r; o.sampleRate = z.sound->sr;
         o.root = z.root; o.gainDb = z.gainDb; o.lowKey = z.lowKey; o.highKey = z.highKey; o.lowVel = z.lowVel; o.highVel = z.highVel;
-        o.rr = z.rr; o.rrCount = z.rrCount; o.loopStart = z.loopStart; o.loopEnd = z.loopEnd; o.holdAt = z.holdAt;
+        o.rr = z.rr; o.rrCount = z.rrCount; o.loopStart = z.loopStart; o.loopEnd = z.loopEnd; o.holdAt = z.holdAt; o.tuned = z.tunedSound;
         f.zones.push_back (std::move (o));
     }
     if (! njq::saveInstrument (file, f, error)) return false;
@@ -118,7 +118,7 @@ bool BcProcessor::keysOpenNjq (const juce::File& file, juce::String& error)
         it->name = z.name.toStdString(); it->source = z.source.toStdString(); it->l = std::move (z.l); it->r = std::move (z.r); it->sr = z.sampleRate;
         bc::analyseItem (*it, nbkstore::learner());
         bc::KeyZone k; k.sound = it; k.root = z.root; k.gainDb = z.gainDb; k.lowKey = z.lowKey; k.highKey = z.highKey; k.lowVel = z.lowVel; k.highVel = z.highVel;
-        k.rr = z.rr; k.rrCount = z.rrCount; k.loopStart = z.loopStart; k.loopEnd = z.loopEnd; k.holdAt = z.holdAt;
+        k.rr = z.rr; k.rrCount = z.rrCount; k.loopStart = z.loopStart; k.loopEnd = z.loopEnd; k.holdAt = z.holdAt; k.tunedSound = z.tuned;
         ins.zones.push_back (k);
     }
     keys = ins;
@@ -145,6 +145,7 @@ std::unique_ptr<juce::XmlElement> BcProcessor::keysToXml()
         ze->setAttribute ("sound", ref (z.sound.get())); ze->setAttribute ("root", (double) z.root); ze->setAttribute ("gain", (double) z.gainDb);
         ze->setAttribute ("lowKey", z.lowKey); ze->setAttribute ("highKey", z.highKey); ze->setAttribute ("lowVel", z.lowVel); ze->setAttribute ("highVel", z.highVel);
         ze->setAttribute ("rr", z.rr); ze->setAttribute ("rrCount", z.rrCount); ze->setAttribute ("loopStart", z.loopStart); ze->setAttribute ("loopEnd", z.loopEnd); ze->setAttribute ("holdAt", z.holdAt);
+        ze->setAttribute ("tuned", z.tunedSound ? 1 : 0);
     }
     for (const auto* s : used) root->addChildElement (bcxml::sound (*s).release());
     return root;
@@ -175,6 +176,7 @@ void BcProcessor::keysFromXml (const juce::XmlElement& root)
         z.loopStart = juce::jlimit (-1, n - 1, ze->getIntAttribute ("loopStart", -1)); z.loopEnd = juce::jlimit (-1, n - 1, ze->getIntAttribute ("loopEnd", -1));
         if (z.loopEnd <= z.loopStart) z.loopStart = z.loopEnd = -1;
         z.holdAt = juce::jlimit (0, std::max (0, n - 1), ze->getIntAttribute ("holdAt"));
+        z.tunedSound = ze->getIntAttribute ("tuned", keys.mode == bc::KeysMode::Tuned ? 1 : 0) != 0;
         keys.zones.push_back (z);
     }
     keysUndoStack.clear(); keysRedoStack.clear(); keysSaved = keys;
