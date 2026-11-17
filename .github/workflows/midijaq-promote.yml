@@ -1,0 +1,48 @@
+name: Promote validated MidiJaQ v3 source
+on:
+  push:
+    branches: [ midijaq ]
+    paths:
+      - '.github/workflows/midijaq-promote.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply previously validated patch in clean checkout
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash '.midijaq_release/patch.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '7e4e832b1a426c1e789260d96d5d99bebb9d1fda5c5a8d476b59c5ebfe64dcc1') { throw 'Patch digest mismatch' }
+          $patchDir = Join-Path $env:RUNNER_TEMP 'midijaq_promotion'
+          New-Item -ItemType Directory -Force $patchDir | Out-Null
+          python -c "import tarfile,sys; tarfile.open(r'.midijaq_release/patch.tar.xz','r:xz').extractall(sys.argv[1])" $patchDir
+          if ($LASTEXITCODE -ne 0) { throw 'Patch unpack failed' }
+          $env:MIDIJAQ_CI_BUILD = '1'
+          python (Join-Path $patchDir 'apply_midijaq.py') .
+          if ($LASTEXITCODE -ne 0) { throw 'Patch apply failed' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Patch whitespace validation failed' }
+
+      - name: Commit only validated MIDIJAQ source
+        shell: pwsh
+        run: |
+          git add -- CMakeLists.txt Source/core/Jaq.h Source/core/Player.h Source/core/Session.h Source/app/Processor.h Source/app/Processor.cpp Source/app/Editor.cpp tools/HostTest.cpp tools/test_session.cpp tools/test_evolving.cpp
+          $changed = @((git diff --cached --name-only) | Where-Object { $_ -ne '' })
+          if ($changed.Count -ne 10) { throw "Unexpected file count: $($changed.Count); refusing push" }
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Staged source failed checks' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Complete MidiJaQ v3 chords, slots and evolving generators' -m 'Validated on Windows: run 44048911889; pluginval strictness 10 passed on three seeds.'
+          if ($LASTEXITCODE -ne 0) { throw 'Source commit failed' }
+          git push origin HEAD:midijaq
+          if ($LASTEXITCODE -ne 0) { throw 'Source push failed' }
