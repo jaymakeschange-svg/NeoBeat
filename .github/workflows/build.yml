@@ -16,7 +16,7 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build the app, the plugin and the tests
-        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock
+        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving
 
       - name: Sequencer tests (the same line on every platform, the rows, TRAFFIC, DIALECT, gates and ties)
         if: ${{ !cancelled() }}
@@ -26,9 +26,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: build\Release\test_clock.exe
 
+      - name: MidiJaQ session, chord, generators and instrument tests
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/Release/test_session.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Session test failed' }
+          & ./build/Release/test_evolving.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Evolving-generator test failed' }
+          $inst = Get-ChildItem build -Recurse -Filter test_inst.exe | Select-Object -First 1
+          if (-not $inst) { throw 'Instrument test is missing' }
+          & $inst.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Instrument test failed' }
+
       - name: Validate the VST3 with pluginval (strictness 10, 3 random seeds)
         if: ${{ !cancelled() }}
-        continue-on-error: true
+        continue-on-error: false
         timeout-minutes: 30
         shell: pwsh
         run: |
