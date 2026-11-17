@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Jaq.h"
+#include "Session.h"
 
 namespace mjq
 {
@@ -83,7 +84,9 @@ public:
     // Writes one block's events. Returns how many it wrote. `release` is filled with the notes that must
     // be let go because the transport stopped or the line changed under us.
     int process (const Line& L, const Pass& pass, ClockMode mode, const HostTime& host, int numSamples,
-                 MidiOut* out, int maxOut)
+                 MidiOut* out, int maxOut, const Progression* progression = nullptr,
+                 const GeneratorSettings* writer = nullptr, double chordBeat = 0.0,
+                 const std::vector<Pass>* evolving = nullptr)
     {
         int written = 0;
         if (out == nullptr || maxOut <= 0 || numSamples <= 0) return 0;
@@ -143,15 +146,34 @@ public:
         {
             const long long k0 = (long long) std::floor (from / pass.beats);
             const long long k1 = (long long) std::floor (to / pass.beats);
+            const long long songRound = mode == ClockMode::Song && host.valid
+                ? (long long) std::floor (std::max (0.0, host.ppq) / pass.beats) : 0;
             for (long long k = k0; k <= k1; ++k)
             {
                 const double base = (double) k * pass.beats;
-                for (const auto& e : pass.events)
+                const uint64_t round = (uint64_t) std::max (0ll,
+                    mode == ClockMode::Song && host.valid ? songRound + (k - k0) : k);
+                const auto& currentPass = evolving != nullptr && ! evolving->empty()
+                    ? (*evolving)[(size_t) (round % evolving->size())] : pass;
+                bool prevPassed = true;
+                for (const auto& e : currentPass.events)
                 {
+                    const bool permitted = writer == nullptr || cueAllows (*writer, round, e.step, prevPassed);
+                    prevPassed = permitted;
+                    if (! permitted) continue;
                     const double t = base + e.start;
                     if (t < from || t >= to) continue;
-                    const int note = notePlayed (L, e, held.data(), numHeld);
-                    const int velocity = (L.mode == Mode::Free || numHeld == 0)
+                    ChordNotes chord;
+                    const int* pitchKeys = held.data();
+                    int numPitchKeys = numHeld;
+                    if (progression != nullptr && (L.mode == Mode::Bass || L.mode == Mode::Parts))
+                    {
+                        chord = progression->notesAt (chordBeat + t - from);
+                        pitchKeys = chord.notes.data();
+                        numPitchKeys = chord.count;
+                    }
+                    const int note = notePlayed (L, e, pitchKeys, numPitchKeys);
+                    const int velocity = (L.mode == Mode::Free || numHeld == 0 || (progression != nullptr && (L.mode == Mode::Bass || L.mode == Mode::Parts)))
                                        ? e.velocity
                                        : std::max (1, std::min (127, (int) std::lround ((double) e.velocity * (double) keyVelocity() / 100.0)));
                     const int s = (int) std::floor ((t - from) / std::max (1.0e-9, blockBeats) * numSamples);

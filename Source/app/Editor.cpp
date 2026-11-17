@@ -156,12 +156,19 @@ struct MjqEditor::Parts
     Knob dialect { "DIALECT", 0.0f, 1.0f, 0.5f }, traffic { "TRAFFIC", 0.0f, 1.0f, 0.5f };
     Knob accent { "ACCENT", 0.0f, 1.0f, 0.5f }, gate { "GATE", 0.1f, 2.0f, 1.0f }, swing { "SWING", 0.5f, 0.75f, 0.5f };
     Knob steps { "STEPS", 1.0f, 32.0f, 16.0f }, offset { "OFFSET", 0.0f, 31.0f, 0.0f }, transpose { "TRANSPOSE", -24.0f, 24.0f, 0.0f };
-    Segmented mode { { "Free", "Follow", "Bass" } }, clock { { "Pattern", "Song", "Gate" } }, direction { { "Forward", "Back", "Pendulum" } };
+    Segmented mode { { "Free", "Follow", "Bass", "Parts" } }, clock { { "Pattern", "Song", "Gate" } }, direction { { "Forward", "Back", "Pendulum" } };
     juce::ComboBox rootBox, scaleBox, gridBox;
+    juce::ComboBox slotBox, trackBox, writerBox, chordBarBox, chordRootBox, chordKindBox, chordLengthBox, cueBox, chordInversionBox;
+    Pill trackOn { "Line on", true }, fill { "Fill", true };
+    Pill openBank { "Open patterns" }, saveBank { "Save .NJQ" };
+    Knob chain { "CHAIN", 1.0f, 128.0f, 1.0f }, amount { "CHANGE", 0.0f, 1.0f, 0.5f }, hits { "HITS", 0.0f, 32.0f, 5.0f };
+    Knob rotate { "ROTATE", 0.0f, 31.0f, 0.0f }, cueN { "ON", 1.0f, 16.0f, 1.0f }, cueOf { "EVERY", 1.0f, 16.0f, 2.0f };
+    Knob bassNote { "BASS", 24.0f, 72.0f, 48.0f };
+    int chordBar = 0;
     Pill openInst { "Open .NJQ" }, closeInst { "Send MIDI only" };
     Knob level { "LEVEL", 0.0f, 1.5f, 0.8f };
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::Rectangle<int> head, body, side;
+    juce::Rectangle<int> head, body, side, under;
 };
 
 MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (p), parts (std::make_unique<Parts> (*this))
@@ -170,7 +177,10 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     auto& q = *parts;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &q.grid, &q.jaq, &q.undo, &q.redo, &q.lane, &q.dialect, &q.traffic,
             &q.accent, &q.gate, &q.swing, &q.steps, &q.offset, &q.transpose, &q.mode, &q.clock, &q.direction, &q.rootBox, &q.scaleBox, &q.gridBox,
-            &q.openInst, &q.closeInst, &q.level })
+            &q.openInst, &q.closeInst, &q.level, &q.slotBox, &q.trackBox, &q.writerBox, &q.chordBarBox,
+            &q.chordRootBox, &q.chordKindBox, &q.chordLengthBox, &q.cueBox, &q.trackOn, &q.fill,
+            &q.chain, &q.amount, &q.hits, &q.rotate, &q.cueN, &q.cueOf, &q.bassNote,
+            &q.chordInversionBox, &q.openBank, &q.saveBank })
         addAndMakeVisible (c);
 
     auto done = [this] { proc.lineChanged(); refresh(); };
@@ -208,7 +218,8 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
 
     q.mode.setItemTooltip (0, "Free: MidiJaQ writes its own line");
     q.mode.setItemTooltip (1, "Follow: the keys you hold give the pitches, the line gives the rhythm");
-    q.mode.setItemTooltip (2, "Bass: it reads the chord you hold and plays under it");
+    q.mode.setItemTooltip (2, "Bass: play under the chord track (or under keys you hold)");
+    q.mode.setItemTooltip (3, "Parts: give this line one voice of the chord track");
     q.mode.onSelect = [this, done] (int i) { proc.line.mode = (mjq::Mode) i; done(); };
     q.clock.setItemTooltip (0, "Pattern: the line starts again whenever the transport does");
     q.clock.setItemTooltip (1, "Song: the line sits where the song sits");
@@ -250,9 +261,136 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
         done();
     };
 
-    setSize (1120, 480);
+    // Slots save automatically when another is chosen. A chain plays one slot per bar.
+    for (int i = 0; i < 128; ++i) q.slotBox.addItem ("Slot " + juce::String (i + 1), i + 1);
+    for (int i = 0; i < mjq::kSessionTracks; ++i) q.trackBox.addItem ("Line " + juce::String (i + 1), i + 1);
+    for (int i = 0; i < 5; ++i) q.writerBox.addItem (mjq::generatorName ((mjq::Generator) i), i + 1);
+    for (int i = 0; i < 8; ++i) q.chordBarBox.addItem ("Bar " + juce::String (i + 1), i + 1);
+    for (int i = 0; i < 12; ++i) q.chordRootBox.addItem (gen::pitchName (i), i + 1);
+    for (int i = 0; i < 9; ++i) q.chordKindBox.addItem (mjq::chordKindName ((mjq::ChordKind) i), i + 1);
+    for (int i = 1; i <= 8; ++i) q.chordLengthBox.addItem (juce::String (i) + " bars", i);
+    for (int i = 0; i < 4; ++i) q.chordInversionBox.addItem ("Invert " + juce::String (i), i + 1);
+    for (int i = 0; i < 9; ++i)
+    {
+        static const char* names[] = { "Always", "Chance", "Every N", "First", "Not first", "Fill", "Not fill", "Prev", "Not prev" };
+        q.cueBox.addItem (names[i], i + 1);
+    }
+    q.slotBox.setTooltip ("Choose one of 128 saved patterns. Every line and chord is kept in its slot.");
+    q.trackBox.setTooltip ("Choose which of the four lines to edit; each sends MIDI on a separate channel.");
+    q.writerBox.setTooltip ("JAQ remembers its family. HABIT turns a loop slowly, DRIFT remembers notes, ORBIT spaces hits, CUES chooses when they play.");
+    q.chain.setTooltip ("How many consecutive slots play in order, one slot per bar.");
+    q.trackOn.setTooltip ("Turn this line on or off. Other lines keep playing.");
+    q.chordBarBox.setTooltip ("Choose which bar of the chord progression to edit.");
+    q.chordLengthBox.setTooltip ("How many bars the chord progression repeats over.");
+    q.cueBox.setTooltip ("CUES decides when a step may play as the line loops.");
+    q.cueN.setTooltip ("For Every N, which repetition of the loop should play the notes.");
+    q.cueOf.setTooltip ("For Every N, how many loop repetitions are in the cycle.");
+    q.rotate.setTooltip ("For ORBIT, move the evenly spaced notes around the grid.");
+    q.bassNote.setTooltip ("Choose the octave in which the chord progression sits, from C0 to C4.");
+    q.chordInversionBox.setTooltip ("Lift low chord voices by an octave to change its shape.");
+    q.fill.setTooltip ("Tell CUES that this pattern is a fill.");
+    q.openBank.setTooltip ("Open MidiJaQ pattern slots from a .NJQ file. Instruments and kits are not replaced.");
+    q.saveBank.setTooltip ("Save all your MidiJaQ slots and chord progressions as a .NJQ file.");
+    q.openBank.onClick = [this]
+    {
+        auto& q = *parts;
+        q.chooser = std::make_unique<juce::FileChooser> ("Open MidiJaQ patterns", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.njq");
+        q.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult();
+            if (! file.existsAsFile()) return;
+            juce::String error;
+            if (! proc.loadPatterns (file, error)) proc.message = error;
+            refresh();
+        });
+    };
+    q.saveBank.onClick = [this]
+    {
+        auto& q = *parts;
+        q.chooser = std::make_unique<juce::FileChooser> ("Save MidiJaQ patterns", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("MidiJaQ patterns.njq"), "*.njq");
+        q.chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult();
+            if (file == juce::File()) return;
+            juce::String error;
+            if (! proc.savePatterns (file.withFileExtension ("njq"), error)) proc.message = error;
+            refresh();
+        });
+    };
+    q.slotBox.onChange = [this] { proc.chooseSlot (parts->slotBox.getSelectedId() - 1); refresh(); };
+    q.trackBox.onChange = [this] { proc.chooseTrack (parts->trackBox.getSelectedId() - 1); refresh(); };
+    q.writerBox.onChange = [this] { proc.changeWriter ((mjq::Generator) (parts->writerBox.getSelectedId() - 1)); refresh(); };
+    q.trackOn.onClick = [this] { proc.changeTrackEnabled (parts->trackOn.getToggleState()); refresh(); };
+    q.chain.step = 1.0f; q.hits.step = 1.0f;
+    q.rotate.step = 1.0f; q.cueN.step = 1.0f; q.cueOf.step = 1.0f; q.bassNote.step = 1.0f;
+    q.chain.toText = [] (float v) { return juce::String ((int) std::round (v)); };
+    q.hits.toText = q.chain.toText;
+    q.rotate.toText = q.chain.toText; q.cueN.toText = q.chain.toText; q.cueOf.toText = q.chain.toText;
+    q.bassNote.toText = [] (float v) { return gen::noteName ((int) std::lround (v)); };
+    q.amount.toText = q.dialect.toText;
+    q.chain.onChange = [this] (float v) { proc.changeChain ((int) std::round (v)); };
+    q.amount.onChange = [this] (float v)
+    {
+        auto& g = proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator;
+        g.amount = v;
+        g.cue.chance = v;
+        proc.rebuildSession();
+    };
+    q.hits.onChange = [this] (float v)
+    {
+        proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator.hits = (int) std::round (v);
+        proc.rebuildSession();
+    };
+    q.rotate.onChange = [this] (float v)
+    {
+        proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator.rotate = (int) std::lround (v);
+        proc.rebuildSession();
+    };
+    q.cueN.onChange = [this] (float v)
+    {
+        proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator.cue.n = (uint8_t) std::lround (v);
+        proc.rebuildSession();
+    };
+    q.cueOf.onChange = [this] (float v)
+    {
+        proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator.cue.of = (uint8_t) std::lround (v);
+        proc.rebuildSession();
+    };
+    q.cueBox.onChange = [this]
+    {
+        auto& g = proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator;
+        g.cue.kind = (gen::Cue::Kind) juce::jlimit (0, 8, parts->cueBox.getSelectedId() - 1);
+        proc.rebuildSession();
+    };
+    q.fill.onClick = [this]
+    {
+        proc.session.current().tracks[(size_t) proc.session.selectedTrack].generator.fill = parts->fill.getToggleState();
+        proc.rebuildSession();
+    };
+    q.chordBarBox.onChange = [this] { parts->chordBar = parts->chordBarBox.getSelectedId() - 1; refresh(); };
+    auto chordChange = [this]
+    {
+        auto c = proc.session.current().chords.bars[(size_t) parts->chordBar];
+        c.root = parts->chordRootBox.getSelectedId() - 1;
+        c.kind = (mjq::ChordKind) (parts->chordKindBox.getSelectedId() - 1);
+        c.inversion = parts->chordInversionBox.getSelectedId() - 1;
+        c.bassNote = (int) std::lround (parts->bassNote.getValue());
+        proc.changeChord (parts->chordBar, c);
+        refresh();
+    };
+    q.chordRootBox.onChange = chordChange;
+    q.chordKindBox.onChange = chordChange;
+    q.chordInversionBox.onChange = chordChange;
+    q.bassNote.onChange = [this, chordChange] (float) { chordChange(); };
+    q.chordLengthBox.onChange = [this]
+    {
+        proc.session.current().chords.length = parts->chordLengthBox.getSelectedId();
+        proc.rebuildSession();
+    };
+
+    setSize (1240, 680);
     setResizable (true, true);
-    setResizeLimits (900, 420, 1800, 900);
+    setResizeLimits (1050, 610, 1800, 1000);
     refresh();
     startTimerHz (20);
 }
@@ -267,6 +405,26 @@ void MjqEditor::refresh()
     q.gate.setValue (L.gate); q.swing.setValue (L.swing);
     q.steps.setValue ((float) L.numSteps); q.offset.setValue ((float) L.offset); q.transpose.setValue ((float) L.transpose);
     q.mode.setSelected ((int) L.mode);
+    q.slotBox.setSelectedId (proc.session.selected + 1, juce::dontSendNotification);
+    q.trackBox.setSelectedId (proc.session.selectedTrack + 1, juce::dontSendNotification);
+    const auto& tr = proc.session.current().tracks[(size_t) proc.session.selectedTrack];
+    q.trackOn.setToggleState (tr.enabled, juce::dontSendNotification);
+    q.writerBox.setSelectedId ((int) tr.generator.kind + 1, juce::dontSendNotification);
+    q.chain.setValue ((float) proc.session.chainLength);
+    q.amount.setValue (tr.generator.amount);
+    q.hits.setValue ((float) tr.generator.hits);
+    q.rotate.setValue ((float) tr.generator.rotate);
+    q.cueN.setValue ((float) tr.generator.cue.n);
+    q.cueOf.setValue ((float) tr.generator.cue.of);
+    q.fill.setToggleState (tr.generator.fill, juce::dontSendNotification);
+    q.cueBox.setSelectedId ((int) tr.generator.cue.kind + 1, juce::dontSendNotification);
+    q.chordBarBox.setSelectedId (q.chordBar + 1, juce::dontSendNotification);
+    const auto& ch = proc.session.current().chords.bars[(size_t) q.chordBar];
+    q.chordRootBox.setSelectedId (ch.root + 1, juce::dontSendNotification);
+    q.chordKindBox.setSelectedId ((int) ch.kind + 1, juce::dontSendNotification);
+    q.chordInversionBox.setSelectedId (ch.inversion + 1, juce::dontSendNotification);
+    q.bassNote.setValue ((float) ch.bassNote);
+    q.chordLengthBox.setSelectedId (proc.session.current().chords.length, juce::dontSendNotification);
     q.clock.setSelected ((int) proc.clockMode);
     q.direction.setSelected ((int) L.direction);
     q.rootBox.setSelectedId (L.root + 1, juce::dontSendNotification);
@@ -322,6 +480,7 @@ void MjqEditor::paint (juce::Graphics& g)
     paintChassis (g, getLocalBounds().toFloat());
     paintPlate (g, q.head.toFloat(), 12.0f);
     paintPlate (g, q.side.toFloat(), 12.0f);
+    paintPlate (g, q.under.toFloat(), 12.0f);
 
     g.setFont (caps (15.0f));
     g.setColour (C::text());
@@ -335,6 +494,8 @@ void MjqEditor::paint (juce::Graphics& g)
     paintLabel (g, "Mode", { q.mode.getX(), q.mode.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Clock", { q.clock.getX(), q.clock.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Direction", { q.direction.getX(), q.direction.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
+    paintLabel (g, "PATTERNS & LINES", { q.under.getX() + 12, q.under.getY() + 7, 220, 14 }, juce::Justification::centredLeft, 9.0f);
+    paintLabel (g, "CHORD TRACK", { q.under.getX() + 12, q.under.getY() + 92, 220, 14 }, juce::Justification::centredLeft, 9.0f);
 
     g.setFont (font (10.5f));
     g.setColour (C::dim());
@@ -351,7 +512,37 @@ void MjqEditor::resized()
     juce::ignoreUnused (bottom);
     q.side = r.removeFromRight (250);
     q.body = r;
+    const bool compact = getHeight() < 590;
+    q.under = q.body.removeFromBottom (compact ? 0 : 164);
+    if (! compact) q.body.removeFromBottom (8);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &q.slotBox, &q.trackBox, &q.writerBox, &q.chordBarBox,
+            &q.chordRootBox, &q.chordKindBox, &q.chordLengthBox, &q.cueBox, &q.trackOn, &q.fill, &q.chain, &q.amount, &q.hits,
+            &q.rotate, &q.cueN, &q.cueOf, &q.bassNote, &q.chordInversionBox, &q.openBank, &q.saveBank })
+        c->setVisible (! compact);
     q.grid.setBounds (q.body.reduced (0, 2));
+
+    const int x0 = q.under.getX() + 12, y0 = q.under.getY() + 27;
+    q.slotBox.setBounds (x0, y0, 88, 26);
+    q.trackBox.setBounds (x0 + 94, y0, 74, 26);
+    q.trackOn.setBounds (x0 + 174, y0, 74, 26);
+    q.chain.setBounds (x0 + 254, y0 - 7, 55, 65);
+    q.writerBox.setBounds (x0 + 315, y0, 91, 26);
+    q.amount.setBounds (x0 + 412, y0 - 7, 60, 65);
+    q.hits.setBounds (x0 + 477, y0 - 7, 55, 65);
+    q.rotate.setBounds (x0 + 539, y0 - 7, 60, 65);
+    q.cueN.setBounds (x0 + 604, y0 - 7, 60, 65);
+    q.cueOf.setBounds (x0 + 669, y0 - 7, 60, 65);
+    q.cueBox.setBounds (x0, y0 + 37, 148, 26);
+    q.fill.setBounds (x0 + 155, y0 + 37, 67, 26);
+    q.openBank.setBounds (x0 + 230, y0 + 37, 132, 26);
+    q.saveBank.setBounds (x0 + 370, y0 + 37, 120, 26);
+    const int cy = q.under.getY() + 111;
+    q.chordBarBox.setBounds (x0, cy, 84, 27);
+    q.chordRootBox.setBounds (x0 + 91, cy, 71, 27);
+    q.chordKindBox.setBounds (x0 + 169, cy, 120, 27);
+    q.chordLengthBox.setBounds (x0 + 298, cy, 103, 27);
+    q.chordInversionBox.setBounds (x0 + 409, cy, 93, 27);
+    q.bassNote.setBounds (x0 + 509, cy - 11, 72, 62);
 
     // the buttons sit at the right; the knobs share whatever is left between the name and them
     const int ky = q.head.getY() + 10, kh = 72;

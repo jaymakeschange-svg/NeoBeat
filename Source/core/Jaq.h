@@ -52,7 +52,7 @@ enum class Direction : uint8_t { Forward = 0, Backward, Pendulum };
 
 // Where the pitches come from. Free writes its own line; Follow takes them from the keys held down (an
 // arpeggio that keeps the line's rhythm); Bass reads the held chord and plays under it.
-enum class Mode : uint8_t { Free = 0, Follow, Bass };
+enum class Mode : uint8_t { Free = 0, Follow, Bass, Parts };
 
 // What one step holds. Two notes and a changeover point, not one note: that is what lets DIALECT move
 // without a reroll.
@@ -94,6 +94,7 @@ struct Line
     int perBar = 16;                // steps in a bar: 16 = 16ths, 12 = 8th triplets
     float swing = 0.5f;             // as NeoBeat's: 0.5 straight, 0.66 swung
     Mode mode = Mode::Free;
+    int partIndex = 0;               // Parts: which voice of the chord this line carries
 };
 
 // ------------------------------------------------------------------ writing the line
@@ -345,6 +346,11 @@ inline int notePlayed (const Line& L, const Event& e, const int* held, int numHe
     {
         const int i = ((e.degree % numHeld) + numHeld) % numHeld;            // the degree walks the held keys
         return std::max (0, std::min (127, held[i] + 12 * e.octave + L.transpose));
+    }
+    if (L.mode == Mode::Parts)
+    {
+        const int voice = std::max (0, std::min (numHeld - 1, L.partIndex));
+        return std::max (0, std::min (127, held[voice] + 12 * e.octave + L.transpose));
     }
     int low = held[0];
     for (int i = 1; i < numHeld; ++i) low = std::min (low, held[i]);

@@ -6,6 +6,7 @@
 
 #include "../core/Inst.h"
 #include "../core/Player.h"
+#include "../core/Session.h"
 
 class MjqProcessor final : public juce::AudioProcessor
 {
@@ -14,8 +15,23 @@ public:
     ~MjqProcessor() override = default;
 
     // ---- the line, and the snapshot the audio thread reads
-    mjq::Line line;                                  // the message thread owns this
-    mjq::Player player;
+    mjq::Line line;                                  // the selected line, on the message thread
+    mjq::Session session;                             // 128 slots, four lines, chord track
+    mjq::Player player;                               // line 1, kept for the original public API
+    std::array<mjq::Player, mjq::kSessionTracks - 1> otherPlayers;
+    std::array<mjq::InstrumentPlayer, mjq::kSessionTracks - 1> otherVoices;
+    void setInstrumentLevel (float level);
+    int chosenSlot() const noexcept { return session.selected; }
+    int chosenTrack() const noexcept { return session.selectedTrack; }
+    void chooseSlot (int index);
+    void chooseTrack (int index);
+    void changeWriter (mjq::Generator);
+    void changeChord (int bar, const mjq::Chord&);
+    void changeChain (int length);
+    void changeTrackEnabled (bool enabled);
+    bool savePatterns (const juce::File&, juce::String& error);
+    bool loadPatterns (const juce::File&, juce::String& error);
+    void rebuildSession (bool full = false);
     mjq::ClockMode clockMode = mjq::ClockMode::Pattern;
     std::atomic<int> version { 0 };                  // the editor redraws when this moves
     juce::String message;                            // one line under the window
@@ -63,12 +79,22 @@ public:
     static bool fromXml (const juce::String&, mjq::Line&, mjq::ClockMode&, juce::String& instrumentFile);
 
 private:
-    std::shared_ptr<const mjq::Pass> shown;          // swapped under the audio thread's feet, never edited
+    struct Prepared
+    {
+        mjq::Session state;
+        std::array<std::array<mjq::Pass, mjq::kSessionTracks>, mjq::kSessionSlots> passes {};
+        std::array<std::array<std::shared_ptr<const std::vector<mjq::Pass>>, mjq::kSessionTracks>, mjq::kSessionSlots> evolving {};
+    };
+    std::shared_ptr<const Prepared> prepared;
+    std::shared_ptr<const mjq::Pass> shown;          // editor's preview of the chosen line
     std::shared_ptr<const mjq::Instrument> loaded;
     std::vector<std::shared_ptr<const mjq::Instrument>> keep;   // the one just replaced, until the audio thread is past it
     double keepSince = 0.0;
     std::atomic<int> lastStep { -1 };
-    std::vector<mjq::Line> undoStack, redoStack;
+    double hostSampleRate = 48000.0;
+    int playingSlot = -1;
+    struct History { int slot, track; mjq::Line line; };
+    std::vector<History> undoStack, redoStack;
     mjq::Line marked;
     bool hasMark = false;
     juce::Random seeds;

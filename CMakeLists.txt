@@ -62,7 +62,7 @@ target_link_libraries (MidiJaQ
 
 # Framework-free tests: the sequencer core and the clock, on the exact code the plugin uses.
 find_package (Threads REQUIRED)
-foreach (t test_jaq test_clock)
+foreach (t test_jaq test_clock test_session test_evolving)
     add_executable (${t} tools/${t}.cpp)
     target_include_directories (${t} PRIVATE Source)
     target_link_libraries (${t} PRIVATE Threads::Threads)
