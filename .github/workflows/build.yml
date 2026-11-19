@@ -16,7 +16,25 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build the app, the plugin and the tests
-        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving
+        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving test_orb test_room test_random test_audio
+
+      - name: The plugin listened to (levels, the room, the Orb's effects, what the randomiser changes)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/test_audio_artefacts/Release/test_audio.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Audio test failed' }
+
+      - name: The Orb, the room and the randomiser
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/Release/test_orb.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Orb test failed' }
+          & ./build/Release/test_room.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Room test failed' }
+          & ./build/Release/test_random.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Randomiser test failed' }
 
       - name: Sequencer tests (the same line on every platform, the rows, TRAFFIC, DIALECT, gates and ties)
         if: ${{ !cancelled() }}

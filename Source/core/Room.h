@@ -24,10 +24,14 @@ enum class RoomMove : uint8_t { None = 0, LeftRight, NearFar, Both };
 
 struct Place
 {
+    // Switching the room on must not change what you hear. A voice starts at the front and centre, as a
+    // point, which is exactly where it was before: you then move it, and what you hear is the moving. An
+    // earlier version started it half way back and half wide, so turning the room on dropped the voice by
+    // 15 dB and halved its pan before you had touched anything, which felt like a broken switch.
     bool on = false;                       // off: the voice goes straight out, as it always did
     float x = 0.0f;                        // -1 hard left .. +1 hard right
-    float y = 0.35f;                       // 0 at the ear .. 1 at the back of the room
-    float width = 0.5f;                    // how wide it sits: 0 a point, 1 spread across the picture
+    float y = 0.0f;                        // 0 at the ear .. 1 at the back of the room
+    float width = 0.0f;                    // how wide it sits: 0 a point, 1 spread across the picture
 
     RoomMove move = RoomMove::None;
     float depth = 0.5f;                    // how far the curve pushes it
@@ -89,14 +93,19 @@ struct RoomGain
 inline RoomGain roomGain (float x, float y, float width) noexcept
 {
     RoomGain g;
-    const float d = 0.33f + 9.67f * std::max (0.0f, std::min (1.0f, y));
+    y = std::max (0.0f, std::min (1.0f, y));
 
-    // 1/r, with the front of the room at unity. Raised to a little under one so the back of the room is
-    // clearly further away without falling out of the mix: at y = 1 this is about -21 dB, not -30.
-    const float amp = std::pow (0.33f / d, 0.72f);
+    // Distance, from one metre at the front to eight at the back. The honest 1/r would put the back wall
+    // 18 dB down on its own, and the air takes more off on top of that, which together is far enough to
+    // lose a voice rather than place it. The law is flattened so the whole depth of the room is about 10 dB
+    // of level, and what tells you something is far away is mostly that it is duller and narrower - which
+    // is how distance actually reads, and leaves the voice still in the mix at the back.
+    const float d = 1.0f + 7.0f * y;
+    const float amp = std::pow (1.0f / d, 0.55f);
 
-    // a thing far away is heard from nearly one direction: the picture narrows with distance
-    const float narrow = 1.0f - 0.55f * std::max (0.0f, std::min (1.0f, y));
+    // a thing far away is heard from nearly one direction: the picture narrows with distance, but not so
+    // much that a voice at the back cannot be placed at all
+    const float narrow = 1.0f - 0.35f * y;
     const float spread = std::max (0.0f, std::min (1.0f, width)) * narrow;
     const float pos = std::max (-1.0f, std::min (1.0f, x)) * narrow;
 
@@ -112,8 +121,9 @@ inline RoomGain roomGain (float x, float y, float width) noexcept
     g.l = amp * gl * 1.41421356f;
     g.r = amp * gr * 1.41421356f;
 
-    // air: almost nothing close by, a real loss by the back wall
-    g.cutoff = 20000.0f * std::pow (0.18f, std::max (0.0f, std::min (1.0f, y)));
+    // Air: nothing at all close by, and by the back wall enough to hear without gutting the sound. This is
+    // most of what says "far away", so it does the work the level used to do too much of.
+    g.cutoff = 20000.0f * std::pow (0.22f, y);
     return g;
 }
 

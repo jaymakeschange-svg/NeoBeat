@@ -197,7 +197,8 @@ struct Session
 // again, the build says so instead of a plugin crashing on one platform and passing every test on another.
 static_assert (sizeof (Session) < 400u * 1024u, "Session has grown: keep per-voice things off Track, and off the stack");
 
-inline Pass generatedPass (const Track& track, uint64_t round = 0, const Orb* orb = nullptr, float orbX = 0.0f, float orbY = 0.0f)
+inline Pass generatedPass (const Track& track, uint64_t round = 0, const Orb* orb = nullptr, float orbX = 0.0f, float orbY = 0.0f,
+                           const Randomiser* randomiser = nullptr)
 {
     // Advance from the same seed, outside the audio thread, to preserve each writer's memory.
     round %= (uint64_t) kEvolutionRounds;
@@ -205,6 +206,17 @@ inline Pass generatedPass (const Track& track, uint64_t round = 0, const Orb* or
     // out whatever the joystick is currently reading, rather than the two fighting over the same steps.
     Line copy = track.line;
     if (orb != nullptr && orb->on && orb->anySet()) orbLine (*orb, orbX, orbY, track.line, copy);
+
+    // A cycling TRAFFIC is applied while the line plays, by dropping steps the pass already holds. So the
+    // pass has to be written at the widest the cycle can reach, or there would be nothing there to drop
+    // when it swings open. Everything else a cycle touches is worked out again at playing time from the
+    // step, so only traffic needs this.
+    if (randomiser != nullptr)
+    {
+        const auto& c = randomiser->cycles[(size_t) Cycled::Traffic];
+        if (c.on && c.extremity > 0.0f)
+            copy.traffic = std::min (1.0f, std::max (copy.traffic, c.home + c.extremity));
+    }
     const auto& gs = track.generator;
     const int n = std::max (1, std::min (kMaxSteps, copy.numSteps));
     std::array<bool, kMaxSteps> allowed {};

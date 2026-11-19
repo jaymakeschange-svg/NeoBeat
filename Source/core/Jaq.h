@@ -277,6 +277,7 @@ struct Pass
 {
     std::vector<Event> events;
     double beats = 4.0;
+    float gate = 1.0f;      // the GATE this pass was written with, so a cycling one can be scaled from it
 };
 
 // The line as it plays: the steps TRAFFIC opens, turned by OFFSET, walked in the chosen direction, swung
@@ -288,6 +289,7 @@ inline Pass readPass (const Line& L)
     const auto order = walk (L);
     Pass pass;
     pass.beats = (double) order.size() * stepBeats;
+    pass.gate = L.gate;
     pass.events.reserve (order.size());
 
     auto stored = [&] (int pos) { return ((pos + L.offset) % n + n) % n; };   // OFFSET turns the pattern

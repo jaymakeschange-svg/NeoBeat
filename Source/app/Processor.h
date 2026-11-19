@@ -67,10 +67,15 @@ public:
     void setOrbOn (int track, bool on);
     void putOrbCorner (int track, int corner);                     // this voice's line, as it stands, goes there
     void clearOrbCorner (int track, int corner);
+    void scatterOrb (int track);          // fill the eight corners with variations of the line as it stands
     void recallOrbCorner (int track, int corner);                  // the joystick travels to that corner
     mjq::OrbBlend orbBlend (int track) const;
     // where the music has got to, for anything on screen that moves in time with it
     double displayBeat() const noexcept { return shownBeat.load (std::memory_order_relaxed); }
+
+    // How many notes the plugin has actually played. The one honest measure of what TRAFFIC and the
+    // writers are doing, and what a test should look at rather than guessing from the level.
+    std::atomic<uint64_t> notesPlayed { 0 };
 
     void lineChanged();                              // rebuild the snapshot and bump the version
     void roll();                                     // JAQ: a new family from a new seed
@@ -125,6 +130,13 @@ private:
     std::array<std::array<nb::LiveFx, mjq::kOrbStack>, mjq::kSessionTracks> orbFx;
     std::array<std::array<mjq::OrbFx, mjq::kOrbStack>, mjq::kSessionTracks> orbFxLast {};
     std::atomic<double> shownBeat { 0.0 };
+    // Where the music has got to, counted from when the plugin started. With a host this follows its
+    // transport; without one it keeps counting on its own. The player's own position runs from the start of
+    // each pass and goes back to nothing every bar, so anything that must not repeat every bar - a cycling
+    // knob, a drawn curve in the room - has to be told the time from here instead.
+    double freeBeats = 0.0;
+    double hostBeatsPerSample() const noexcept { return lastBpm / (60.0 * (hostSampleRate > 0.0 ? hostSampleRate : 48000.0)); }
+    double lastBpm = 120.0;
     uint64_t orbFxVersion = 0;
     juce::AudioBuffer<float> fxScratch;
 

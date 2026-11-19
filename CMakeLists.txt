@@ -75,6 +75,14 @@ target_include_directories (test_inst PRIVATE Source)
 target_compile_definitions (test_inst PRIVATE ${MIDIJAQ_DEFINITIONS})
 target_link_libraries (test_inst PRIVATE juce::juce_audio_formats juce::juce_events juce::juce_recommended_config_flags)
 
+# The plugin rendered and listened to: what every other test here cannot hear. Needs no window, so it runs
+# everywhere the plugin builds, including on CI.
+juce_add_console_app (test_audio PRODUCT_NAME "test_audio")
+target_sources (test_audio PRIVATE tools/test_audio.cpp ${MIDIJAQ_APP_SOURCES})
+target_include_directories (test_audio PRIVATE Source)
+target_compile_definitions (test_audio PRIVATE ${MIDIJAQ_DEFINITIONS})
+target_link_libraries (test_audio PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
     foreach (tool HostTest Snapshot)

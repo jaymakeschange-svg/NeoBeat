@@ -175,7 +175,7 @@ struct MjqEditor::Parts
     Knob lowKey { "LOW", 0.0f, 127.0f, 0.0f }, highKey { "HIGH", 0.0f, 127.0f, 127.0f };
     // the Orb
     mjq::OrbPad orbPad;
-    Pill orbOn { "Orb on", true }, orbPut { "Put line here" }, orbClearCorner { "Empty it" };
+    Pill orbOn { "Orb on", true }, orbPut { "Put line here" }, orbClearCorner { "Empty it" }, orbScatter { "Fill with variations" };
     Knob orbGrip { "GRIP", 0.5f, 8.0f, 3.0f };
     juce::ComboBox orbFxBox[mjq::kOrbStack];
     Knob orbFxMix[mjq::kOrbStack] { { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f } };
@@ -197,7 +197,7 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     for (juce::Component* c : std::initializer_list<juce::Component*> { &q.grid, &q.jaq, &q.undo, &q.redo, &q.lane, &q.dialect, &q.traffic,
             &q.accent, &q.gate, &q.swing, &q.steps, &q.offset, &q.transpose, &q.mode, &q.clock, &q.direction, &q.rootBox, &q.scaleBox, &q.gridBox,
             &q.openInst, &q.closeInst, &q.level, &q.sideTabs, &q.voicePick, &q.lowKey, &q.highKey,
-            &q.orbPad, &q.orbOn, &q.orbPut, &q.orbClearCorner, &q.orbGrip,
+            &q.orbPad, &q.orbOn, &q.orbPut, &q.orbClearCorner, &q.orbScatter, &q.orbGrip,
             &q.orbFxBox[0], &q.orbFxBox[1], &q.orbFxBox[2], &q.orbFxBox[3],
             &q.orbFxMix[0], &q.orbFxMix[1], &q.orbFxMix[2], &q.orbFxMix[3],
             &q.roomPad, &q.roomCurve, &q.roomOn, &q.roomFlatten, &q.roomMove,
@@ -318,6 +318,9 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
 
     q.orbPut.setTooltip ("Put the line this voice is playing into the chosen corner");
     q.orbPut.onClick = [this] { proc.putOrbCorner (proc.chosenTrack(), parts->orbCorner); refresh(); };
+    q.orbScatter.setTooltip ("Fill all eight corners with variations of the line you are playing, so the joystick "
+                             "has somewhere to go. Corner 1 stays exactly what you have now.");
+    q.orbScatter.onClick = [this] { proc.scatterOrb (proc.chosenTrack()); parts->orbCorner = 0; refresh(); };
     q.orbClearCorner.setTooltip ("Take the chosen corner out, so the Orb passes through it with nothing to say");
     q.orbClearCorner.onClick = [this] { proc.clearOrbCorner (proc.chosenTrack(), parts->orbCorner); refresh(); };
 
@@ -981,10 +984,11 @@ void MjqEditor::resized()
     q.orbOn.setBounds (x, top, w, 26);
     q.orbPad.setBounds (x, top + 32, w, w);
     const int afterPad = top + 32 + w + 22;      // room for the corner's name under the pad
-    q.orbPut.setBounds (x, afterPad, w - 72, 24);
-    q.orbGrip.setBounds (x + w - 66, afterPad - 6, 66, 58);
-    q.orbClearCorner.setBounds (x, afterPad + 28, w - 72, 22);
-    q.orbStack = { x, afterPad + 92, w, 4 * 46 };   // room for the readout and its heading above it
+    q.orbScatter.setBounds (x, afterPad, w - 72, 26);
+    q.orbGrip.setBounds (x + w - 66, afterPad + 2, 66, 58);
+    q.orbPut.setBounds (x, afterPad + 30, w - 72, 22);
+    q.orbClearCorner.setBounds (x, afterPad + 56, w - 72, 22);
+    q.orbStack = { x, afterPad + 120, w, 4 * 46 };   // room for the readout and its heading above it
     for (int s = 0; s < mjq::kOrbStack; ++s)
     {
         const int rowY = q.orbStack.getY() + s * 46;

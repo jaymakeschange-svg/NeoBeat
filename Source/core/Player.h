@@ -88,7 +88,7 @@ public:
     int process (const Line& L, const Pass& pass, ClockMode mode, const HostTime& host, int numSamples,
                  MidiOut* out, int maxOut, const Progression* progression = nullptr,
                  const GeneratorSettings* writer = nullptr, double chordBeat = 0.0,
-                 const std::vector<Pass>* evolving = nullptr)
+                 const std::vector<Pass>* evolving = nullptr, bool reapply = false)
     {
         int written = 0;
         if (out == nullptr || maxOut <= 0 || numSamples <= 0) return 0;
@@ -163,6 +163,23 @@ public:
                     const bool permitted = writer == nullptr || cueAllows (*writer, round, e.step, prevPassed);
                     prevPassed = permitted;
                     if (! permitted) continue;
+
+                    // A pass bakes in what TRAFFIC, DIALECT, ACCENT and GATE were when it was written. A
+                    // cycling knob moves them while it plays, so when one is live they are worked out again
+                    // here from the step the event remembers: traffic says whether it sounds at all,
+                    // dialect which of its two notes it takes, accent how hard and gate how long. The pass
+                    // for a cycling line is written at the widest setting the cycle can reach, so there is
+                    // always a step here to drop rather than one missing that should have sounded.
+                    int liveNote = e.note, liveVelocity = e.velocity;
+                    double liveLength = e.length;
+                    if (reapply)
+                    {
+                        if (! stepOn (L, e.step)) continue;
+                        liveNote = noteOf (L, e.step);
+                        liveVelocity = velocityOf (L, e.step);
+                        liveLength = e.length * (double) std::max (0.05f, L.gate) / (double) std::max (0.05f, currentPass.gate);
+                    }
+
                     const double t = base + e.start;
                     if (t < from || t >= to) continue;
                     ChordNotes chord;
@@ -184,16 +201,21 @@ public:
                         numPitches = 0;
                         for (int i = 0; i < numHeld && numPitches < kMaxHeld; ++i)
                         {
-                            const int p = e.note + keysShift (L, held[(size_t) i]) + L.transpose;
+                            const int p = liveNote + keysShift (L, held[(size_t) i]) + L.transpose;
                             if (p >= 0 && p <= 127) pitches[numPitches++] = p;
                         }
                         if (numPitches == 0) continue;      // every copy fell off the keyboard
                     }
-                    else pitches[0] = notePlayed (L, e, pitchKeys, numPitchKeys);
+                    else
+                    {
+                        Event live = e;
+                        live.note = liveNote;
+                        pitches[0] = notePlayed (L, live, pitchKeys, numPitchKeys);
+                    }
 
                     const int velocity = (L.mode == Mode::Free || numHeld == 0 || (progression != nullptr && (L.mode == Mode::Bass || L.mode == Mode::Parts)))
-                                       ? e.velocity
-                                       : std::max (1, std::min (127, (int) std::lround ((double) e.velocity * (double) keyVelocity() / 100.0)));
+                                       ? liveVelocity
+                                       : std::max (1, std::min (127, (int) std::lround ((double) liveVelocity * (double) keyVelocity() / 100.0)));
                     const int s = (int) std::floor ((t - from) / std::max (1.0e-9, blockBeats) * numSamples);
 
                     for (int c = 0; c < numPitches; ++c)
@@ -210,7 +232,7 @@ public:
                             }
 
                         emit (s, note, velocity, true);
-                        if (numSounding < (int) sounding.size()) sounding[(size_t) numSounding++] = { note, t + std::max (1.0e-4, e.length) };
+                        if (numSounding < (int) sounding.size()) sounding[(size_t) numSounding++] = { note, t + std::max (1.0e-4, liveLength) };
                     }
                 }
             }

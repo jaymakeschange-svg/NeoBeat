@@ -41,8 +41,11 @@ int main()
         const auto far = roomGain (0.0f, 1.0f, 0.0f);
 
         CHECK (power (far) < power (close), "the back of the room is quieter than the front");
+        // Level does less of this work than it used to. An honest 1/r puts the back wall far enough down to
+        // lose a voice rather than place it, so the law is flattened and what says "far away" is mostly
+        // that it is duller and narrower. The whole depth of the room is about ten decibels.
         const float drop = db (std::sqrt (power (far) / power (close)));
-        CHECK (drop < -12.0f && drop > -30.0f, "by a real amount, but not out of the mix (%.1f dB)", drop);
+        CHECK (drop < -5.0f && drop > -16.0f, "by enough to hear, and still in the mix (%.1f dB)", drop);
 
         CHECK (far.cutoff < close.cutoff * 0.3f, "and duller: the air takes the top off (%.0f Hz against %.0f)", far.cutoff, close.cutoff);
         CHECK (close.cutoff > 15000.0f, "close by, almost nothing is lost (%.0f Hz)", close.cutoff);

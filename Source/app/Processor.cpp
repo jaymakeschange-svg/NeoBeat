@@ -22,7 +22,7 @@ void MjqProcessor::rebuildSession (bool full)
     {
         const auto& tr = next->state.slots[(size_t) s].tracks[(size_t) t];
         const float ox = next->state.orbX, oy = next->state.orbY;
-        next->passes[(size_t) s][(size_t) t] = mjq::generatedPass (tr, 0, &next->state.orbs[(size_t) t], ox, oy);
+        next->passes[(size_t) s][(size_t) t] = mjq::generatedPass (tr, 0, &next->state.orbs[(size_t) t], ox, oy, &next->state.randomisers[(size_t) t]);
         auto& rounds = next->evolving[(size_t) s][(size_t) t];
         if (tr.generator.kind == mjq::Generator::HABIT || tr.generator.kind == mjq::Generator::DRIFT)
         {
@@ -30,7 +30,7 @@ void MjqProcessor::rebuildSession (bool full)
             prepared.reserve (mjq::kEvolutionRounds);
             prepared.push_back (next->passes[(size_t) s][(size_t) t]);
             for (int r = 1; r < mjq::kEvolutionRounds; ++r)
-                prepared.push_back (mjq::generatedPass (tr, (uint64_t) r, &next->state.orbs[(size_t) t], ox, oy));
+                prepared.push_back (mjq::generatedPass (tr, (uint64_t) r, &next->state.orbs[(size_t) t], ox, oy, &next->state.randomisers[(size_t) t]));
             rounds = std::make_shared<const std::vector<mjq::Pass>> (std::move (prepared));
         }
         else rounds.reset();
@@ -247,6 +247,46 @@ void MjqProcessor::putOrbCorner (int track, int corner)
     lineChanged();
 }
 
+// Fill the ring with eight variations of the line as it stands.
+//
+// The Orb morphs between corners, so two corners holding the same thing have nothing between them to move
+// through - and putting the line you are playing into corner after corner, which is the obvious way to
+// start, gives exactly that. This gives the ring something to say straight away: the same line, written
+// eight times from eight seeds, with the controls fanned out around where they are now. What you are
+// playing stays at corner 1, so the joystick parked there is still the line you had.
+void MjqProcessor::scatterOrb (int track)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    const auto& from = session.current().tracks[(size_t) track].line;
+    auto& orb = session.orbs[(size_t) track];
+
+    for (int c = 0; c < mjq::kOrbCorners; ++c)
+    {
+        auto& k = orb.corners[(size_t) c];
+        k = mjq::OrbCorner {};
+        k.set = true;
+        // corner 1 is exactly what is playing; the rest are the same line written from other seeds
+        k.seed = c == 0 ? from.seed : from.seed * 2654435761ull + (uint64_t) c * 40503ull + 1ull;
+
+        // the controls fanned around where they are now, so each corner is a different place to be
+        const float turn = 6.28318531f * (float) c / (float) mjq::kOrbCorners;
+        auto around = [&] (float at, float spread, float lo, float hi, float phase)
+        {
+            return juce::jlimit (lo, hi, at + spread * std::sin (turn + phase));
+        };
+        k.dialect = c == 0 ? from.dialect : around (from.dialect, 0.45f, 0.0f, 1.0f, 0.0f);
+        k.traffic = c == 0 ? from.traffic : around (from.traffic, 0.30f, 0.1f, 1.0f, 1.6f);
+        k.accent  = c == 0 ? from.accent  : around (from.accent,  0.30f, 0.0f, 1.0f, 3.1f);
+        k.gate    = c == 0 ? from.gate    : around (from.gate,    0.55f, 0.15f, 1.9f, 0.8f);
+        k.swing   = from.swing;                      // the groove stays put: morphing it is seasickness
+        k.transpose = c == 0 ? from.transpose : from.transpose + (c % 2 == 0 ? 0 : (c < 4 ? -12 : 12));
+    }
+    orb.on = true;
+    message = "The Orb holds eight variations. Corner 1 is the line you were playing.";
+    version.fetch_add (1);
+    lineChanged();
+}
+
 void MjqProcessor::clearOrbCorner (int track, int corner)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
@@ -357,6 +397,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     int numNotes[mjq::kSessionTracks] {};
     const int total = audio.getNumSamples();
     const double bpm = host.bpm > 1.0 ? host.bpm : 120.0;
+    lastBpm = bpm;
     const double beatPerSample = bpm / (60.0 * std::max (1.0, hostSampleRate));
     int start = 0;
     while (start < total)
@@ -379,6 +420,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         // MidiJaQ no longer sends MIDI out: a note goes to its track's own instrument and nowhere else.
         auto emit = [&] (int track, const mjq::MidiOut& e)
         {
+            if (e.on) notesPlayed.fetch_add (1, std::memory_order_relaxed);
             if (numNotes[track] < 1024)
                 notes[track][numNotes[track]++] = { start + e.sample, e.note, (float) e.velocity / 127.0f, e.on };
         };
@@ -419,7 +461,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             const auto& rnd = snapshot->state.randomisers[(size_t) track];
             if (rnd.any())
             {
-                const auto now = mjq::cycleRead (rnd, host.valid ? beat : seq.positionInPass());
+                const auto now = mjq::cycleRead (rnd, host.valid ? beat : freeBeats + (double) start * hostBeatsPerSample());
                 cycled = tr.line;
                 if (now.live[(size_t) mjq::Cycled::Dialect]) cycled.dialect = now.value[(size_t) mjq::Cycled::Dialect];
                 if (now.live[(size_t) mjq::Cycled::Traffic]) cycled.traffic = now.value[(size_t) mjq::Cycled::Traffic];
@@ -429,10 +471,11 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
                 linePtr = &cycled;
             }
 
+            const bool liveCycle = rnd.any();
             const int count = seq.process (*linePtr, passes[(size_t) track], clockMode, segmentTime,
                                            segment, out, 256, &slot.chords, &tr.generator,
                                            host.valid ? beat : seq.positionInPass(),
-                                           snapshot->evolving[(size_t) slotNumber][(size_t) track].get());
+                                           snapshot->evolving[(size_t) slotNumber][(size_t) track].get(), liveCycle);
             for (int j = 0; j < count; ++j) emit (track, out[j]);
         }
         start += segment;
@@ -441,7 +484,8 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     // Each track plays its own instrument, at its own level, and they sum into the one output. Keep the
     // events in sample order for the shared voice player, which Batchcut uses too.
     const auto& playing = snapshot->state.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, playingSlot)];
-    shownBeat.store (host.valid ? host.ppq : player.positionInPass(), std::memory_order_relaxed);
+    shownBeat.store (host.valid ? host.ppq : freeBeats, std::memory_order_relaxed);
+    if (! host.valid) freeBeats += (double) audio.getNumSamples() * hostBeatsPerSample();
     const int numSamples = audio.getNumSamples();
     const bool stereoOut = audio.getNumChannels() > 1;
 
@@ -479,7 +523,8 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         // the voice into a buffer of its own, then through its stack, then into the output
         auto& buf = voiceBuf[(size_t) track];
         if (buf.getNumSamples() < numSamples) buf.setSize (2, numSamples, false, false, true);
-        buf.clear (0, 0, numSamples);
+        buf.clear();                             // every channel: clear(0, 0, n) is the one-channel overload,
+                                                 // which left the right channel accumulating for ever
         v.process (buf.getWritePointer (0), buf.getWritePointer (1), numSamples, notes[track], numNotes[track]);
 
         for (int s = 0; s < mjq::kOrbStack; ++s)
@@ -517,7 +562,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         // worked out once a block and glided to across it, so a voice crossing the picture does not zip.
         if (inRoom)
         {
-            const double beat = host.valid ? host.ppq : player.positionInPass();
+            const double beat = host.valid ? host.ppq : freeBeats;
             const auto want = mjq::roomGain (place, beat, playing.tracks[(size_t) track].line.perBar);
             auto& air = roomAir[(size_t) track];
             air.set (want.cutoff);
