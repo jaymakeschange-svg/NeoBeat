@@ -21,7 +21,8 @@ void MjqProcessor::rebuildSession (bool full)
     auto prepareTrack = [&] (int s, int t)
     {
         const auto& tr = next->state.slots[(size_t) s].tracks[(size_t) t];
-        next->passes[(size_t) s][(size_t) t] = mjq::generatedPass (tr);
+        const float ox = next->state.orbX, oy = next->state.orbY;
+        next->passes[(size_t) s][(size_t) t] = mjq::generatedPass (tr, 0, ox, oy);
         auto& rounds = next->evolving[(size_t) s][(size_t) t];
         if (tr.generator.kind == mjq::Generator::HABIT || tr.generator.kind == mjq::Generator::DRIFT)
         {
@@ -29,7 +30,7 @@ void MjqProcessor::rebuildSession (bool full)
             prepared.reserve (mjq::kEvolutionRounds);
             prepared.push_back (next->passes[(size_t) s][(size_t) t]);
             for (int r = 1; r < mjq::kEvolutionRounds; ++r)
-                prepared.push_back (mjq::generatedPass (tr, (uint64_t) r));
+                prepared.push_back (mjq::generatedPass (tr, (uint64_t) r, ox, oy));
             rounds = std::make_shared<const std::vector<mjq::Pass>> (std::move (prepared));
         }
         else rounds.reset();
@@ -206,6 +207,71 @@ void MjqProcessor::changeTrackRange (int track, int lowKey, int highKey)
     lineChanged();
 }
 
+// The joystick. Every voice's Orb reads from the same position, so one hand moves the whole multi; what each
+// voice does with it is its own, because the corners belong to the voice.
+void MjqProcessor::moveOrb (float x, float y)
+{
+    const float r = std::sqrt (x * x + y * y);
+    if (r > 1.0f) { x /= r; y /= r; }          // the joystick stays in its circle
+    session.orbX = x;
+    session.orbY = y;
+    lineChanged();
+}
+
+void MjqProcessor::setOrbOn (int track, bool on)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+        session.slots[(size_t) p].tracks[(size_t) track].orb.on = on;
+    lineChanged();
+}
+
+// Put this voice's line, as it stands, into a corner: its seed and the controls it is playing with.
+void MjqProcessor::putOrbCorner (int track, int corner)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    corner = juce::jlimit (0, mjq::kOrbCorners - 1, corner);
+    const auto& from = session.current().tracks[(size_t) track].line;
+
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+    {
+        auto& c = session.slots[(size_t) p].tracks[(size_t) track].orb.corners[(size_t) corner];
+        const auto wasName = c.name;
+        c = mjq::OrbCorner {};
+        c.set = true;
+        c.name = wasName;
+        c.seed = from.seed;
+        c.dialect = from.dialect; c.traffic = from.traffic; c.accent = from.accent;
+        c.gate = from.gate; c.swing = from.swing; c.transpose = from.transpose;
+    }
+    message = "Corner " + juce::String (corner + 1) + " holds voice " + juce::String (track + 1) + "'s line.";
+    version.fetch_add (1);
+    lineChanged();
+}
+
+void MjqProcessor::clearOrbCorner (int track, int corner)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    corner = juce::jlimit (0, mjq::kOrbCorners - 1, corner);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+        session.slots[(size_t) p].tracks[(size_t) track].orb.corners[(size_t) corner] = mjq::OrbCorner {};
+    lineChanged();
+}
+
+// Travel to a corner: the joystick goes there, so the voice plays that corner outright.
+void MjqProcessor::recallOrbCorner (int, int corner)
+{
+    float cx = 0.0f, cy = 0.0f;
+    mjq::orbCornerAt (juce::jlimit (0, mjq::kOrbCorners - 1, corner), cx, cy);
+    moveOrb (cx, cy);
+}
+
+mjq::OrbBlend MjqProcessor::orbBlend (int track) const
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    return mjq::orbRead (session.current().tracks[(size_t) track].orb, session.orbX, session.orbY);
+}
+
 void MjqProcessor::changeTrackLevel (int track, float level)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
@@ -215,7 +281,7 @@ void MjqProcessor::changeTrackLevel (int track, float level)
     lineChanged();
 }
 
-void MjqProcessor::prepareToPlay (double sampleRate, int)
+void MjqProcessor::prepareToPlay (double sampleRate, int maxBlock)
 {
     hostSampleRate = sampleRate;
     playingSlot = -1;
@@ -228,6 +294,18 @@ void MjqProcessor::prepareToPlay (double sampleRate, int)
     for (int t = 0; t < mjq::kSessionTracks; ++t)
         if (auto cur = std::atomic_load (&loadedTracks[(size_t) t]))
             voicesFor (t).setInstrument (cur);
+
+    // the Orb's effect stack: a chain of its own for every voice, drawing on one shared set of pools
+    const int block = std::max (64, maxBlock);
+    fxPools.prepare ((float) sampleRate);
+    fxScratch.setSize (2, block, false, false, true);
+    for (int t = 0; t < mjq::kSessionTracks; ++t)
+    {
+        voiceBuf[(size_t) t].setSize (2, block, false, false, true);
+        voiceBuf[(size_t) t].clear();
+        for (auto& fx : orbFx[(size_t) t]) fx.prepare ((float) sampleRate, &fxPools);
+        orbFxLast[(size_t) t] = {};
+    }
 }
 
 void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
@@ -346,18 +424,76 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     // Each track plays its own instrument, at its own level, and they sum into the one output. Keep the
     // events in sample order for the shared voice player, which Batchcut uses too.
     const auto& playing = snapshot->state.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, playingSlot)];
+    const int numSamples = audio.getNumSamples();
+    const bool stereoOut = audio.getNumChannels() > 1;
+
     for (int track = 0; track < mjq::kSessionTracks; ++track)
     {
-        if (numNotes[track] == 0 && voicesFor (track).active.load() == 0) continue;
+        const auto& tr = playing.tracks[(size_t) track];
+        const auto blend = (tr.orb.on && tr.orb.anySet())
+                         ? mjq::orbRead (tr.orb, snapshot->state.orbX, snapshot->state.orbY)
+                         : mjq::OrbBlend {};
+        bool anyFx = false;
+        for (const auto& slot : blend.stack) anyFx = anyFx || slot.on();
+
+        auto& v = voicesFor (track);
+        const bool silent = numNotes[track] == 0 && v.active.load() == 0;
+        if (silent && ! anyFx) continue;         // an effect with a tail still has to be run out
+
         std::sort (notes[track], notes[track] + numNotes[track], [] (const mjq::PlayNote& a, const mjq::PlayNote& b)
         {
             if (a.offset != b.offset) return a.offset < b.offset;
             return ! a.on && b.on; // a retrigger releases the earlier voice before its new attack
         });
-        auto& v = voicesFor (track);
-        v.level.store (playing.tracks[(size_t) track].level);
-        v.process (audio.getWritePointer (0), audio.getNumChannels() > 1 ? audio.getWritePointer (1) : audio.getWritePointer (0),
-                   audio.getNumSamples(), notes[track], numNotes[track]);
+        v.level.store (tr.level);
+
+        if (! anyFx)
+        {
+            // nothing stacked: straight into the output, as before
+            v.process (audio.getWritePointer (0), stereoOut ? audio.getWritePointer (1) : audio.getWritePointer (0),
+                       numSamples, notes[track], numNotes[track]);
+            continue;
+        }
+
+        // the voice into a buffer of its own, then through its stack, then into the output
+        auto& buf = voiceBuf[(size_t) track];
+        if (buf.getNumSamples() < numSamples) buf.setSize (2, numSamples, false, false, true);
+        buf.clear (0, 0, numSamples);
+        v.process (buf.getWritePointer (0), buf.getWritePointer (1), numSamples, notes[track], numNotes[track]);
+
+        for (int s = 0; s < mjq::kOrbStack; ++s)
+        {
+            const auto& want = blend.stack[(size_t) s];
+            if (! want.on()) continue;
+
+            auto& fx = orbFx[(size_t) track][(size_t) s];
+            if (! (want == orbFxLast[(size_t) track][(size_t) s]))
+            {
+                nb::LiveSpec spec;
+                spec.kind = 1;                               // the library; Bounce Delay is the hit path
+                spec.fx = (nb::MatrixFx) juce::jlimit (0, (int) nb::MatrixFx::Count - 1, want.fx);
+                for (int k = 0; k < mjq::kOrbFxParams && k < (int) spec.p.size(); ++k) spec.p[(size_t) k] = want.p[(size_t) k];
+                spec.version = ++orbFxVersion;
+                fx.update (spec);
+                orbFxLast[(size_t) track][(size_t) s] = want;
+            }
+
+            if (fxScratch.getNumSamples() < numSamples) fxScratch.setSize (2, numSamples, false, false, true);
+            fx.process (buf.getReadPointer (0), buf.getReadPointer (1),
+                        fxScratch.getWritePointer (0), fxScratch.getWritePointer (1), numSamples, nb::HitView {}, false);
+
+            // the slot's mix is how far in the effect is, so one arriving fades in rather than jumping
+            const float wet = juce::jlimit (0.0f, 1.0f, want.mix), dry = 1.0f - wet;
+            for (int c = 0; c < 2; ++c)
+            {
+                auto* b = buf.getWritePointer (c);
+                const auto* w = fxScratch.getReadPointer (c);
+                for (int i = 0; i < numSamples; ++i) b[i] = dry * b[i] + wet * w[i];
+            }
+        }
+
+        audio.addFrom (0, 0, buf, 0, 0, numSamples);
+        if (stereoOut) audio.addFrom (1, 0, buf, 1, 0, numSamples);
     }
 
     lastStep.store (player.stepNow (snapshot->passes[(size_t) snapshot->state.selected][0]));
@@ -516,6 +652,8 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
     root.setAttribute ("version", 2);
     root.setAttribute ("selected", session.selected);
     root.setAttribute ("selectedTrack", session.selectedTrack);
+    root.setAttribute ("orbX", session.orbX);
+    root.setAttribute ("orbY", session.orbY);
     root.setAttribute ("chain", session.chainLength);
     root.setAttribute ("clock", (int) clockMode);
     root.setAttribute ("instrument", instrumentFile);
@@ -558,6 +696,41 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
             tn->setAttribute ("lowKey", tr.lowKey);
             tn->setAttribute ("highKey", tr.highKey);
             tn->setAttribute ("level", tr.level);
+
+            // the Orb: its eight corners, and the effects stacked on each
+            if (tr.orb.on || tr.orb.anySet())
+            {
+                auto* on = tn->createNewChildElement ("ORB");
+                on->setAttribute ("on", tr.orb.on ? 1 : 0);
+                on->setAttribute ("grip", tr.orb.grip);
+                on->setAttribute ("salt", juce::String (tr.orb.salt));
+                for (int c = 0; c < mjq::kOrbCorners; ++c)
+                {
+                    const auto& corner = tr.orb.corners[(size_t) c];
+                    if (! corner.set) continue;
+                    auto* cn = on->createNewChildElement ("CORNER");
+                    cn->setAttribute ("i", c);
+                    if (! corner.name.empty()) cn->setAttribute ("name", juce::String (corner.name));
+                    cn->setAttribute ("seed", juce::String (corner.seed));
+                    cn->setAttribute ("dialect", corner.dialect);
+                    cn->setAttribute ("traffic", corner.traffic);
+                    cn->setAttribute ("accent", corner.accent);
+                    cn->setAttribute ("gate", corner.gate);
+                    cn->setAttribute ("swing", corner.swing);
+                    cn->setAttribute ("transpose", corner.transpose);
+                    for (int s = 0; s < mjq::kOrbStack; ++s)
+                    {
+                        const auto& slot = corner.stack[(size_t) s];
+                        if (slot.fx < 0) continue;
+                        auto* fn = cn->createNewChildElement ("FX");
+                        fn->setAttribute ("slot", s);
+                        fn->setAttribute ("fx", slot.fx);
+                        fn->setAttribute ("mix", slot.mix);
+                        for (int k = 0; k < mjq::kOrbFxParams; ++k)
+                            fn->setAttribute ("p" + juce::String (k), slot.p[(size_t) k]);
+                    }
+                }
+            }
             if (auto legacy = juce::parseXML (toXml (tr.line, clockMode, {})))
                 tn->addChildElement (legacy.release());
         }
@@ -590,6 +763,8 @@ void MjqProcessor::setStateInformation (const void* data, int size)
         mjq::Session restored;
         restored.selected = juce::jlimit (0, 127, root->getIntAttribute ("selected"));
         restored.selectedTrack = juce::jlimit (0, 3, root->getIntAttribute ("selectedTrack"));
+        restored.orbX = (float) juce::jlimit (-1.0, 1.0, root->getDoubleAttribute ("orbX", 0.0));
+        restored.orbY = (float) juce::jlimit (-1.0, 1.0, root->getDoubleAttribute ("orbY", 0.0));
         restored.chainLength = juce::jlimit (1, 128, root->getIntAttribute ("chain", 1));
         clockMode = (mjq::ClockMode) juce::jlimit (0, 2, root->getIntAttribute ("clock"));
         wants = root->getStringAttribute ("instrument");
@@ -633,6 +808,39 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.lowKey = juce::jlimit (0, 127, tn->getIntAttribute ("lowKey", 0));
                 tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
                 tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
+
+                tr.orb = mjq::Orb {};
+                if (auto* on = tn->getChildByName ("ORB"))
+                {
+                    tr.orb.on = on->getBoolAttribute ("on", false);
+                    tr.orb.grip = (float) juce::jlimit (0.05, 12.0, on->getDoubleAttribute ("grip", 3.0));
+                    if (on->hasAttribute ("salt")) tr.orb.salt = (uint64_t) on->getStringAttribute ("salt").getLargeIntValue();
+                    for (auto* cn : on->getChildWithTagNameIterator ("CORNER"))
+                    {
+                        const int i = cn->getIntAttribute ("i", -1);
+                        if (i < 0 || i >= mjq::kOrbCorners) continue;
+                        auto& corner = tr.orb.corners[(size_t) i];
+                        corner.set = true;
+                        corner.name = cn->getStringAttribute ("name").toStdString();
+                        corner.seed = (uint64_t) cn->getStringAttribute ("seed").getLargeIntValue();
+                        corner.dialect = (float) cn->getDoubleAttribute ("dialect", 0.5);
+                        corner.traffic = (float) cn->getDoubleAttribute ("traffic", 0.5);
+                        corner.accent = (float) cn->getDoubleAttribute ("accent", 0.5);
+                        corner.gate = (float) cn->getDoubleAttribute ("gate", 1.0);
+                        corner.swing = (float) cn->getDoubleAttribute ("swing", 0.5);
+                        corner.transpose = cn->getIntAttribute ("transpose", 0);
+                        for (auto* fn : cn->getChildWithTagNameIterator ("FX"))
+                        {
+                            const int s = fn->getIntAttribute ("slot", -1);
+                            if (s < 0 || s >= mjq::kOrbStack) continue;
+                            auto& slot = corner.stack[(size_t) s];
+                            slot.fx = fn->getIntAttribute ("fx", -1);
+                            slot.mix = (float) juce::jlimit (0.0, 1.0, fn->getDoubleAttribute ("mix", 1.0));
+                            for (int k = 0; k < mjq::kOrbFxParams; ++k)
+                                slot.p[(size_t) k] = (float) fn->getDoubleAttribute ("p" + juce::String (k), 0.0);
+                        }
+                    }
+                }
                 if (auto* ln = tn->getChildByName ("MIDIJAQ"))
                 {
                     mjq::ClockMode dummy = clockMode;

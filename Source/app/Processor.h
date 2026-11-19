@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "../core/Inst.h"
+#include "../neobeat/dsp/LiveFx.h"
 #include "../core/Player.h"
 #include "../core/Session.h"
 
@@ -60,6 +61,15 @@ public:
     void changeTrackRange (int track, int lowKey, int highKey);
     void changeTrackLevel (int track, float level);
 
+    // ---- the Orb. One joystick moves every voice's Orb at once, so a single gesture takes the whole multi
+    // somewhere else. Each voice has eight corners of its own.
+    void moveOrb (float x, float y);                               // the joystick, in a circle of radius 1
+    void setOrbOn (int track, bool on);
+    void putOrbCorner (int track, int corner);                     // this voice's line, as it stands, goes there
+    void clearOrbCorner (int track, int corner);
+    void recallOrbCorner (int track, int corner);                  // the joystick travels to that corner
+    mjq::OrbBlend orbBlend (int track) const;
+
     void lineChanged();                              // rebuild the snapshot and bump the version
     void roll();                                     // JAQ: a new family from a new seed
     void rollLane (mjq::Lane lane);                  // one lane again, the rest as they are
@@ -105,6 +115,15 @@ private:
     std::shared_ptr<const Prepared> prepared;
     std::shared_ptr<const mjq::Pass> shown;          // editor's preview of the chosen line
     mutable std::array<std::shared_ptr<const mjq::Instrument>, mjq::kSessionTracks> loadedTracks;
+
+    // The Orb's effect stack. Each voice gets its own chain, so a multi can have one voice dry and another
+    // through four effects. These are NeoBeat's own real-time effects, shared rather than written again.
+    nb::LiveFxPools fxPools;
+    std::array<juce::AudioBuffer<float>, mjq::kSessionTracks> voiceBuf;
+    std::array<std::array<nb::LiveFx, mjq::kOrbStack>, mjq::kSessionTracks> orbFx;
+    std::array<std::array<mjq::OrbFx, mjq::kOrbStack>, mjq::kSessionTracks> orbFxLast {};
+    uint64_t orbFxVersion = 0;
+    juce::AudioBuffer<float> fxScratch;
     std::vector<std::shared_ptr<const mjq::Instrument>> keep;   // the one just replaced, until the audio thread is past it
     double keepSince = 0.0;
     std::atomic<int> lastStep { -1 };

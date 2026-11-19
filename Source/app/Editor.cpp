@@ -1,6 +1,7 @@
 // MidiJaQ's window: the line across the middle, one row a lane, and the knobs that move through the
 // family around it.
 #include "Editor.h"
+#include "OrbPad.h"
 #include "../neobeat/shared/NjqInstrument.h"
 
 using namespace mjqui;
@@ -171,8 +172,15 @@ struct MjqEditor::Parts
     Pill openInst { "Open instrument" }, closeInst { "Clear" };
     Knob level { "LEVEL", 0.0f, 1.5f, 0.8f };
     Knob lowKey { "LOW", 0.0f, 127.0f, 0.0f }, highKey { "HIGH", 0.0f, 127.0f, 127.0f };
+    // the Orb
+    mjq::OrbPad orbPad;
+    Pill orbOn { "Orb on", true }, orbPut { "Put line here" }, orbClearCorner { "Empty it" };
+    Knob orbGrip { "GRIP", 0.5f, 8.0f, 3.0f };
+    juce::ComboBox orbFxBox[mjq::kOrbStack];
+    Knob orbFxMix[mjq::kOrbStack] { { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f } };
+    int orbCorner = 0;
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::Rectangle<int> head, body, side, under, ranges;
+    juce::Rectangle<int> head, body, side, under, ranges, orbStack;
 };
 
 MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (p), parts (std::make_unique<Parts> (*this))
@@ -182,6 +190,9 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     for (juce::Component* c : std::initializer_list<juce::Component*> { &q.grid, &q.jaq, &q.undo, &q.redo, &q.lane, &q.dialect, &q.traffic,
             &q.accent, &q.gate, &q.swing, &q.steps, &q.offset, &q.transpose, &q.mode, &q.clock, &q.direction, &q.rootBox, &q.scaleBox, &q.gridBox,
             &q.openInst, &q.closeInst, &q.level, &q.sideTabs, &q.voicePick, &q.lowKey, &q.highKey,
+            &q.orbPad, &q.orbOn, &q.orbPut, &q.orbClearCorner, &q.orbGrip,
+            &q.orbFxBox[0], &q.orbFxBox[1], &q.orbFxBox[2], &q.orbFxBox[3],
+            &q.orbFxMix[0], &q.orbFxMix[1], &q.orbFxMix[2], &q.orbFxMix[3],
             &q.slotBox, &q.trackBox, &q.writerBox, &q.chordBarBox,
             &q.chordRootBox, &q.chordKindBox, &q.chordLengthBox, &q.cueBox, &q.trackOn, &q.fill,
             &q.chain, &q.amount, &q.hits, &q.rotate, &q.cueN, &q.cueOf, &q.bassNote,
@@ -283,6 +294,80 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     };
     q.lowKey.onCommit = setRange;
     q.highKey.onCommit = setRange;
+
+    // ---- the Orb
+    q.orbPad.setTooltip ("Drag the knob to morph between the corners. Click a corner to travel to it, "
+                         "shift-click to put the line you are playing into it.");
+    q.orbPad.onMove = [this] (float x, float y) { proc.moveOrb (x, y); refresh(); };
+    q.orbPad.onTravel = [this] (int c) { proc.recallOrbCorner (proc.chosenTrack(), c); refresh(); };
+    q.orbPad.onPut = [this] (int c) { proc.putOrbCorner (proc.chosenTrack(), c); refresh(); };
+    q.orbPad.onPick = [this] (int c) { parts->orbCorner = c; refresh(); };
+
+    q.orbOn.setTooltip ("Let the Orb play this voice. With it off the line plays as it is written.");
+    q.orbOn.onClick = [this] { proc.setOrbOn (proc.chosenTrack(), parts->orbOn.getToggleState()); refresh(); };
+
+    q.orbPut.setTooltip ("Put the line this voice is playing into the chosen corner");
+    q.orbPut.onClick = [this] { proc.putOrbCorner (proc.chosenTrack(), parts->orbCorner); refresh(); };
+    q.orbClearCorner.setTooltip ("Take the chosen corner out, so the Orb passes through it with nothing to say");
+    q.orbClearCorner.onClick = [this] { proc.clearOrbCorner (proc.chosenTrack(), parts->orbCorner); refresh(); };
+
+    q.orbGrip.setTooltip ("How sharply a corner takes over as you reach it. Low is a wash of all eight; high snaps from one to the next.");
+    q.orbGrip.toText = [] (float v) { return juce::String (v, 1); };
+    q.orbGrip.onCommit = [this]
+    {
+        const int t = proc.chosenTrack();
+        const float g = parts->orbGrip.getValue();
+        for (int p = 0; p < mjq::kSessionSlots; ++p) proc.session.slots[(size_t) p].tracks[(size_t) t].orb.grip = g;
+        proc.lineChanged();
+        refresh();
+    };
+
+    // the four stacked effects of the chosen corner
+    for (int s = 0; s < mjq::kOrbStack; ++s)
+    {
+        auto& box = q.orbFxBox[s];
+        box.addItem ("none", 1);
+        const auto& all = nb::matrixFxInfo();
+        for (int i = 0; i < (int) all.size(); ++i) box.addItem (all[(size_t) i].name, i + 2);
+        box.setSelectedId (1, juce::dontSendNotification);
+        box.setTooltip ("An effect stacked on this corner. Corners that hold the same effect blend its settings; "
+                        "where they hold different ones, the nearest corner's wins and fades in as you reach it.");
+        box.onChange = [this, s]
+        {
+            const int t = proc.chosenTrack(), c = parts->orbCorner;
+            const int chosenFx = parts->orbFxBox[s].getSelectedId() - 2;   // -1 is "none"
+            for (int p = 0; p < mjq::kSessionSlots; ++p)
+            {
+                auto& slot = proc.session.slots[(size_t) p].tracks[(size_t) t].orb.corners[(size_t) c].stack[(size_t) s];
+                if (slot.fx != chosenFx)
+                {
+                    slot = mjq::OrbFx {};
+                    slot.fx = chosenFx;
+                    slot.mix = 1.0f;
+                    if (chosenFx >= 0)
+                    {
+                        const auto& info = nb::matrixFxInfo()[(size_t) chosenFx];
+                        for (int k = 0; k < (int) info.params.size() && k < mjq::kOrbFxParams; ++k)
+                            slot.p[(size_t) k] = info.params[(size_t) k].def;
+                    }
+                }
+            }
+            proc.lineChanged();
+            refresh();
+        };
+
+        q.orbFxMix[s].toText = [] (float v) { return juce::String ((int) std::round (v * 100.0f)) + "%"; };
+        q.orbFxMix[s].setTooltip ("How far in this effect is on this corner");
+        q.orbFxMix[s].onCommit = [this, s]
+        {
+            const int t = proc.chosenTrack(), c = parts->orbCorner;
+            const float m = parts->orbFxMix[s].getValue();
+            for (int p = 0; p < mjq::kSessionSlots; ++p)
+                proc.session.slots[(size_t) p].tracks[(size_t) t].orb.corners[(size_t) c].stack[(size_t) s].mix = m;
+            proc.lineChanged();
+            refresh();
+        };
+    }
 
     for (int i = 0; i < 12; ++i) q.rootBox.addItem (gen::pitchName (i), i + 1);
     for (int i = 0; i < gen::numScales(); ++i) q.scaleBox.addItem (gen::scale (i).name, i + 1);
@@ -451,6 +536,25 @@ void MjqEditor::refresh()
     q.highKey.setValue ((float) tr.highKey);
     q.level.setValue (tr.level);
     q.closeInst.setEnabled (proc.instrumentFileFor (proc.session.selectedTrack).isNotEmpty());
+
+    // the Orb
+    {
+        const auto& orb = tr.orb;
+        q.orbCorner = juce::jlimit (0, mjq::kOrbCorners - 1, q.orbCorner);
+        q.orbPad.setOrb (orb, proc.session.orbX, proc.session.orbY, q.orbCorner);
+        q.orbOn.setToggleState (orb.on, juce::dontSendNotification);
+        q.orbOn.setEnabled (orb.anySet());
+        q.orbGrip.setValue (orb.grip);
+        q.orbClearCorner.setEnabled (orb.corners[(size_t) q.orbCorner].set);
+        const auto& corner = orb.corners[(size_t) q.orbCorner];
+        for (int s = 0; s < mjq::kOrbStack; ++s)
+        {
+            q.orbFxBox[s].setSelectedId (corner.stack[(size_t) s].fx + 2, juce::dontSendNotification);
+            q.orbFxMix[s].setValue (corner.stack[(size_t) s].mix);
+            q.orbFxBox[s].setEnabled (corner.set);
+            q.orbFxMix[s].setEnabled (corner.set && corner.stack[(size_t) s].fx >= 0);
+        }
+    }
     q.writerBox.setSelectedId ((int) tr.generator.kind + 1, juce::dontSendNotification);
     q.chain.setValue ((float) proc.session.chainLength);
     q.amount.setValue (tr.generator.amount);
@@ -519,6 +623,33 @@ bool MjqEditor::keyPressed (const juce::KeyPress& key)
 // The multi, drawn: the name of the chosen voice's instrument, and a keyboard strip with all four ranges on
 // it. Where two bars sit over the same keys, one key starts both voices — which is the whole point, and is
 // much easier to see than to read off two numbers.
+// What the Orb is reading out right now, under the joystick, and the chosen corner's effect stack.
+void MjqEditor::paintOrb (juce::Graphics& g)
+{
+    auto& q = *parts;
+    const int track = proc.chosenTrack();
+    const auto blend = proc.orbBlend (track);
+    const auto& orb = proc.session.current().tracks[(size_t) track].orb;
+
+    paintLabel (g, "Corner " + juce::String (q.orbCorner + 1)
+                 + (orb.corners[(size_t) q.orbCorner].set ? "" : " (empty)"),
+                { q.orbPut.getX(), q.orbPut.getY() - 14, 160, 12 }, juce::Justification::centredLeft, 8.0f);
+
+    // what it is playing: the blend, so you can read the morph as well as hear it
+    paintLabel (g, "Reading out", { q.orbStack.getX(), q.orbStack.getY() - 30, 160, 12 }, juce::Justification::centredLeft, 8.0f);
+    const juce::Rectangle<int> readout { q.orbStack.getX(), q.orbStack.getY() - 16, q.orbStack.getWidth(), 14 };
+    g.setFont (font (9.5f));
+    g.setColour (orb.on && orb.anySet() ? C::dim() : C::dim().withAlpha (0.5f));
+    g.drawText (orb.on && orb.anySet()
+                    ? "dialect " + juce::String ((int) std::round (blend.dialect * 100.0f))
+                      + "   traffic " + juce::String ((int) std::round (blend.traffic * 100.0f))
+                      + "   gate " + juce::String (blend.gate, 2)
+                    : "the line plays as written",
+                readout, juce::Justification::centredLeft, false);
+
+    paintLabel (g, "Stacked on this corner", { q.orbStack.getX(), q.orbStack.getY() - 2, 200, 12 }, juce::Justification::centredLeft, 8.0f);
+}
+
 void MjqEditor::showSideTab (int tab)
 {
     parts->sideTabs.setSelected (juce::jlimit (0, 2, tab));
@@ -596,6 +727,8 @@ void MjqEditor::paint (juce::Graphics& g)
     }
     else if (q.sideTabs.getSelected() == 1)
         paintVoices (g);
+    else if (q.sideTabs.getSelected() == 2)
+        paintOrb (g);
     paintLabel (g, "PATTERNS & LINES", { q.under.getX() + 12, q.under.getY() + 7, 220, 14 }, juce::Justification::centredLeft, 9.0f);
     paintLabel (g, "CHORD TRACK", { q.under.getX() + 12, q.under.getY() + 92, 220, 14 }, juce::Justification::centredLeft, 9.0f);
 
@@ -687,4 +820,26 @@ void MjqEditor::resized()
     q.highKey.setBounds (x + 72, top + 142, 66, 62);
     q.level.setBounds (x + w - 66, top + 142, 66, 62);
     q.ranges = { x, top + 216, w, 64 };
+
+    // the Orb
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &q.orbPad, &q.orbOn, &q.orbPut, &q.orbClearCorner, &q.orbGrip })
+        c->setVisible (tab == 2 && ! compact);
+    for (int s = 0; s < mjq::kOrbStack; ++s)
+    {
+        q.orbFxBox[s].setVisible (tab == 2 && ! compact);
+        q.orbFxMix[s].setVisible (tab == 2 && ! compact);
+    }
+    q.orbOn.setBounds (x, top, w, 26);
+    q.orbPad.setBounds (x, top + 32, w, w);
+    const int afterPad = top + 32 + w + 22;      // room for the corner's name under the pad
+    q.orbPut.setBounds (x, afterPad, w - 72, 24);
+    q.orbGrip.setBounds (x + w - 66, afterPad - 6, 66, 58);
+    q.orbClearCorner.setBounds (x, afterPad + 28, w - 72, 22);
+    q.orbStack = { x, afterPad + 92, w, 4 * 46 };   // room for the readout and its heading above it
+    for (int s = 0; s < mjq::kOrbStack; ++s)
+    {
+        const int rowY = q.orbStack.getY() + s * 46;
+        q.orbFxBox[s].setBounds (x, rowY + 12, w - 60, 24);
+        q.orbFxMix[s].setBounds (x + w - 56, rowY + 2, 56, 44);
+    }
 }

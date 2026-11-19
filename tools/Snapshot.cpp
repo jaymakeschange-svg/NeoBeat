@@ -64,6 +64,34 @@ int main (int argc, char** argv)
     juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
     shot (*ed, dir, "4_voices");
 
+    // the Orb: four corners filled, the joystick between two of them, effects stacked
+    {
+        proc->chooseTrack (0);
+        for (int c = 0; c < 4; ++c)
+        {
+            proc->line.dialect = 0.15f + 0.25f * (float) c;
+            proc->line.traffic = 0.9f - 0.15f * (float) c;
+            proc->line.gate = 0.4f + 0.4f * (float) c;
+            mjq::generate (proc->line, 300u + 77u * (uint32_t) c);
+            proc->lineChanged();
+            proc->putOrbCorner (0, c * 2);
+        }
+        for (int p = 0; p < mjq::kSessionSlots; ++p)
+        {
+            auto& orb = proc->session.slots[(size_t) p].tracks[0].orb;
+            orb.on = true;
+            orb.corners[0].stack[0].fx = (int) nb::MatrixFx::Freezing; orb.corners[0].stack[0].mix = 0.8f;
+            orb.corners[0].stack[1].fx = (int) nb::MatrixFx::Shimmer;  orb.corners[0].stack[1].mix = 0.5f;
+            orb.corners[2].stack[0].fx = (int) nb::MatrixFx::Freezing; orb.corners[2].stack[0].mix = 0.3f;
+            orb.corners[2].stack[1].fx = (int) nb::MatrixFx::Granulation; orb.corners[2].stack[1].mix = 1.0f;
+        }
+        proc->moveOrb (0.42f, -0.62f);
+        ed->setBounds (0, 0, 1120, 780);
+        ed->showSideTab (2);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
+        shot (*ed, dir, "5_orb");
+    }
+
     ed.reset();
     proc->releaseResources();
     return 0;
