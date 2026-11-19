@@ -107,11 +107,20 @@ struct GeneratorSettings
     bool fill = false;
 };
 
+// One voice of the multi: a line, the writer behind it, the instrument that sounds it, and the stretch of
+// keys it answers to. Ranges may overlap, which is the point: one key can start a piano figure and a
+// bassline at once, each on its own instrument.
 struct Track
 {
     Line line;
     GeneratorSettings generator;
     bool enabled = true;
+
+    std::string instrumentFile;         // the .NJQi (or .NJQ) this voice plays; empty: silent
+    int lowKey = 0, highKey = 127;      // the keys that steer it, in Follow, Bass and Parts
+    float level = 0.8f;                 // so the layers of a multi can be balanced (the player's own default)
+
+    bool answersTo (int note) const noexcept { return note >= lowKey && note <= highKey; }
 };
 
 struct Slot
@@ -141,7 +150,22 @@ struct Session
                 tr.line.mode = t == 0 ? Mode::Free : Mode::Free;
                 tr.line.base = 48 + 12 * (t > 0 ? 1 : 0);
                 tr.line.partIndex = t;    // every Parts line takes its own chord voice
+                // the multi starts laid out rather than stacked: a bass end, a middle, and a top that
+                // overlaps it, so holding one key in the middle can start two voices at once
+                const int bounds[kSessionTracks][2] = { { 0, 127 }, { 0, 59 }, { 48, 83 }, { 72, 127 } };
+                tr.lowKey = bounds[t][0];
+                tr.highKey = bounds[t][1];
             }
+    }
+
+    // the voices a key reaches: enabled, with an instrument, and answering to that key
+    int voicesFor (int slotIndex, int note, int* out, int max) const noexcept
+    {
+        int n = 0;
+        const auto& s = slots[(size_t) std::max (0, std::min (kSessionSlots - 1, slotIndex))];
+        for (int t = 0; t < kSessionTracks && n < max; ++t)
+            if (s.tracks[(size_t) t].enabled && s.tracks[(size_t) t].answersTo (note)) out[n++] = t;
+        return n;
     }
 
     Slot& current() noexcept { return slots[(size_t) std::max (0, std::min (127, selected))]; }

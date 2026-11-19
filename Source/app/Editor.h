@@ -13,12 +13,14 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void refresh();
+    void showSideTab (int tab);           // 0 the line, 1 the voices, 2 the Orb
 
     MjqProcessor& proc;
     int chosenStep = -1, chosenLane = 1;  // where the editor is, for the keyboard
 
 private:
     void timerCallback() override;
+    void paintVoices (juce::Graphics&);   // the multi: the chosen instrument, and all four key ranges
     struct Parts;
     std::unique_ptr<Parts> parts;
     mjqui::Look look;

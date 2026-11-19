@@ -92,10 +92,10 @@ void MjqProcessor::changeTrackEnabled (bool enabled)
     rebuildSession();
 }
 
+// the LEVEL knob sets the chosen voice's level; the others keep theirs, so a multi stays balanced
 void MjqProcessor::setInstrumentLevel (float level)
 {
-    voices.level.store (level);
-    for (auto& v : otherVoices) v.level.store (level);
+    changeTrackLevel (session.selectedTrack, level);
 }
 
 void MjqProcessor::roll()
@@ -147,30 +147,72 @@ bool MjqProcessor::redo()
 
 bool MjqProcessor::openInstrument (const juce::File& file, juce::String& error)
 {
+    return openInstrument (session.selectedTrack, file, error);
+}
+
+bool MjqProcessor::openInstrument (int track, const juce::File& file, juce::String& error)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
     mjq::Instrument ins;
     if (! mjq::loadInstrument (file, ins, error)) { message = "Not opened: " + error; return false; }
 
     auto shared = std::make_shared<const mjq::Instrument> (std::move (ins));
-    if (auto old = std::atomic_load (&loaded)) keep.push_back (old);   // the audio thread may still be in it
-    std::atomic_store (&loaded, shared);
-    voices.setInstrument (shared);
-    for (auto& v : otherVoices) v.setInstrument (shared);
-    instrumentFile = file.getFullPathName();
-    message = mjq::describe (*shared);
+    if (auto old = std::atomic_load (&loadedTracks[(size_t) track])) keep.push_back (old);   // the audio thread may still be in it
+    std::atomic_store (&loadedTracks[(size_t) track], shared);
+    voicesFor (track).setInstrument (shared);
+
+    // the path travels in the session, so a multi is saved and reopened whole
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+        session.slots[(size_t) p].tracks[(size_t) track].instrumentFile = file.getFullPathName().toStdString();
+    if (track == 0) instrumentFile = file.getFullPathName();
+    message = "Voice " + juce::String (track + 1) + ": " + mjq::describe (*shared);
     version.fetch_add (1);
     return true;
 }
 
-void MjqProcessor::closeInstrument()
+void MjqProcessor::closeInstrument() { closeInstrument (session.selectedTrack); }
+
+void MjqProcessor::closeInstrument (int track)
 {
-    if (auto old = std::atomic_load (&loaded)) keep.push_back (old);
-    std::atomic_store (&loaded, std::shared_ptr<const mjq::Instrument>());
-    voices.setInstrument (nullptr);
-    voices.letGo.store (true);
-    for (auto& v : otherVoices) { v.setInstrument (nullptr); v.letGo.store (true); }
-    instrumentFile.clear();
-    message = "No instrument: MidiJaQ is sending MIDI to whatever you point it at.";
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    if (auto old = std::atomic_load (&loadedTracks[(size_t) track])) keep.push_back (old);
+    std::atomic_store (&loadedTracks[(size_t) track], std::shared_ptr<const mjq::Instrument>());
+    auto& v = voicesFor (track);
+    v.setInstrument (nullptr);
+    v.letGo.store (true);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+        session.slots[(size_t) p].tracks[(size_t) track].instrumentFile.clear();
+    if (track == 0) instrumentFile.clear();
+    message = "Voice " + juce::String (track + 1) + " has no instrument, so it makes no sound.";
     version.fetch_add (1);
+}
+
+juce::String MjqProcessor::instrumentFileFor (int track) const
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    return juce::String (session.current().tracks[(size_t) track].instrumentFile);
+}
+
+void MjqProcessor::changeTrackRange (int track, int lowKey, int highKey)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    lowKey = juce::jlimit (0, 127, lowKey);
+    highKey = juce::jlimit (lowKey, 127, highKey);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+    {
+        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        tr.lowKey = lowKey; tr.highKey = highKey;
+    }
+    lineChanged();
+}
+
+void MjqProcessor::changeTrackLevel (int track, float level)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    level = juce::jlimit (0.0f, 2.0f, level);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+        session.slots[(size_t) p].tracks[(size_t) track].level = level;
+    lineChanged();
 }
 
 void MjqProcessor::prepareToPlay (double sampleRate, int)
@@ -182,32 +224,42 @@ void MjqProcessor::prepareToPlay (double sampleRate, int)
     for (auto& p : otherPlayers) { p.prepare (sampleRate); p.allKeysUp(); }
     voices.prepare (sampleRate);
     for (auto& v : otherVoices) v.prepare (sampleRate);
-    if (auto cur = std::atomic_load (&loaded))
-    {
-        voices.setInstrument (cur);
-        for (auto& v : otherVoices) v.setInstrument (cur);
-    }
+    // every voice of the multi gets its own instrument back
+    for (int t = 0; t < mjq::kSessionTracks; ++t)
+        if (auto cur = std::atomic_load (&loadedTracks[(size_t) t]))
+            voicesFor (t).setInstrument (cur);
 }
 
 void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
-    audio.clear();                                   // MidiJaQ makes MIDI; its instrument comes later
+    audio.clear();                                   // MidiJaQ is an instrument: it makes sound, not MIDI
 
-    // the keys held down, for Follow, Bass and the Gate clock
+    // The keys held down, for Follow, Bass, Parts and the Gate clock. A key only reaches the voices whose
+    // range covers it, which is what makes the multi a multi: hold low and the bass answers, hold in the
+    // middle where two ranges overlap and both do, each on its own instrument.
+    const int heldSlot = session.selected;
     for (const auto m : midi)
     {
         const auto msg = m.getMessage();
-        auto key = [&] (mjq::Player& p)
+        if (msg.isAllNotesOff())
         {
-            if (msg.isNoteOn())            p.keyDown (msg.getNoteNumber(), msg.getVelocity());
-            else if (msg.isNoteOff())      p.keyUp (msg.getNoteNumber());
-            else if (msg.isAllNotesOff())  p.allKeysUp();
-        };
-        key (player);
-        for (auto& p : otherPlayers) key (p);
+            player.allKeysUp();
+            for (auto& p : otherPlayers) p.allKeysUp();
+            continue;
+        }
+        if (! msg.isNoteOn() && ! msg.isNoteOff()) continue;
+        const int note = msg.getNoteNumber();
+        int reached[mjq::kSessionTracks];
+        const int n = session.voicesFor (heldSlot, note, reached, mjq::kSessionTracks);
+        for (int i = 0; i < n; ++i)
+        {
+            auto& p = reached[i] == 0 ? player : otherPlayers[(size_t) (reached[i] - 1)];
+            if (msg.isNoteOn()) p.keyDown (note, msg.getVelocity());
+            else                p.keyUp (note);
+        }
     }
-    midi.clear();                                    // what came in played the line; it is not passed on
+    midi.clear();                                    // what came in played the lines; nothing is passed on
 
     auto snapshot = std::atomic_load (&prepared);
     if (snapshot == nullptr) return;
@@ -247,13 +299,11 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             segment = std::min (segment, std::max (1, (int) std::ceil ((nextBar - beat) / beatPerSample - 1.0e-7)));
         }
 
+        // MidiJaQ no longer sends MIDI out: a note goes to its track's own instrument and nowhere else.
         auto emit = [&] (int track, const mjq::MidiOut& e)
         {
-            const int sample = start + e.sample;
-            midi.addEvent (e.on ? juce::MidiMessage::noteOn (track + 1, e.note, (juce::uint8) e.velocity)
-                                : juce::MidiMessage::noteOff (track + 1, e.note), sample);
             if (numNotes[track] < 1024)
-                notes[track][numNotes[track]++] = { sample, e.note, (float) e.velocity / 127.0f, e.on };
+                notes[track][numNotes[track]++] = { start + e.sample, e.note, (float) e.velocity / 127.0f, e.on };
         };
 
         if (slotNumber != playingSlot)
@@ -293,16 +343,19 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         start += segment;
     }
 
-    // One instrument plays the notes from all active lines. Keep the events in sample order for the
-    // shared voice player, which is also used by Batchcut.
+    // Each track plays its own instrument, at its own level, and they sum into the one output. Keep the
+    // events in sample order for the shared voice player, which Batchcut uses too.
+    const auto& playing = snapshot->state.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, playingSlot)];
     for (int track = 0; track < mjq::kSessionTracks; ++track)
     {
+        if (numNotes[track] == 0 && voicesFor (track).active.load() == 0) continue;
         std::sort (notes[track], notes[track] + numNotes[track], [] (const mjq::PlayNote& a, const mjq::PlayNote& b)
         {
             if (a.offset != b.offset) return a.offset < b.offset;
             return ! a.on && b.on; // a retrigger releases the earlier voice before its new attack
         });
-        auto& v = track == 0 ? voices : otherVoices[(size_t) (track - 1)];
+        auto& v = voicesFor (track);
+        v.level.store (playing.tracks[(size_t) track].level);
         v.process (audio.getWritePointer (0), audio.getNumChannels() > 1 ? audio.getWritePointer (1) : audio.getWritePointer (0),
                    audio.getNumSamples(), notes[track], numNotes[track]);
     }
@@ -500,6 +553,11 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
             tn->setAttribute ("cueOf", (int) tr.generator.cue.of);
             tn->setAttribute ("cueChance", tr.generator.cue.chance);
             tn->setAttribute ("fill", tr.generator.fill);
+            // the multi: this voice's own instrument, the keys it answers to, and its level
+            if (! tr.instrumentFile.empty()) tn->setAttribute ("instrument", juce::String (tr.instrumentFile));
+            tn->setAttribute ("lowKey", tr.lowKey);
+            tn->setAttribute ("highKey", tr.highKey);
+            tn->setAttribute ("level", tr.level);
             if (auto legacy = juce::parseXML (toXml (tr.line, clockMode, {})))
                 tn->addChildElement (legacy.release());
         }
@@ -569,6 +627,12 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.generator.cue.of = (uint8_t) juce::jlimit (1, 64, tn->getIntAttribute ("cueOf", 2));
                 tr.generator.cue.chance = (float) juce::jlimit (0.0, 1.0, tn->getDoubleAttribute ("cueChance", 0.5));
                 tr.generator.fill = tn->getBoolAttribute ("fill", false);
+                // the multi. A project from before it was written has no range: the voice takes the whole
+                // keyboard, which is what it did then.
+                tr.instrumentFile = tn->getStringAttribute ("instrument").toStdString();
+                tr.lowKey = juce::jlimit (0, 127, tn->getIntAttribute ("lowKey", 0));
+                tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
+                tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
                 if (auto* ln = tn->getChildByName ("MIDIJAQ"))
                 {
                     mjq::ClockMode dummy = clockMode;
@@ -584,13 +648,31 @@ void MjqProcessor::setStateInformation (const void* data, int size)
     else return;
     playingSlot = -1;
     rebuildSession (true);
-    if (wants.isEmpty() && instrumentFile.isNotEmpty()) closeInstrument();
-    if (wants.isNotEmpty() && wants != instrumentFile)
+
+    // Open every voice's instrument. A project saved before the multi existed names one instrument for the
+    // whole plugin, in `wants`; that one goes to voice 1, which is where it played from.
+    juce::StringArray missing;
+    for (int t = 0; t < mjq::kSessionTracks; ++t)
     {
-        const juce::File f (wants);
+        auto path = juce::String (session.current().tracks[(size_t) t].instrumentFile);
+        if (path.isEmpty() && t == 0) path = wants;
+        if (path.isEmpty()) { closeInstrument (t); continue; }
+        const juce::File f (path);
         juce::String err;
-        if (f.existsAsFile()) openInstrument (f, err);
-        else { instrumentFile = wants; message = "The instrument " + f.getFileName() + " was not where it was: open it again."; version.fetch_add (1); }
+        if (f.existsAsFile()) openInstrument (t, f, err);
+        else
+        {
+            for (int p = 0; p < mjq::kSessionSlots; ++p)
+                session.slots[(size_t) p].tracks[(size_t) t].instrumentFile = path.toStdString();
+            if (t == 0) instrumentFile = path;
+            missing.add (f.getFileName());
+        }
+    }
+    if (! missing.isEmpty())
+    {
+        message = (missing.size() == 1 ? "The instrument " : "The instruments ")
+                + missing.joinIntoString (", ") + " were not where they were: open them again.";
+        version.fetch_add (1);
     }
 }
 

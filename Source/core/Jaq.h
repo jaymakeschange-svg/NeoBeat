@@ -52,7 +52,15 @@ enum class Direction : uint8_t { Forward = 0, Backward, Pendulum };
 
 // Where the pitches come from. Free writes its own line; Follow takes them from the keys held down (an
 // arpeggio that keeps the line's rhythm); Bass reads the held chord and plays under it.
-enum class Mode : uint8_t { Free = 0, Follow, Bass, Parts };
+// How a held key steers the line.
+//   Free    nothing is held: the line plays as written
+//   Follow  the degrees walk the keys held, so the chord chooses the notes
+//   Bass    a bassline under the lowest key held
+//   Parts   one voice of the chord each, by partIndex
+//   Keys    the line keeps its own shape and moves to the key held: every key held plays a copy of it,
+//           transposed, so holding a triad gives three copies of the same figure. This is the one that
+//           makes MidiJaQ something you play rather than something you set going.
+enum class Mode : uint8_t { Free = 0, Follow, Bass, Parts, Keys };
 
 // What one step holds. Two notes and a changeover point, not one note: that is what lets DIALECT move
 // without a reroll.
@@ -338,9 +346,22 @@ inline double loopBeats (const Line& L) noexcept
 
 // The pitch a note comes out at. In Free that is what the line wrote; in Follow the held keys give the
 // pitches and the line gives the rhythm; in Bass the lowest held note becomes the root it plays under.
+// How far a line moves when a key is held in Keys mode: the distance from the line's own home note. Holding
+// the home note plays it exactly as written.
+inline int keysShift (const Line& L, int heldNote) noexcept { return heldNote - L.base; }
+
 inline int notePlayed (const Line& L, const Event& e, const int* held, int numHeld) noexcept
 {
     if (L.mode == Mode::Free || held == nullptr || numHeld <= 0) return e.note;
+
+    if (L.mode == Mode::Keys)
+    {
+        // the written note, moved to the lowest key held. The Player emits a copy for every key held;
+        // this is what a single copy sounds, and what a caller asking for one note gets.
+        int low = held[0];
+        for (int i = 1; i < numHeld; ++i) low = std::min (low, held[i]);
+        return std::max (0, std::min (127, e.note + keysShift (L, low) + L.transpose));
+    }
 
     if (L.mode == Mode::Follow)
     {

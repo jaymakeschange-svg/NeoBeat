@@ -316,7 +316,11 @@ public:
         g.setFont (getTextButtonFont (b, b.getHeight()));
         g.setColour (b.getToggleState() ? col (skin().buttonOnInk) : C::text());
         if (! b.isEnabled()) g.setColour (C::dim().withAlpha (0.6f));
-        g.drawFittedText (b.getButtonText().toUpperCase(), b.getLocalBounds().reduced (6, 1), juce::Justification::centred, 1, 0.8f);
+        // Button labels are set in capitals by the look. A name whose own capitals carry meaning - ".NJQi",
+        // "MidiJaQ" - sets the keepCase property and is drawn as it was written.
+        const bool keepCase = (bool) b.getProperties().getWithDefault ("keepCase", false);
+        g.drawFittedText (keepCase ? b.getButtonText() : b.getButtonText().toUpperCase(),
+                          b.getLocalBounds().reduced (6, 1), juce::Justification::centred, 1, 0.8f);
     }
     void drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox&) override
     {

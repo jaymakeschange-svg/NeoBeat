@@ -45,6 +45,25 @@ int main (int argc, char** argv)
     juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
     shot (*ed, dir, "3_small");
 
+    // the multi: four voices, laid across the keys, two of them overlapping
+    ed->setBounds (0, 0, 1120, 700);
+    for (int t = 0; t < mjq::kSessionTracks; ++t)
+        for (int p = 0; p < mjq::kSessionSlots; ++p)
+            proc->session.slots[(size_t) p].tracks[(size_t) t].enabled = true;
+    proc->changeTrackRange (1, 24, 47);
+    proc->changeTrackRange (2, 48, 79);
+    proc->changeTrackRange (3, 72, 108);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+    {
+        proc->session.slots[(size_t) p].tracks[0].instrumentFile = "City horns.njqi";
+        proc->session.slots[(size_t) p].tracks[1].instrumentFile = "Rubber bass.njqi";
+        proc->session.slots[(size_t) p].tracks[2].instrumentFile = "Struck glass.njqi";
+    }
+    proc->chooseTrack (2);
+    ed->showSideTab (1);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
+    shot (*ed, dir, "4_voices");
+
     ed.reset();
     proc->releaseResources();
     return 0;

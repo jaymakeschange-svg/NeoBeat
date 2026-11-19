@@ -36,12 +36,29 @@ public:
     std::atomic<int> version { 0 };                  // the editor redraws when this moves
     juce::String message;                            // one line under the window
 
-    // ---- the instrument it plays, when one is loaded (a .NJQ from Batchcut's KEYS room)
+    // ---- the multi: every track plays an instrument of its own (.NJQi, or a .NJQ from Batchcut's KEYS
+    // room), over the stretch of keys that track answers to. Ranges may overlap, so one key can start a
+    // piano figure and a bassline at once.
     mjq::InstrumentPlayer voices;
-    juce::String instrumentFile;                     // where it came from, so the project can open it again
-    bool openInstrument (const juce::File&, juce::String& error);
-    void closeInstrument();
-    std::shared_ptr<const mjq::Instrument> instrument() const { return std::atomic_load (&loaded); }
+    juce::String instrumentFile;                     // track 0's, kept for the original public API
+    bool openInstrument (const juce::File&, juce::String& error);                  // the chosen track
+    bool openInstrument (int track, const juce::File&, juce::String& error);
+    void closeInstrument();                                                        // the chosen track
+    void closeInstrument (int track);
+    std::shared_ptr<const mjq::Instrument> instrument() const { return instrument (0); }
+    std::shared_ptr<const mjq::Instrument> instrument (int track) const
+    {
+        return std::atomic_load (&loadedTracks[(size_t) juce::jlimit (0, mjq::kSessionTracks - 1, track)]);
+    }
+    juce::String instrumentFileFor (int track) const;
+    // the voice player of a track (track 0 is `voices`, kept for the original public API)
+    mjq::InstrumentPlayer& voicesFor (int track) noexcept
+    {
+        track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+        return track == 0 ? voices : otherVoices[(size_t) (track - 1)];
+    }
+    void changeTrackRange (int track, int lowKey, int highKey);
+    void changeTrackLevel (int track, float level);
 
     void lineChanged();                              // rebuild the snapshot and bump the version
     void roll();                                     // JAQ: a new family from a new seed
@@ -64,7 +81,7 @@ public:
     bool hasEditor() const override { return true; }
     const juce::String getName() const override { return "MidiJaQ"; }
     bool acceptsMidi() const override { return true; }
-    bool producesMidi() const override { return true; }
+    bool producesMidi() const override { return false; }   // MidiJaQ is an instrument; a Max for Live device sends MIDI
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
     int getNumPrograms() override { return 1; }
@@ -87,7 +104,7 @@ private:
     };
     std::shared_ptr<const Prepared> prepared;
     std::shared_ptr<const mjq::Pass> shown;          // editor's preview of the chosen line
-    std::shared_ptr<const mjq::Instrument> loaded;
+    mutable std::array<std::shared_ptr<const mjq::Instrument>, mjq::kSessionTracks> loadedTracks;
     std::vector<std::shared_ptr<const mjq::Instrument>> keep;   // the one just replaced, until the audio thread is past it
     double keepSince = 0.0;
     std::atomic<int> lastStep { -1 };

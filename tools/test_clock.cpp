@@ -189,6 +189,82 @@ int main()
         CHECK (same, "and a block of one sample at a time plays the same %d notes at the same samples", (int) inBlocks.size());
     }
 
+    // ---- Keys: the line keeps its shape and moves to the key held
+    {
+        Line L;
+        L.mode = Mode::Keys;
+        L.numSteps = 16;
+        L.traffic = 0.8f;
+        L.base = 48;                       // the line's home note: holding it plays the line as written
+        L.transpose = 0;
+        generate (L, 7777);
+        const auto pass = readPass (L);
+
+        // nothing held: it plays as written
+        Player idle; idle.prepare (kSr);
+        const auto nothing = play (idle, L, pass, ClockMode::Pattern, 48000 / kBlock);
+        CHECK (nothing.ons > 0, "Keys plays with no key held (%d notes)", nothing.ons);
+
+        // holding the home note plays exactly the same notes
+        Player home; home.prepare (kSr);
+        home.keyDown (L.base, 100);
+        const auto atHome = play (home, L, pass, ClockMode::Pattern, 48000 / kBlock);
+        CHECK (atHome.notes == nothing.notes, "holding its home note plays the line exactly as written");
+
+        // holding a key a fifth up moves every note by the same seven semitones
+        Player up; up.prepare (kSr);
+        up.keyDown (L.base + 7, 100);
+        const auto fifth = play (up, L, pass, ClockMode::Pattern, 48000 / kBlock);
+        bool movedTogether = fifth.notes.size() == nothing.notes.size();
+        for (size_t i = 0; movedTogether && i < fifth.notes.size(); ++i)
+            movedTogether = fifth.notes[i] == nothing.notes[i] + 7;
+        CHECK (movedTogether, "a key a fifth up moves the whole line by a fifth, shape intact");
+
+        // a triad gives three copies of the same figure at once
+        Player triad; triad.prepare (kSr);
+        triad.keyDown (L.base, 100); triad.keyDown (L.base + 4, 100); triad.keyDown (L.base + 7, 100);
+        const auto three = play (triad, L, pass, ClockMode::Pattern, 48000 / kBlock);
+        CHECK (three.ons == nothing.ons * 3, "a triad sounds three copies at once (%d for %d)", three.ons, nothing.ons);
+        // whatever is still ringing when the run stops has not been let go yet, so the right comparison is
+        // with the single copy: three copies leave exactly three times as many ringing, and no more
+        CHECK (three.ons - three.offs == 3 * (nothing.ons - nothing.offs),
+               "and every copy is let go the same way the single line is (%d ringing for %d)",
+               three.ons - three.offs, nothing.ons - nothing.offs);
+
+        // the copies are the same figure, a third and a fifth apart
+        std::vector<int> copyA, copyB, copyC;
+        for (const auto& e : three.events)
+            if (e.second.on)
+            {
+                const int rel = e.second.note - nothing.notes[0];
+                if (rel % 12 == 0 || true)
+                {
+                    // sort by which copy it belongs to, using the shift from the written line
+                    if (std::find (nothing.notes.begin(), nothing.notes.end(), e.second.note) != nothing.notes.end()) copyA.push_back (e.second.note);
+                    else if (std::find (nothing.notes.begin(), nothing.notes.end(), e.second.note - 4) != nothing.notes.end()) copyB.push_back (e.second.note);
+                    else if (std::find (nothing.notes.begin(), nothing.notes.end(), e.second.note - 7) != nothing.notes.end()) copyC.push_back (e.second.note);
+                }
+            }
+        CHECK (! copyA.empty() && ! copyB.empty() && ! copyC.empty(), "all three copies are there (%d, %d, %d)", (int) copyA.size(), (int) copyB.size(), (int) copyC.size());
+
+        // letting the keys go returns it to the written line
+        Player back; back.prepare (kSr);
+        back.keyDown (L.base + 7, 100);
+        back.allKeysUp();
+        const auto released = play (back, L, pass, ClockMode::Pattern, 48000 / kBlock);
+        CHECK (released.notes == nothing.notes, "letting go returns it to the line as written");
+
+        // a key that would push the line off the top of the keyboard drops only what falls off
+        Player high; high.prepare (kSr);
+        high.keyDown (126, 100);
+        const auto tooHigh = play (high, L, pass, ClockMode::Pattern, 48000 / kBlock);
+        bool inRange = true;
+        for (int n : tooHigh.notes) inRange = inRange && n >= 0 && n <= 127;
+        CHECK (inRange, "nothing sounds off the end of the keyboard");
+        CHECK (tooHigh.ons < nothing.ons, "the notes that would have fallen off the top are dropped (%d of %d)", tooHigh.ons, nothing.ons);
+        CHECK (tooHigh.offs <= tooHigh.ons, "and nothing is let go that never sounded");
+    }
+
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
 }

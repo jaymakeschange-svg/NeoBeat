@@ -83,5 +83,52 @@ int main()
     cue.fill = true;
     assert (mjq::cueAllows (cue, 0, 0, true));
     std::puts ("CUES handles first-time and fill conditions independently.");
+
+    // ---- the multi: four voices, each answering to its own stretch of keys
+    {
+        mjq::Session multi;
+        int reached[mjq::kSessionTracks];
+
+        // out of the box only voice 1 is on, and it takes the whole keyboard
+        assert (multi.voicesFor (0, 60, reached, mjq::kSessionTracks) == 1 && reached[0] == 0);
+        assert (multi.voicesFor (0, 21, reached, mjq::kSessionTracks) == 1);
+        std::puts ("Out of the box one voice plays, over every key.");
+
+        auto& slot = multi.slots[0];
+        for (auto& tr : slot.tracks) tr.enabled = true;
+
+        // the laid-out default: a bass end, a middle, a top. The middle and the top overlap on purpose.
+        assert (slot.tracks[1].answersTo (36) && ! slot.tracks[1].answersTo (72));
+        assert (slot.tracks[2].answersTo (60) && ! slot.tracks[2].answersTo (36));
+        assert (slot.tracks[3].answersTo (96) && ! slot.tracks[3].answersTo (60));
+        std::puts ("Each voice answers to its own stretch of keys.");
+
+        // a key where two ranges meet starts both: a piano figure and a bassline at once
+        const int both = multi.voicesFor (0, 36, reached, mjq::kSessionTracks);
+        assert (both == 2 && reached[0] == 0 && reached[1] == 1);
+        const int three = multi.voicesFor (0, 80, reached, mjq::kSessionTracks);
+        assert (three == 3);   // voice 1 (whole keyboard), voice 3 (48-83) and voice 4 (72-127)
+        std::puts ("Where ranges overlap, one key starts more than one voice.");
+
+        // a voice that is off answers to nothing, however its range is set
+        slot.tracks[1].enabled = false;
+        assert (multi.voicesFor (0, 36, reached, mjq::kSessionTracks) == 1 && reached[0] == 0);
+        slot.tracks[1].enabled = true;
+
+        // a range of one key is a trigger pad, and it does not bleed into its neighbours
+        slot.tracks[1].lowKey = slot.tracks[1].highKey = 40;
+        assert (slot.tracks[1].answersTo (40) && ! slot.tracks[1].answersTo (39) && ! slot.tracks[1].answersTo (41));
+        std::puts ("A range can be a single key.");
+
+        // every voice carries its own instrument and level, so a multi is saved and balanced per voice
+        slot.tracks[0].instrumentFile = "piano.njqi";
+        slot.tracks[1].instrumentFile = "bass.njqi";
+        assert (slot.tracks[0].instrumentFile != slot.tracks[1].instrumentFile);
+        assert (slot.tracks[2].instrumentFile.empty());
+        slot.tracks[0].level = 0.6f;
+        assert (slot.tracks[0].level != slot.tracks[1].level);
+        std::puts ("Every voice has an instrument and a level of its own.");
+    }
+
     std::puts ("MidiJaQ session checks passed.");
 }

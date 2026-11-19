@@ -41,6 +41,8 @@ struct MidiOut
 class Player
 {
 public:
+    static constexpr int kMaxHeld = 16;          // keys held at once, and so copies of a line in Keys mode
+
     void prepare (double sampleRate) { sr = sampleRate > 0.0 ? sampleRate : 48000.0; reset(); }
 
     // Everything stops: anything sounding is let go by the caller through `release`.
@@ -172,23 +174,44 @@ public:
                         pitchKeys = chord.notes.data();
                         numPitchKeys = chord.count;
                     }
-                    const int note = notePlayed (L, e, pitchKeys, numPitchKeys);
+                    // In Keys mode the line keeps its shape and moves to each key held, so one event can
+                    // sound several times at once - a triad gives three copies of the figure. Every other
+                    // mode sounds one note, which keeps this loop the same shape for all of them.
+                    int pitches[kMaxHeld];
+                    int numPitches = 1;
+                    if (L.mode == Mode::Keys && numHeld > 0)
+                    {
+                        numPitches = 0;
+                        for (int i = 0; i < numHeld && numPitches < kMaxHeld; ++i)
+                        {
+                            const int p = e.note + keysShift (L, held[(size_t) i]) + L.transpose;
+                            if (p >= 0 && p <= 127) pitches[numPitches++] = p;
+                        }
+                        if (numPitches == 0) continue;      // every copy fell off the keyboard
+                    }
+                    else pitches[0] = notePlayed (L, e, pitchKeys, numPitchKeys);
+
                     const int velocity = (L.mode == Mode::Free || numHeld == 0 || (progression != nullptr && (L.mode == Mode::Bass || L.mode == Mode::Parts)))
                                        ? e.velocity
                                        : std::max (1, std::min (127, (int) std::lround ((double) e.velocity * (double) keyVelocity() / 100.0)));
                     const int s = (int) std::floor ((t - from) / std::max (1.0e-9, blockBeats) * numSamples);
 
-                    // a note already sounding at this pitch is let go first, unless this one slides into it
-                    for (int i = 0; i < numSounding; ++i)
-                        if (sounding[(size_t) i].note == note)
-                        {
-                            emit (std::max (0, s - 1), note, 0, false);
-                            sounding[(size_t) i] = sounding[(size_t) --numSounding];
-                            break;
-                        }
+                    for (int c = 0; c < numPitches; ++c)
+                    {
+                        const int note = pitches[c];
 
-                    emit (s, note, velocity, true);
-                    if (numSounding < (int) sounding.size()) sounding[(size_t) numSounding++] = { note, t + std::max (1.0e-4, e.length) };
+                        // a note already sounding at this pitch is let go first, unless this one slides into it
+                        for (int i = 0; i < numSounding; ++i)
+                            if (sounding[(size_t) i].note == note)
+                            {
+                                emit (std::max (0, s - 1), note, 0, false);
+                                sounding[(size_t) i] = sounding[(size_t) --numSounding];
+                                break;
+                            }
+
+                        emit (s, note, velocity, true);
+                        if (numSounding < (int) sounding.size()) sounding[(size_t) numSounding++] = { note, t + std::max (1.0e-4, e.length) };
+                    }
                 }
             }
         }
@@ -226,7 +249,7 @@ private:
 
     std::array<Sounding, 64> sounding {};
     int numSounding = 0;
-    std::array<int, 16> held {}, vel {};
+    std::array<int, kMaxHeld> held {}, vel {};
     int numHeld = 0;
 };
 } // namespace mjq
