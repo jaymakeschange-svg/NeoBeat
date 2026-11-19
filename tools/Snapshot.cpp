@@ -76,9 +76,8 @@ int main (int argc, char** argv)
             proc->lineChanged();
             proc->putOrbCorner (0, c * 2);
         }
-        for (int p = 0; p < mjq::kSessionSlots; ++p)
         {
-            auto& orb = proc->session.slots[(size_t) p].tracks[0].orb;
+            auto& orb = proc->session.orbs[0];
             orb.on = true;
             orb.corners[0].stack[0].fx = (int) nb::MatrixFx::Freezing; orb.corners[0].stack[0].mix = 0.8f;
             orb.corners[0].stack[1].fx = (int) nb::MatrixFx::Shimmer;  orb.corners[0].stack[1].mix = 0.5f;
@@ -94,14 +93,13 @@ int main (int argc, char** argv)
 
     // the stereo room: four voices placed, the chosen one swinging left and right
     {
-        for (int p = 0; p < mjq::kSessionSlots; ++p)
         {
-            auto& tracks = proc->session.slots[(size_t) p].tracks;
-            tracks[0].place.on = true; tracks[0].place.x = -0.15f; tracks[0].place.y = 0.18f; tracks[0].place.width = 0.35f;
-            tracks[1].place.on = true; tracks[1].place.x = 0.62f;  tracks[1].place.y = 0.55f; tracks[1].place.width = 0.2f;
-            tracks[2].place.on = true; tracks[2].place.x = -0.7f;  tracks[2].place.y = 0.8f;  tracks[2].place.width = 0.8f;
-            tracks[3].place.on = true; tracks[3].place.x = 0.25f;  tracks[3].place.y = 0.95f; tracks[3].place.width = 0.6f;
-            auto& chosen = tracks[0].place;
+            auto& places = proc->session.places;
+            places[0].on = true; places[0].x = -0.15f; places[0].y = 0.18f; places[0].width = 0.35f;
+            places[1].on = true; places[1].x = 0.62f;  places[1].y = 0.55f; places[1].width = 0.2f;
+            places[2].on = true; places[2].x = -0.7f;  places[2].y = 0.8f;  places[2].width = 0.8f;
+            places[3].on = true; places[3].x = 0.25f;  places[3].y = 0.95f; places[3].width = 0.6f;
+            auto& chosen = places[0];
             chosen.move = mjq::RoomMove::LeftRight;
             chosen.depth = 0.7f;
             chosen.bars = 2;

@@ -5,12 +5,15 @@
 #undef NDEBUG // keep the test checks active in Release builds
 #endif
 #include <cassert>
+#include <memory>
 #include <cmath>
 #include <cstdio>
 
 int main()
 {
-    mjq::Session a, b;
+    // Sessions live on the heap: a Session is far too big for a 1 MB stack
+    auto aHolder = std::make_unique<mjq::Session>(), bHolder = std::make_unique<mjq::Session>();
+    auto& a = *aHolder; auto& b = *bHolder;
     assert (a.slots.size() == 128 && a.slots[0].tracks.size() == 4);
     for (int slot : { 0, 1, 31, 127 })
         for (int t = 0; t < 4; ++t)
@@ -86,7 +89,8 @@ int main()
 
     // ---- the multi: four voices, each answering to its own stretch of keys
     {
-        mjq::Session multi;
+        auto multiHolder = std::make_unique<mjq::Session>();
+        auto& multi = *multiHolder;
         int reached[mjq::kSessionTracks];
 
         // out of the box only voice 1 is on, and it takes the whole keyboard

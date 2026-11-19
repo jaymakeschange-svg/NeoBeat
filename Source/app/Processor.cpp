@@ -22,7 +22,7 @@ void MjqProcessor::rebuildSession (bool full)
     {
         const auto& tr = next->state.slots[(size_t) s].tracks[(size_t) t];
         const float ox = next->state.orbX, oy = next->state.orbY;
-        next->passes[(size_t) s][(size_t) t] = mjq::generatedPass (tr, 0, ox, oy);
+        next->passes[(size_t) s][(size_t) t] = mjq::generatedPass (tr, 0, &next->state.orbs[(size_t) t], ox, oy);
         auto& rounds = next->evolving[(size_t) s][(size_t) t];
         if (tr.generator.kind == mjq::Generator::HABIT || tr.generator.kind == mjq::Generator::DRIFT)
         {
@@ -30,7 +30,7 @@ void MjqProcessor::rebuildSession (bool full)
             prepared.reserve (mjq::kEvolutionRounds);
             prepared.push_back (next->passes[(size_t) s][(size_t) t]);
             for (int r = 1; r < mjq::kEvolutionRounds; ++r)
-                prepared.push_back (mjq::generatedPass (tr, (uint64_t) r, ox, oy));
+                prepared.push_back (mjq::generatedPass (tr, (uint64_t) r, &next->state.orbs[(size_t) t], ox, oy));
             rounds = std::make_shared<const std::vector<mjq::Pass>> (std::move (prepared));
         }
         else rounds.reset();
@@ -221,8 +221,7 @@ void MjqProcessor::moveOrb (float x, float y)
 void MjqProcessor::setOrbOn (int track, bool on)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
-    for (int p = 0; p < mjq::kSessionSlots; ++p)
-        session.slots[(size_t) p].tracks[(size_t) track].orb.on = on;
+    session.orbs[(size_t) track].on = on;
     lineChanged();
 }
 
@@ -233,9 +232,8 @@ void MjqProcessor::putOrbCorner (int track, int corner)
     corner = juce::jlimit (0, mjq::kOrbCorners - 1, corner);
     const auto& from = session.current().tracks[(size_t) track].line;
 
-    for (int p = 0; p < mjq::kSessionSlots; ++p)
     {
-        auto& c = session.slots[(size_t) p].tracks[(size_t) track].orb.corners[(size_t) corner];
+        auto& c = session.orbs[(size_t) track].corners[(size_t) corner];
         const auto wasName = c.name;
         c = mjq::OrbCorner {};
         c.set = true;
@@ -253,8 +251,7 @@ void MjqProcessor::clearOrbCorner (int track, int corner)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
     corner = juce::jlimit (0, mjq::kOrbCorners - 1, corner);
-    for (int p = 0; p < mjq::kSessionSlots; ++p)
-        session.slots[(size_t) p].tracks[(size_t) track].orb.corners[(size_t) corner] = mjq::OrbCorner {};
+    session.orbs[(size_t) track].corners[(size_t) corner] = mjq::OrbCorner {};
     lineChanged();
 }
 
@@ -269,7 +266,7 @@ void MjqProcessor::recallOrbCorner (int, int corner)
 mjq::OrbBlend MjqProcessor::orbBlend (int track) const
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
-    return mjq::orbRead (session.current().tracks[(size_t) track].orb, session.orbX, session.orbY);
+    return mjq::orbRead (session.orbs[(size_t) track], session.orbX, session.orbY);
 }
 
 void MjqProcessor::changeTrackLevel (int track, float level)
@@ -419,9 +416,10 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             // read at playing time, so this is heard at once rather than waiting for the line to be rewritten.
             const mjq::Line* linePtr = &tr.line;
             mjq::Line cycled;
-            if (tr.randomiser.any())
+            const auto& rnd = snapshot->state.randomisers[(size_t) track];
+            if (rnd.any())
             {
-                const auto now = mjq::cycleRead (tr.randomiser, host.valid ? beat : seq.positionInPass());
+                const auto now = mjq::cycleRead (rnd, host.valid ? beat : seq.positionInPass());
                 cycled = tr.line;
                 if (now.live[(size_t) mjq::Cycled::Dialect]) cycled.dialect = now.value[(size_t) mjq::Cycled::Dialect];
                 if (now.live[(size_t) mjq::Cycled::Traffic]) cycled.traffic = now.value[(size_t) mjq::Cycled::Traffic];
@@ -450,12 +448,14 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     for (int track = 0; track < mjq::kSessionTracks; ++track)
     {
         const auto& tr = playing.tracks[(size_t) track];
-        const auto blend = (tr.orb.on && tr.orb.anySet())
-                         ? mjq::orbRead (tr.orb, snapshot->state.orbX, snapshot->state.orbY)
+        const auto& orb = snapshot->state.orbs[(size_t) track];
+        const auto blend = (orb.on && orb.anySet())
+                         ? mjq::orbRead (orb, snapshot->state.orbX, snapshot->state.orbY)
                          : mjq::OrbBlend {};
         bool anyFx = false;
         for (const auto& slot : blend.stack) anyFx = anyFx || slot.on();
-        const bool inRoom = tr.place.on;
+        const auto& place = snapshot->state.places[(size_t) track];
+        const bool inRoom = place.on;
 
         auto& v = voicesFor (track);
         const bool silent = numNotes[track] == 0 && v.active.load() == 0;
@@ -518,7 +518,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         if (inRoom)
         {
             const double beat = host.valid ? host.ppq : player.positionInPass();
-            const auto want = mjq::roomGain (tr.place, beat, playing.tracks[(size_t) track].line.perBar);
+            const auto want = mjq::roomGain (place, beat, playing.tracks[(size_t) track].line.perBar);
             auto& air = roomAir[(size_t) track];
             air.set (want.cutoff);
 
@@ -701,6 +701,83 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
     root.setAttribute ("selected", session.selected);
     root.setAttribute ("selectedTrack", session.selectedTrack);
     root.setAttribute ("orbX", session.orbX);
+
+    // The Orb, the room and the randomiser belong to the voice rather than the slot, so they are written
+    // once each here instead of once per slot - four elements instead of five hundred.
+    for (int t = 0; t < mjq::kSessionTracks; ++t)
+    {
+        auto* vn = root.createNewChildElement ("VOICE");
+        vn->setAttribute ("i", t);
+        // the randomiser: any control left cycling
+        if (session.randomisers[(size_t) t].any())
+        {
+            auto* qn = vn->createNewChildElement ("CYCLES");
+            for (int k = 0; k < (int) mjq::Cycled::Count; ++k)
+            {
+                const auto& c = session.randomisers[(size_t) t].cycles[(size_t) k];
+                if (! c.on) continue;
+                auto* cn = qn->createNewChildElement ("CYCLE");
+                cn->setAttribute ("what", k);
+                cn->setAttribute ("rate", c.rate);
+                cn->setAttribute ("swing", c.swing);
+                cn->setAttribute ("extremity", c.extremity);
+                cn->setAttribute ("home", c.home);
+                cn->setAttribute ("seed", juce::String (c.seed));
+            }
+        }
+
+        // the stereo room: where this voice stands, and the curve that moves it
+        if (session.places[(size_t) t].on || session.places[(size_t) t].x != 0.0f || session.places[(size_t) t].y != 0.35f || session.places[(size_t) t].move != mjq::RoomMove::None)
+        {
+            auto* rn = vn->createNewChildElement ("ROOM");
+            rn->setAttribute ("on", session.places[(size_t) t].on ? 1 : 0);
+            rn->setAttribute ("x", session.places[(size_t) t].x);
+            rn->setAttribute ("y", session.places[(size_t) t].y);
+            rn->setAttribute ("width", session.places[(size_t) t].width);
+            rn->setAttribute ("move", (int) session.places[(size_t) t].move);
+            rn->setAttribute ("depth", session.places[(size_t) t].depth);
+            rn->setAttribute ("bars", session.places[(size_t) t].bars);
+            juce::String drawn;
+            for (int k = 0; k < mjq::kRoomCurve; ++k) drawn += juce::String (session.places[(size_t) t].curve[(size_t) k], 4) + (k + 1 < mjq::kRoomCurve ? " " : "");
+            rn->setAttribute ("curve", drawn);
+        }
+
+        // the Orb: its eight corners, and the effects stacked on each
+        if (session.orbs[(size_t) t].on || session.orbs[(size_t) t].anySet())
+        {
+            auto* on = vn->createNewChildElement ("ORB");
+            on->setAttribute ("on", session.orbs[(size_t) t].on ? 1 : 0);
+            on->setAttribute ("grip", session.orbs[(size_t) t].grip);
+            on->setAttribute ("salt", juce::String (session.orbs[(size_t) t].salt));
+            for (int c = 0; c < mjq::kOrbCorners; ++c)
+            {
+                const auto& corner = session.orbs[(size_t) t].corners[(size_t) c];
+                if (! corner.set) continue;
+                auto* cn = on->createNewChildElement ("CORNER");
+                cn->setAttribute ("i", c);
+                if (! corner.name.empty()) cn->setAttribute ("name", juce::String (corner.name));
+                cn->setAttribute ("seed", juce::String (corner.seed));
+                cn->setAttribute ("dialect", corner.dialect);
+                cn->setAttribute ("traffic", corner.traffic);
+                cn->setAttribute ("accent", corner.accent);
+                cn->setAttribute ("gate", corner.gate);
+                cn->setAttribute ("swing", corner.swing);
+                cn->setAttribute ("transpose", corner.transpose);
+                for (int s = 0; s < mjq::kOrbStack; ++s)
+                {
+                    const auto& slot = corner.stack[(size_t) s];
+                    if (slot.fx < 0) continue;
+                    auto* fn = cn->createNewChildElement ("FX");
+                    fn->setAttribute ("slot", s);
+                    fn->setAttribute ("fx", slot.fx);
+                    fn->setAttribute ("mix", slot.mix);
+                    for (int k = 0; k < mjq::kOrbFxParams; ++k)
+                        fn->setAttribute ("p" + juce::String (k), slot.p[(size_t) k]);
+                }
+            }
+        }
+    }
+
     root.setAttribute ("orbY", session.orbY);
     root.setAttribute ("chain", session.chainLength);
     root.setAttribute ("clock", (int) clockMode);
@@ -745,74 +822,6 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
             tn->setAttribute ("highKey", tr.highKey);
             tn->setAttribute ("level", tr.level);
 
-            // the randomiser: any control left cycling
-            if (tr.randomiser.any())
-            {
-                auto* qn = tn->createNewChildElement ("CYCLES");
-                for (int k = 0; k < (int) mjq::Cycled::Count; ++k)
-                {
-                    const auto& c = tr.randomiser.cycles[(size_t) k];
-                    if (! c.on) continue;
-                    auto* cn = qn->createNewChildElement ("CYCLE");
-                    cn->setAttribute ("what", k);
-                    cn->setAttribute ("rate", c.rate);
-                    cn->setAttribute ("swing", c.swing);
-                    cn->setAttribute ("extremity", c.extremity);
-                    cn->setAttribute ("home", c.home);
-                    cn->setAttribute ("seed", juce::String (c.seed));
-                }
-            }
-
-            // the stereo room: where this voice stands, and the curve that moves it
-            if (tr.place.on || tr.place.x != 0.0f || tr.place.y != 0.35f || tr.place.move != mjq::RoomMove::None)
-            {
-                auto* rn = tn->createNewChildElement ("ROOM");
-                rn->setAttribute ("on", tr.place.on ? 1 : 0);
-                rn->setAttribute ("x", tr.place.x);
-                rn->setAttribute ("y", tr.place.y);
-                rn->setAttribute ("width", tr.place.width);
-                rn->setAttribute ("move", (int) tr.place.move);
-                rn->setAttribute ("depth", tr.place.depth);
-                rn->setAttribute ("bars", tr.place.bars);
-                juce::String drawn;
-                for (int k = 0; k < mjq::kRoomCurve; ++k) drawn += juce::String (tr.place.curve[(size_t) k], 4) + (k + 1 < mjq::kRoomCurve ? " " : "");
-                rn->setAttribute ("curve", drawn);
-            }
-
-            // the Orb: its eight corners, and the effects stacked on each
-            if (tr.orb.on || tr.orb.anySet())
-            {
-                auto* on = tn->createNewChildElement ("ORB");
-                on->setAttribute ("on", tr.orb.on ? 1 : 0);
-                on->setAttribute ("grip", tr.orb.grip);
-                on->setAttribute ("salt", juce::String (tr.orb.salt));
-                for (int c = 0; c < mjq::kOrbCorners; ++c)
-                {
-                    const auto& corner = tr.orb.corners[(size_t) c];
-                    if (! corner.set) continue;
-                    auto* cn = on->createNewChildElement ("CORNER");
-                    cn->setAttribute ("i", c);
-                    if (! corner.name.empty()) cn->setAttribute ("name", juce::String (corner.name));
-                    cn->setAttribute ("seed", juce::String (corner.seed));
-                    cn->setAttribute ("dialect", corner.dialect);
-                    cn->setAttribute ("traffic", corner.traffic);
-                    cn->setAttribute ("accent", corner.accent);
-                    cn->setAttribute ("gate", corner.gate);
-                    cn->setAttribute ("swing", corner.swing);
-                    cn->setAttribute ("transpose", corner.transpose);
-                    for (int s = 0; s < mjq::kOrbStack; ++s)
-                    {
-                        const auto& slot = corner.stack[(size_t) s];
-                        if (slot.fx < 0) continue;
-                        auto* fn = cn->createNewChildElement ("FX");
-                        fn->setAttribute ("slot", s);
-                        fn->setAttribute ("fx", slot.fx);
-                        fn->setAttribute ("mix", slot.mix);
-                        for (int k = 0; k < mjq::kOrbFxParams; ++k)
-                            fn->setAttribute ("p" + juce::String (k), slot.p[(size_t) k]);
-                    }
-                }
-            }
             if (auto legacy = juce::parseXML (toXml (tr.line, clockMode, {})))
                 tn->addChildElement (legacy.release());
         }
@@ -842,11 +851,83 @@ void MjqProcessor::setStateInformation (const void* data, int size)
     }
     else if (root->hasTagName ("MIDIJAQ_SESSION"))
     {
-        mjq::Session restored;
+        auto restoredHolder = std::make_unique<mjq::Session>();   // too big for a stack on Windows
+        auto& restored = *restoredHolder;
         restored.selected = juce::jlimit (0, 127, root->getIntAttribute ("selected"));
         restored.selectedTrack = juce::jlimit (0, 3, root->getIntAttribute ("selectedTrack"));
         restored.orbX = (float) juce::jlimit (-1.0, 1.0, root->getDoubleAttribute ("orbX", 0.0));
         restored.orbY = (float) juce::jlimit (-1.0, 1.0, root->getDoubleAttribute ("orbY", 0.0));
+
+        // the Orb, the room and the randomiser: one element per voice
+        for (auto* vn : root->getChildWithTagNameIterator ("VOICE"))
+        {
+            const int t = vn->getIntAttribute ("i", -1);
+            if (t < 0 || t >= mjq::kSessionTracks) continue;
+        restored.randomisers[(size_t) t] = mjq::Randomiser {};
+        if (auto* qn = vn->getChildByName ("CYCLES"))
+            for (auto* cn : qn->getChildWithTagNameIterator ("CYCLE"))
+            {
+                const int k = cn->getIntAttribute ("what", -1);
+                if (k < 0 || k >= (int) mjq::Cycled::Count) continue;
+                auto& c = restored.randomisers[(size_t) t].cycles[(size_t) k];
+                c.on = true;
+                c.rate = (float) juce::jlimit (0.03125, 16.0, cn->getDoubleAttribute ("rate", 1.0));
+                c.swing = (float) juce::jlimit (0.5, 0.9, cn->getDoubleAttribute ("swing", 0.5));
+                c.extremity = (float) juce::jlimit (0.0, 1.0, cn->getDoubleAttribute ("extremity", 0.5));
+                c.home = (float) cn->getDoubleAttribute ("home", 0.5);
+                c.seed = (uint64_t) cn->getStringAttribute ("seed").getLargeIntValue();
+                if (c.seed == 0) c.seed = 1;
+            }
+
+        restored.places[(size_t) t] = mjq::Place {};
+        if (auto* rn = vn->getChildByName ("ROOM"))
+        {
+            restored.places[(size_t) t].on = rn->getBoolAttribute ("on", false);
+            restored.places[(size_t) t].x = (float) juce::jlimit (-1.0, 1.0, rn->getDoubleAttribute ("x", 0.0));
+            restored.places[(size_t) t].y = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("y", 0.35));
+            restored.places[(size_t) t].width = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("width", 0.5));
+            restored.places[(size_t) t].move = (mjq::RoomMove) juce::jlimit (0, 3, rn->getIntAttribute ("move", 0));
+            restored.places[(size_t) t].depth = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("depth", 0.5));
+            restored.places[(size_t) t].bars = juce::jlimit (1, 8, rn->getIntAttribute ("bars", 1));
+            const auto drawn = juce::StringArray::fromTokens (rn->getStringAttribute ("curve"), " ", {});
+            for (int k = 0; k < mjq::kRoomCurve && k < drawn.size(); ++k)
+                restored.places[(size_t) t].curve[(size_t) k] = (float) juce::jlimit (-1.0, 1.0, drawn[k].getDoubleValue());
+        }
+
+        restored.orbs[(size_t) t] = mjq::Orb {};
+        if (auto* on = vn->getChildByName ("ORB"))
+        {
+            restored.orbs[(size_t) t].on = on->getBoolAttribute ("on", false);
+            restored.orbs[(size_t) t].grip = (float) juce::jlimit (0.05, 12.0, on->getDoubleAttribute ("grip", 3.0));
+            if (on->hasAttribute ("salt")) restored.orbs[(size_t) t].salt = (uint64_t) on->getStringAttribute ("salt").getLargeIntValue();
+            for (auto* cn : on->getChildWithTagNameIterator ("CORNER"))
+            {
+                const int i = cn->getIntAttribute ("i", -1);
+                if (i < 0 || i >= mjq::kOrbCorners) continue;
+                auto& corner = restored.orbs[(size_t) t].corners[(size_t) i];
+                corner.set = true;
+                corner.name = cn->getStringAttribute ("name").toStdString();
+                corner.seed = (uint64_t) cn->getStringAttribute ("seed").getLargeIntValue();
+                corner.dialect = (float) cn->getDoubleAttribute ("dialect", 0.5);
+                corner.traffic = (float) cn->getDoubleAttribute ("traffic", 0.5);
+                corner.accent = (float) cn->getDoubleAttribute ("accent", 0.5);
+                corner.gate = (float) cn->getDoubleAttribute ("gate", 1.0);
+                corner.swing = (float) cn->getDoubleAttribute ("swing", 0.5);
+                corner.transpose = cn->getIntAttribute ("transpose", 0);
+                for (auto* fn : cn->getChildWithTagNameIterator ("FX"))
+                {
+                    const int s = fn->getIntAttribute ("slot", -1);
+                    if (s < 0 || s >= mjq::kOrbStack) continue;
+                    auto& slot = corner.stack[(size_t) s];
+                    slot.fx = fn->getIntAttribute ("fx", -1);
+                    slot.mix = (float) juce::jlimit (0.0, 1.0, fn->getDoubleAttribute ("mix", 1.0));
+                    for (int k = 0; k < mjq::kOrbFxParams; ++k)
+                        slot.p[(size_t) k] = (float) fn->getDoubleAttribute ("p" + juce::String (k), 0.0);
+                }
+            }
+        }
+        }
+
         restored.chainLength = juce::jlimit (1, 128, root->getIntAttribute ("chain", 1));
         clockMode = (mjq::ClockMode) juce::jlimit (0, 2, root->getIntAttribute ("clock"));
         wants = root->getStringAttribute ("instrument");
@@ -891,69 +972,6 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
                 tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
 
-                tr.randomiser = mjq::Randomiser {};
-                if (auto* qn = tn->getChildByName ("CYCLES"))
-                    for (auto* cn : qn->getChildWithTagNameIterator ("CYCLE"))
-                    {
-                        const int k = cn->getIntAttribute ("what", -1);
-                        if (k < 0 || k >= (int) mjq::Cycled::Count) continue;
-                        auto& c = tr.randomiser.cycles[(size_t) k];
-                        c.on = true;
-                        c.rate = (float) juce::jlimit (0.03125, 16.0, cn->getDoubleAttribute ("rate", 1.0));
-                        c.swing = (float) juce::jlimit (0.5, 0.9, cn->getDoubleAttribute ("swing", 0.5));
-                        c.extremity = (float) juce::jlimit (0.0, 1.0, cn->getDoubleAttribute ("extremity", 0.5));
-                        c.home = (float) cn->getDoubleAttribute ("home", 0.5);
-                        c.seed = (uint64_t) cn->getStringAttribute ("seed").getLargeIntValue();
-                        if (c.seed == 0) c.seed = 1;
-                    }
-
-                tr.place = mjq::Place {};
-                if (auto* rn = tn->getChildByName ("ROOM"))
-                {
-                    tr.place.on = rn->getBoolAttribute ("on", false);
-                    tr.place.x = (float) juce::jlimit (-1.0, 1.0, rn->getDoubleAttribute ("x", 0.0));
-                    tr.place.y = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("y", 0.35));
-                    tr.place.width = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("width", 0.5));
-                    tr.place.move = (mjq::RoomMove) juce::jlimit (0, 3, rn->getIntAttribute ("move", 0));
-                    tr.place.depth = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("depth", 0.5));
-                    tr.place.bars = juce::jlimit (1, 8, rn->getIntAttribute ("bars", 1));
-                    const auto drawn = juce::StringArray::fromTokens (rn->getStringAttribute ("curve"), " ", {});
-                    for (int k = 0; k < mjq::kRoomCurve && k < drawn.size(); ++k)
-                        tr.place.curve[(size_t) k] = (float) juce::jlimit (-1.0, 1.0, drawn[k].getDoubleValue());
-                }
-
-                tr.orb = mjq::Orb {};
-                if (auto* on = tn->getChildByName ("ORB"))
-                {
-                    tr.orb.on = on->getBoolAttribute ("on", false);
-                    tr.orb.grip = (float) juce::jlimit (0.05, 12.0, on->getDoubleAttribute ("grip", 3.0));
-                    if (on->hasAttribute ("salt")) tr.orb.salt = (uint64_t) on->getStringAttribute ("salt").getLargeIntValue();
-                    for (auto* cn : on->getChildWithTagNameIterator ("CORNER"))
-                    {
-                        const int i = cn->getIntAttribute ("i", -1);
-                        if (i < 0 || i >= mjq::kOrbCorners) continue;
-                        auto& corner = tr.orb.corners[(size_t) i];
-                        corner.set = true;
-                        corner.name = cn->getStringAttribute ("name").toStdString();
-                        corner.seed = (uint64_t) cn->getStringAttribute ("seed").getLargeIntValue();
-                        corner.dialect = (float) cn->getDoubleAttribute ("dialect", 0.5);
-                        corner.traffic = (float) cn->getDoubleAttribute ("traffic", 0.5);
-                        corner.accent = (float) cn->getDoubleAttribute ("accent", 0.5);
-                        corner.gate = (float) cn->getDoubleAttribute ("gate", 1.0);
-                        corner.swing = (float) cn->getDoubleAttribute ("swing", 0.5);
-                        corner.transpose = cn->getIntAttribute ("transpose", 0);
-                        for (auto* fn : cn->getChildWithTagNameIterator ("FX"))
-                        {
-                            const int s = fn->getIntAttribute ("slot", -1);
-                            if (s < 0 || s >= mjq::kOrbStack) continue;
-                            auto& slot = corner.stack[(size_t) s];
-                            slot.fx = fn->getIntAttribute ("fx", -1);
-                            slot.mix = (float) juce::jlimit (0.0, 1.0, fn->getDoubleAttribute ("mix", 1.0));
-                            for (int k = 0; k < mjq::kOrbFxParams; ++k)
-                                slot.p[(size_t) k] = (float) fn->getDoubleAttribute ("p" + juce::String (k), 0.0);
-                        }
-                    }
-                }
                 if (auto* ln = tn->getChildByName ("MIDIJAQ"))
                 {
                     mjq::ClockMode dummy = clockMode;

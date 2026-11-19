@@ -119,9 +119,6 @@ struct Track
     GeneratorSettings generator;
     bool enabled = true;
 
-    Orb orb;                            // the eight corners this voice morphs between
-    Place place;                        // where this voice stands in the stereo room
-    Randomiser randomiser;              // controls that will not sit still
     std::string instrumentFile;         // the .NJQi (or .NJQ) this voice plays; empty: silent
     int lowKey = 0, highKey = 127;      // the keys that steer it, in Follow, Bass and Parts
     float level = 0.8f;                 // so the layers of a multi can be balanced (the player's own default)
@@ -141,6 +138,14 @@ struct Session
     std::array<bool, kSessionSlots> touched {}; // untouched slots are recreated from fixed seeds
     int selected = 0;
     int selectedTrack = 0;
+
+    // These belong to the voice, not to the slot: voice 2's Orb is voice 2's wherever the song has got to,
+    // and the same is true of where it stands in the room and what is left cycling. Kept here rather than on
+    // every one of the 128 slots' tracks, which is both what we mean and what keeps a Session small enough
+    // to sit on a stack - at four copies instead of five hundred it is under a fifth of the size.
+    std::array<Orb, kSessionTracks> orbs {};
+    std::array<Place, kSessionTracks> places {};
+    std::array<Randomiser, kSessionTracks> randomisers {};
     float orbX = 0.0f, orbY = 0.0f;   // the joystick, shared: one hand moves every voice's Orb at once
     int chainLength = 1;        // one means the selected slot alone; >1 walks forward and wraps at 128
 
@@ -186,14 +191,20 @@ struct Session
 
 // The original family is never damaged. A different writer makes a temporary copy before the clock
 // reads it, so switching the writer back to JAQ restores exactly the earlier pattern.
-inline Pass generatedPass (const Track& track, uint64_t round = 0, float orbX = 0.0f, float orbY = 0.0f)
+// A Session holds 128 slots of four voices, so it is a few hundred kilobytes: far too much for a stack on
+// Windows, which gives a thread 1 MB by default where Linux gives 8. Every Session therefore lives on the
+// heap or as a member of something that does - never as a local. This guard is here so that if it grows
+// again, the build says so instead of a plugin crashing on one platform and passing every test on another.
+static_assert (sizeof (Session) < 400u * 1024u, "Session has grown: keep per-voice things off Track, and off the stack");
+
+inline Pass generatedPass (const Track& track, uint64_t round = 0, const Orb* orb = nullptr, float orbX = 0.0f, float orbY = 0.0f)
 {
     // Advance from the same seed, outside the audio thread, to preserve each writer's memory.
     round %= (uint64_t) kEvolutionRounds;
     // The Orb comes first: it decides what the line is before a writer gates it. A writer therefore thins
     // out whatever the joystick is currently reading, rather than the two fighting over the same steps.
     Line copy = track.line;
-    if (track.orb.on && track.orb.anySet()) orbLine (track.orb, orbX, orbY, track.line, copy);
+    if (orb != nullptr && orb->on && orb->anySet()) orbLine (*orb, orbX, orbY, track.line, copy);
     const auto& gs = track.generator;
     const int n = std::max (1, std::min (kMaxSteps, copy.numSteps));
     std::array<bool, kMaxSteps> allowed {};

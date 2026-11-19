@@ -325,9 +325,7 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     q.orbGrip.toText = [] (float v) { return juce::String (v, 1); };
     q.orbGrip.onCommit = [this]
     {
-        const int t = proc.chosenTrack();
-        const float g = parts->orbGrip.getValue();
-        for (int p = 0; p < mjq::kSessionSlots; ++p) proc.session.slots[(size_t) p].tracks[(size_t) t].orb.grip = g;
+        proc.session.orbs[(size_t) proc.chosenTrack()].grip = parts->orbGrip.getValue();
         proc.lineChanged();
         refresh();
     };
@@ -336,12 +334,11 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     auto randomiserMenu = [this] (mjq::Cycled what)
     {
         const int t = proc.chosenTrack();
-        const auto& cyc = proc.session.current().tracks[(size_t) t].randomiser.cycles[(size_t) what];
+        const auto& cyc = proc.session.randomisers[(size_t) t].cycles[(size_t) what];
 
         auto change = [this, t, what] (std::function<void (mjq::Cycle&)> edit)
         {
-            for (int p = 0; p < mjq::kSessionSlots; ++p)
-                edit (proc.session.slots[(size_t) p].tracks[(size_t) t].randomiser.cycles[(size_t) what]);
+            edit (proc.session.randomisers[(size_t) t].cycles[(size_t) what]);
             proc.lineChanged();
             refresh();
         };
@@ -395,8 +392,7 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     // ---- the stereo room
     auto eachSlot = [this] (std::function<void (mjq::Place&)> change)
     {
-        const int t = proc.chosenTrack();
-        for (int p = 0; p < mjq::kSessionSlots; ++p) change (proc.session.slots[(size_t) p].tracks[(size_t) t].place);
+        change (proc.session.places[(size_t) proc.chosenTrack()]);
         proc.lineChanged();
         refresh();
     };
@@ -430,12 +426,8 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     q.roomCurve.setTooltip ("Draw how the voice moves through the bar. Drag across to draw.");
     q.roomCurve.onDraw = [this] (int i, float v)
     {
-        const int t = proc.chosenTrack();
-        for (int p = 0; p < mjq::kSessionSlots; ++p)
-        {
-            auto& place = proc.session.slots[(size_t) p].tracks[(size_t) t].place;
-            if (i >= 0 && i < mjq::kRoomCurve) place.curve[(size_t) i] = v;
-        }
+        auto& place = proc.session.places[(size_t) proc.chosenTrack()];
+        if (i >= 0 && i < mjq::kRoomCurve) place.curve[(size_t) i] = v;
         refresh();
     };
     q.roomCurve.onDone = [this] { proc.lineChanged(); refresh(); };
@@ -454,9 +446,8 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
         {
             const int t = proc.chosenTrack(), c = parts->orbCorner;
             const int chosenFx = parts->orbFxBox[s].getSelectedId() - 2;   // -1 is "none"
-            for (int p = 0; p < mjq::kSessionSlots; ++p)
             {
-                auto& slot = proc.session.slots[(size_t) p].tracks[(size_t) t].orb.corners[(size_t) c].stack[(size_t) s];
+                auto& slot = proc.session.orbs[(size_t) t].corners[(size_t) c].stack[(size_t) s];
                 if (slot.fx != chosenFx)
                 {
                     slot = mjq::OrbFx {};
@@ -479,9 +470,7 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
         q.orbFxMix[s].onCommit = [this, s]
         {
             const int t = proc.chosenTrack(), c = parts->orbCorner;
-            const float m = parts->orbFxMix[s].getValue();
-            for (int p = 0; p < mjq::kSessionSlots; ++p)
-                proc.session.slots[(size_t) p].tracks[(size_t) t].orb.corners[(size_t) c].stack[(size_t) s].mix = m;
+            proc.session.orbs[(size_t) t].corners[(size_t) c].stack[(size_t) s].mix = parts->orbFxMix[s].getValue();
             proc.lineChanged();
             refresh();
         };
@@ -642,7 +631,7 @@ void MjqEditor::refresh()
     const auto& L = proc.line;
     {
         // a cycling control shows where it is now, with a ring to say it is moving on its own
-        const auto& rnd = proc.session.current().tracks[(size_t) proc.session.selectedTrack].randomiser;
+        const auto& rnd = proc.session.randomisers[(size_t) proc.session.selectedTrack];
         const auto now = mjq::cycleRead (rnd, proc.displayBeat());
         mjqui::Knob* const knobs[] = { &q.dialect, &q.traffic, &q.accent, &q.gate, &q.swing };
         const float written[] = { L.dialect, L.traffic, L.accent, L.gate, L.swing };
@@ -667,7 +656,7 @@ void MjqEditor::refresh()
 
     // the Orb
     {
-        const auto& orb = tr.orb;
+        const auto& orb = proc.session.orbs[(size_t) proc.session.selectedTrack];
         q.orbCorner = juce::jlimit (0, mjq::kOrbCorners - 1, q.orbCorner);
         q.orbPad.setOrb (orb, proc.session.orbX, proc.session.orbY, q.orbCorner);
         q.orbOn.setToggleState (orb.on, juce::dontSendNotification);
@@ -686,10 +675,9 @@ void MjqEditor::refresh()
 
     // the room
     {
-        const auto& place = tr.place;
+        const auto& place = proc.session.places[(size_t) proc.session.selectedTrack];
         std::array<mjq::Place, 4> all {};
-        const auto& here = proc.session.current();
-        for (int v = 0; v < mjq::kSessionTracks && v < 4; ++v) all[(size_t) v] = here.tracks[(size_t) v].place;
+        for (int v = 0; v < mjq::kSessionTracks && v < 4; ++v) all[(size_t) v] = proc.session.places[(size_t) v];
         const double beat = proc.displayBeat();
         q.roomPad.setVoices (all, proc.session.selectedTrack, beat, tr.line.perBar);
         q.roomCurve.setCurve (place, beat);
@@ -775,7 +763,7 @@ void MjqEditor::paintOrb (juce::Graphics& g)
     auto& q = *parts;
     const int track = proc.chosenTrack();
     const auto blend = proc.orbBlend (track);
-    const auto& orb = proc.session.current().tracks[(size_t) track].orb;
+    const auto& orb = proc.session.orbs[(size_t) track];
 
     paintLabel (g, "Corner " + juce::String (q.orbCorner + 1)
                  + (orb.corners[(size_t) q.orbCorner].set ? "" : " (empty)"),
