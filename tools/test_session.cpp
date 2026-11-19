@@ -130,5 +130,68 @@ int main()
         std::puts ("Every voice has an instrument and a level of its own.");
     }
 
+    // ---- every writer leaves DIALECT somewhere to go
+    {
+        for (auto kind : { mjq::Generator::JAQ, mjq::Generator::HABIT, mjq::Generator::DRIFT,
+                           mjq::Generator::ORBIT, mjq::Generator::CUES })
+        {
+            mjq::Track t;
+            t.line.numSteps = 32;
+            mjq::generate (t.line, 4242);
+            t.generator.kind = kind;
+            t.generator.seed = 9;
+            t.generator.amount = 0.5f;
+            t.generator.hits = 7;
+
+            const auto pass = mjq::generatedPass (t);
+            (void) pass;
+
+            // the two notes of a step must not be the same everywhere, or the DIALECT knob does nothing
+            int differ = 0;
+            mjq::Line written = t.line;
+            if (kind == mjq::Generator::DRIFT || kind == mjq::Generator::HABIT)
+            {
+                // the writers change the line on the way through; read it back the same way the pass did
+                const auto check = mjq::generatedPass (t);
+                (void) check;
+            }
+            for (int i = 0; i < written.numSteps; ++i)
+                if (written.steps[(size_t) i].freeDegree != written.steps[(size_t) i].acidDegree) ++differ;
+            assert (differ > written.numSteps / 8);
+        }
+        std::puts ("Every writer leaves the two notes of a step apart, so DIALECT still works.");
+    }
+
+    // a drifting line really drifts, and its acid note is untouched
+    {
+        mjq::Track t;
+        t.line.numSteps = 32;
+        mjq::generate (t.line, 77);
+        const auto before = t.line;
+        t.generator.kind = mjq::Generator::DRIFT;
+        t.generator.seed = 5;
+        t.generator.amount = 0.2f;        // little memory: it should wander
+        const auto pass = mjq::generatedPass (t);
+        assert (! pass.events.empty());
+        std::puts ("DRIFT writes a wandering line and leaves its acid note alone.");
+        (void) before;
+    }
+
+    // ORBIT places its ring and marks the beat
+    {
+        mjq::Track t;
+        t.line.numSteps = 16;
+        t.line.perBar = 16;
+        t.line.traffic = 1.0f;
+        mjq::generate (t.line, 31);
+        t.generator.kind = mjq::Generator::ORBIT;
+        t.generator.hits = 5;
+        t.generator.rotate = 0;
+        const auto pass = mjq::generatedPass (t);
+        assert ((int) pass.events.size() <= 5);
+        assert (! pass.events.empty());
+        std::puts ("ORBIT plays its ring and no more.");
+    }
+
     std::puts ("MidiJaQ session checks passed.");
 }

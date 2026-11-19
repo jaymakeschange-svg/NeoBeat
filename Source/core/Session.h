@@ -198,17 +198,33 @@ inline Pass generatedPass (const Track& track, uint64_t round = 0, float orbX = 
     const int n = std::max (1, std::min (kMaxSteps, copy.numSteps));
     std::array<bool, kMaxSteps> allowed {};
     allowed.fill (true);
+    // Each writer puts its own stamp on the line rather than only deciding which steps are allowed to
+    // sound. Gating alone makes every writer the same line with holes in it; what makes them different
+    // instruments is that each one also touches pitch, accent or octave in its own way.
+    //
+    // None of them touches acidDegree. Each step carries two notes - the one it takes at DIALECT 0 and the
+    // one it takes at DIALECT 1 - and DIALECT crossfades between them while the line plays. A writer that
+    // sets both to the same thing silently kills the DIALECT knob on its line, which is what DRIFT used to
+    // do, so the writers move the free note and leave the acid note where JAQ put it.
     if (gs.kind == Generator::HABIT)
     {
         gen::Habit habit;
         habit.reset (gs.seed, n);
         habit.setChange (gs.amount);
         for (uint64_t i = 0; i < round * (uint64_t) n; ++i) (void) habit.next();
+
+        const int degrees = std::max (1, gen::scale (copy.scaleIndex).size());
+        int lastDegree = copy.steps[0].freeDegree;
         for (int i = 0; i < n; ++i)
         {
             const auto value = habit.next();
             allowed[(size_t) i] = value.bit;
             copy.steps[(size_t) i].weight = (uint16_t) (value.bit ? 45000 + (int) (value.value * 10000) : (int) (value.value * 10000));
+
+            // a habit is melodic as well as rhythmic: a step it keeps takes the note it took last time, a
+            // step it changes takes a new one. That is what makes HABIT sound like a phrase settling in.
+            if (value.bit) copy.steps[(size_t) i].freeDegree = (int16_t) lastDegree;
+            else lastDegree = std::min (degrees - 1, (int) (value.value * (float) degrees));
         }
     }
     else if (gs.kind == Generator::DRIFT)
@@ -221,17 +237,27 @@ inline Pass generatedPass (const Track& track, uint64_t round = 0, float orbX = 
         for (int i = 0; i < n; ++i)
         {
             const float v = memory.next();
-            copy.steps[(size_t) i].freeDegree = (int16_t) std::min (degrees - 1, (int) (v * degrees));
-            copy.steps[(size_t) i].acidDegree = (int16_t) std::min (degrees - 1, (int) (v * degrees));
+            copy.steps[(size_t) i].freeDegree = (int16_t) std::min (degrees - 1, (int) (v * (float) degrees));
+            // acidDegree is left as written, so DIALECT still has somewhere to go on a drifting line
         }
     }
     else if (gs.kind == Generator::ORBIT)
     {
         const auto ring = gen::euclid (gs.hits, n, gs.rotate);
+        // where the ring begins: the onsets that land on a beat carry the weight of the bar
+        const int perBeat = std::max (1, copy.perBar / 4);
         for (int i = 0; i < n; ++i)
         {
             allowed[(size_t) i] = ring[(size_t) i];
             copy.steps[(size_t) i].weight = (uint16_t) (ring[(size_t) i] ? 60000 - i : i);
+            if (! ring[(size_t) i]) continue;
+
+            // an onset on the beat is the loud one; the rest of the ring answers it an octave up now and
+            // then, so ORBIT reads as a figure turning rather than a flat row of hits
+            const bool onBeat = (i % perBeat) == 0;
+            copy.steps[(size_t) i].accent = (uint8_t) (onBeat ? 2 : 1);
+            if (! onBeat && ((i / std::max (1, perBeat)) % 2) == 1)
+                copy.steps[(size_t) i].octave = (int8_t) std::min (copy.octHigh, copy.steps[(size_t) i].octave + 1);
         }
     }
     Pass pass = readPass (copy);
