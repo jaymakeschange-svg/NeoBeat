@@ -380,9 +380,9 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
                     c.on = ! c.on;
                 });
             else if (r == 2) change ([] (mjq::Cycle& c) { c.seed = (uint64_t) juce::Random::getSystemRandom().nextInt64() | 1ull; });
-            else if (r >= 10 && r < 20) { const float v = (const float[]) { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f }[r - 10]; change ([v] (mjq::Cycle& c) { c.rate = v; }); }
-            else if (r >= 20 && r < 30) { const float v = (const float[]) { 0.5f, 0.58f, 0.66f, 0.72f }[r - 20]; change ([v] (mjq::Cycle& c) { c.swing = v; }); }
-            else if (r >= 30 && r < 40) { const float v = (const float[]) { 0.15f, 0.35f, 0.6f, 1.0f }[r - 30]; change ([v] (mjq::Cycle& c) { c.extremity = v; }); }
+            else if (r >= 10 && r < 15) { static constexpr float kRates[] { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f }; const float v = kRates[r - 10]; change ([v] (mjq::Cycle& c) { c.rate = v; }); }
+            else if (r >= 20 && r < 24) { static constexpr float kSwings[] { 0.5f, 0.58f, 0.66f, 0.72f }; const float v = kSwings[r - 20]; change ([v] (mjq::Cycle& c) { c.swing = v; }); }
+            else if (r >= 30 && r < 34) { static constexpr float kReach[] { 0.15f, 0.35f, 0.6f, 1.0f }; const float v = kReach[r - 30]; change ([v] (mjq::Cycle& c) { c.extremity = v; }); }
         });
     };
 
