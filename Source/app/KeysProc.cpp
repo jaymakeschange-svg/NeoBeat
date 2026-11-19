@@ -62,6 +62,15 @@ void BcProcessor::keysChanged()
     ++keysVersion; stateDirty = true;
 }
 
+// Clear all: every zone goes, so the instrument is empty and plays nothing. How it plays - tuned or chopped,
+// how it sustains, its attack and release - is not content, so it stays. One Undo brings the zones back.
+void BcProcessor::keysClearAll()
+{
+    keys.zones.clear();
+    keysChanged();
+    keysMark();
+}
+
 void BcProcessor::keysMark()
 {
     if (keys == keysSaved) return;

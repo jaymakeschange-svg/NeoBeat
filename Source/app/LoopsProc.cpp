@@ -144,6 +144,26 @@ void BcProcessor::loopsChanged()
     ++loopsVersion; stateDirty = true;
 }
 
+// Clear all: every layer empties and the room goes back to one. What the loop is in - its tempo, its swing,
+// its key and its name - is not content, so it stays. One Undo brings the hits back.
+void BcProcessor::loopsClearAll()
+{
+    for (auto& layer : loops.layers)
+    {
+        const auto wasMode = layer.mode;
+        const auto wasSource = layer.source;
+        const int wasBars = layer.bars, wasPerBar = layer.perBar;
+        layer = bc::LoopLayer {};
+        layer.mode = wasMode;
+        layer.source = wasSource;
+        layer.bars = wasBars;
+        layer.perBar = wasPerBar;
+    }
+    loops.numLayers = 1;
+    loopsChanged();
+    loopsMark();
+}
+
 void BcProcessor::loopsMark()
 {
     if (loops == loopsSaved) return;

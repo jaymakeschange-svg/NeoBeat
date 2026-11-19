@@ -316,7 +316,7 @@ struct LoopsRoom::Parts
     SourceList sources; LayerGrid grid;
     Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" };
     juce::TextEditor name;
-    Pill rollAll { "Roll all" }, undo { "Undo" }, redo { "Redo" }, addLayer { "+ Add a layer" };
+    Pill rollAll { "Roll all" }, undo { "Undo" }, redo { "Redo" }, addLayer { "+ Add a layer" }, clear { "Clear all" };
     Pill play { "Play", true };
     Knob bpm { "BPM", 50.0f, 200.0f, 100.0f }, swing { "SWING", 50.0f, 75.0f, 62.0f };
     juce::ComboBox rootBox, scaleBox;
@@ -340,7 +340,7 @@ struct LoopsRoom::Parts
 LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
 {
     auto& p = *parts;
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &p.sources, &p.grid, &p.fromFile, &p.fromAll, &p.folder, &p.name, &p.rollAll, &p.undo, &p.redo, &p.addLayer,
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &p.sources, &p.grid, &p.fromFile, &p.fromAll, &p.folder, &p.name, &p.rollAll, &p.undo, &p.redo, &p.addLayer, &p.clear,
             &p.play, &p.bpm, &p.swing, &p.rootBox, &p.scaleBox, &p.wav, &p.stems, &p.midi, &p.njq, &p.bounce, &p.mode, &p.density, &p.dejavu, &p.level, &p.pan,
             &p.bars, &p.gridBox, &p.rhythmBox, &p.laneBox, &p.random, &p.midiMode, &p.roll, &p.remove, &p.chopReroll, &p.chopLock, &p.chopReverse, &p.chopPitch, &p.chopLevel })
         addAndMakeVisible (c);
@@ -381,6 +381,8 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.name.setFont (font (13.0f, true)); p.name.setJustification (juce::Justification::centredLeft);
     p.name.onTextChange = [this] { view.proc.loops.name = parts->name.getText().trim().toStdString(); view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; };
     p.name.onReturnKey = [this] { unfocusAllComponents(); };
+    p.clear.setTooltip ("Clear all: empty every layer and go back to one. The tempo, swing and key stay, and Undo brings the hits back.");
+    p.clear.onClick = [this] { view.proc.loopsClearAll(); view.loopHit = -1; view.loopLayer = 0; refresh(); };
     p.rollAll.setTooltip ("Roll every layer again with new seeds (Shift+R). Locked chops stay.");
     p.rollAll.onClick = [this] { view.proc.loopsRoll (-1, true); view.loopHit = -1; refresh(); };
     p.undo.onClick = [this] { view.proc.loopsUndo(); refresh(); };
@@ -543,6 +545,7 @@ void LoopsRoom::refresh()
     p.fromFile.setEnabled (view.doc != nullptr && ! busy); p.fromAll.setEnabled (! proc.session.files.empty() && ! busy);
     bool any = false; for (int i = 0; i < lp.numLayers; ++i) any = any || ! lp.layers[(size_t) i].hits.empty();
     for (auto* b : { &p.wav, &p.stems, &p.midi, &p.njq, &p.bounce }) b->setEnabled (any);
+    p.clear.setEnabled (any || lp.numLayers > 1);
     p.remove.setEnabled (lp.numLayers > 1);
     // the layer
     p.mode.setSelected ((int) L.mode);
@@ -658,7 +661,7 @@ void LoopsRoom::resized()
     // the loop
     { const int x = p.mainPlate.getX();
       p.name.setBounds (x + 52, 12, 230, 26);
-      p.rollAll.setBounds (x + 292, 11, 92, 28); p.undo.setBounds (x + 520, 11, 56, 28); p.redo.setBounds (x + 582, 11, 56, 28);
+      p.rollAll.setBounds (x + 292, 11, 92, 28); p.clear.setBounds (x + 392, 11, 92, 28); p.undo.setBounds (x + 520, 11, 56, 28); p.redo.setBounds (x + 582, 11, 56, 28);
       p.grid.setBounds (x + 8, 44, p.mainPlate.getWidth() - 16, LayerGrid::kRuler + bc::kLoopLayers * LayerGrid::kRowH);
       const int y = p.grid.getBottom() + 6;
       p.addLayer.setBounds (x + 14, y, 120, 26);

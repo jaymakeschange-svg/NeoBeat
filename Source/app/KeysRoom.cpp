@@ -233,7 +233,7 @@ struct KeysRoom::Parts
     juce::MidiKeyboardComponent keys;
     Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" };
     juce::TextEditor name;
-    Pill build { "Build" }, undo { "Undo" }, redo { "Redo" }, open { "Open .NJQ" }, save { "Save .NJQ" };
+    Pill build { "Build" }, undo { "Undo" }, redo { "Redo" }, open { "Open" }, save { "Save .NJQi" }, clear { "Clear all" };
     juce::ComboBox chordBox;
     Segmented mode { { "Tuned", "Resonator", "Chops" } }, sustain { { "As recorded", "Loop", "Hold" } };
     Knob attack { "ATTACK", 1.0f, 2000.0f, 2.0f, true }, release { "RELEASE", 10.0f, 8000.0f, 300.0f, true }, glide { "GLIDE", 0.0f, 1000.0f, 0.0f };
@@ -250,7 +250,7 @@ KeysRoom::KeysRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
 {
     auto& p = *parts;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &p.sources, &p.zones, &p.map, &p.keys, &p.fromFile, &p.fromAll, &p.folder, &p.name, &p.build, &p.undo, &p.redo,
-            &p.open, &p.save, &p.chordBox, &p.mode, &p.sustain, &p.attack, &p.release, &p.glide, &p.resonance, &p.brightness, &p.mono, &p.tune, &p.gain, &p.leaveOut })
+            &p.open, &p.save, &p.clear, &p.chordBox, &p.mode, &p.sustain, &p.attack, &p.release, &p.glide, &p.resonance, &p.brightness, &p.mono, &p.tune, &p.gain, &p.leaveOut })
         addAndMakeVisible (c);
     auto done = [this] { view.proc.keysMark(); refresh(); };
     auto rebuild = [this] { view.proc.keysBuild(); view.keysZone = -1; };
@@ -288,6 +288,9 @@ KeysRoom::KeysRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.name.onReturnKey = [this] { unfocusAllComponents(); };
     p.build.setTooltip ("Build the instrument from the chosen sounds (B)");
     p.build.onClick = [this, rebuild] { rebuild(); refresh(); };
+    p.save.getProperties().set ("keepCase", true);      // ".NJQi", not ".NJQI"
+    p.clear.setTooltip ("Clear all: take every zone off, so the instrument is empty. How it plays stays, and Undo brings the zones back.");
+    p.clear.onClick = [this] { view.proc.keysClearAll(); view.keysZone = -1; refresh(); };
     p.undo.onClick = [this] { view.proc.keysUndo(); refresh(); }; p.redo.onClick = [this] { view.proc.keysRedo(); refresh(); };
     p.undo.setTooltip ("Undo (Ctrl+Z)"); p.redo.setTooltip ("Redo (Ctrl+Shift+Z)");
     p.save.setTooltip ("Save the instrument as a .NJQ file for MidiJaQ (in the Instruments folder beside NeoBeat's)");
@@ -296,18 +299,19 @@ KeysRoom::KeysRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     {
         auto& pr = *parts;
         auto nm = juce::File::createLegalFileName (juce::String (view.proc.keys.name).trim()); if (nm.isEmpty()) nm = "My keys";
-        pr.chooser = std::make_unique<juce::FileChooser> ("Save the instrument for MidiJaQ", shared::instrumentsFolder().getChildFile (nm + ".njq"), "*.njq");
+        pr.chooser = std::make_unique<juce::FileChooser> ("Save the instrument for MidiJaQ", shared::instrumentsFolder().getChildFile (nm + ".njqi"), "*.njqi");
         pr.chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc)
         {
             const auto f = fc.getResult(); if (f == juce::File()) return;
-            juce::String err; if (! view.proc.keysSaveNjq (f.withFileExtension ("njq"), err)) view.proc.keysMessage = "Not saved: " + err;
+            juce::String err; if (! view.proc.keysSaveNjq (f.withFileExtension ("njqi"), err)) view.proc.keysMessage = "Not saved: " + err;
             refresh();
         });
     };
     p.open.onClick = [this]
     {
         auto& pr = *parts;
-        pr.chooser = std::make_unique<juce::FileChooser> ("Open an instrument", shared::instrumentsFolder(), "*.njq");
+        // .NJQi is what Batchcut writes now; a .NJQ instrument saved before still opens
+        pr.chooser = std::make_unique<juce::FileChooser> ("Open an instrument", shared::instrumentsFolder(), "*.njqi;*.njq");
         pr.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
         {
             const auto f = fc.getResult(); if (! f.existsAsFile()) return;
@@ -378,6 +382,7 @@ void KeysRoom::refresh()
     p.chordBox.setSelectedId (proc.keysChord.load() + 1, juce::dontSendNotification);
     p.undo.setEnabled (proc.keysCanUndo()); p.redo.setEnabled (proc.keysCanRedo());
     p.save.setEnabled (! ins.zones.empty()); p.build.setEnabled (! proc.kit.pool.empty());
+    p.clear.setEnabled (! ins.zones.empty());
     const bool busy = proc.session.status().busy;
     p.fromFile.setEnabled (view.doc != nullptr && ! busy); p.fromAll.setEnabled (! proc.session.files.empty() && ! busy);
     const bc::KeyZone* z = view.keysZone >= 0 ? &ins.zones[(size_t) view.keysZone] : nullptr;
@@ -453,7 +458,7 @@ void KeysRoom::paint (juce::Graphics& g)
         g.drawText (b, p.zoneTitle.translated (0, 50).withHeight (14), juce::Justification::centredLeft, true);
     }
     g.setFont (font (10.0f)); g.setColour (C::dim());
-    g.drawFittedText ("Play from a MIDI keyboard, the keys below or your computer keyboard (A to K). SAVE .NJQ puts the instrument where MidiJaQ finds it.",
+    g.drawFittedText ("Play from a MIDI keyboard, the keys below or your computer keyboard (A to K). SAVE .NJQi puts the instrument in the folder MidiJaQ looks in.",
                       { p.insPlate.getX() + 14, p.zoneBox.getBottom() + 10, p.insPlate.getWidth() - 28, 60 }, juce::Justification::topLeft, 4);
 }
 
@@ -466,9 +471,10 @@ void KeysRoom::resized()
       p.sources.setBounds (x, y + 36, p.srcPlate.getWidth() - 20, 290);
       p.zones.setBounds (x, y + 352, p.srcPlate.getWidth() - 20, 330); }
     { const int x = p.mainPlate.getX();
-      p.name.setBounds (x + 52, 12, 210, 26);
-      p.build.setBounds (x + 272, 11, 74, 28); p.open.setBounds (x + 352, 11, 92, 28); p.save.setBounds (x + 450, 11, 92, 28);
-      p.undo.setBounds (x + 550, 11, 46, 28); p.redo.setBounds (x + 600, 11, 46, 28);
+      p.name.setBounds (x + 52, 12, 180, 26);
+      p.build.setBounds (x + 242, 11, 66, 28); p.open.setBounds (x + 314, 11, 58, 28); p.save.setBounds (x + 378, 11, 84, 28);
+      p.clear.setBounds (x + 468, 11, 76, 28);
+      p.undo.setBounds (x + 552, 11, 44, 28); p.redo.setBounds (x + 600, 11, 44, 28);
       p.map.setBounds (x + 12, 48, p.mainPlate.getWidth() - 24, 470);
       p.chordBox.setBounds (x + 12, 548, 180, 28);
       p.keys.setBounds (x + 12, 588, p.mainPlate.getWidth() - 24, 128); }

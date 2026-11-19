@@ -208,6 +208,7 @@ public:
     void loopsRoll (int layer, bool newSeed = true);             // layer -1: every layer (ROLL ALL); newSeed false: the same roll, new settings
     bool loopsRerollHit (int layer, int hit);
     void loopsChanged();                                         // anything changed: the player and the project hear of it
+    void loopsClearAll();                                        // Clear all: every layer empties, back to one
     void loopsMark();                                            // a change is complete: undoable from here
     void loopsUndo(); void loopsRedo();
     bool loopsCanUndo() const noexcept { return ! loopsUndoStack.empty(); }
@@ -233,6 +234,7 @@ public:
     std::vector<std::shared_ptr<const bc::PoolItem>> keysSounds() const;
     void keysBuild();                                            // the instrument from its source's sounds, in its mode
     void keysChanged();
+    void keysClearAll();                                         // Clear all: every zone goes, the instrument empties
     void keysMark();
     void keysUndo(); void keysRedo();
     bool keysCanUndo() const noexcept { return ! keysUndoStack.empty(); }
