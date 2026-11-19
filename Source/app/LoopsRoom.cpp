@@ -419,7 +419,7 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     auto exportAudio = [this] (bool stems)
     {
         auto& pr = *parts;
-        const auto dir = view.proc.exportDir().getSiblingFile ("Loops");
+        const auto dir = view.proc.exportDir().getChildFile ("Loops");
         dir.createDirectory();
         pr.chooser = std::make_unique<juce::FileChooser> ("A folder for the loop", dir);
         pr.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this, stems] (const juce::FileChooser& fc)
@@ -436,7 +436,7 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.midi.onClick = [this]
     {
         auto& pr = *parts;
-        const auto dir = view.proc.exportDir().getSiblingFile ("Loops"); dir.createDirectory();
+        const auto dir = view.proc.midiDir();
         auto nm = juce::File::createLegalFileName (juce::String (view.proc.loops.name).trim()); if (nm.isEmpty()) nm = "Loop";
         pr.chooser = std::make_unique<juce::FileChooser> ("Save the loop's MIDI", dir.getChildFile (nm + ".mid"), "*.mid");
         pr.chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc)

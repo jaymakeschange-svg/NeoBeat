@@ -78,6 +78,15 @@ foreach (t test_engine test_session test_kit test_gen test_loops test_keys bench
     target_link_libraries (${t} PRIVATE Threads::Threads)
 endforeach()
 
+# The shared groundwork: the .NJQ manifest, categories and the assigned folders. This one needs JUCE itself
+# (zips, XML, files), unlike the tests above, so it is a console app rather than a bare executable. It runs
+# everywhere the plugin builds, and writes nothing outside its own temporary folder.
+juce_add_console_app (test_shared PRODUCT_NAME "test_shared")
+target_sources (test_shared PRIVATE tools/test_shared.cpp)
+target_include_directories (test_shared PRIVATE Source)
+target_compile_definitions (test_shared PRIVATE ${BATCHCUT_DEFINITIONS} JUCE_STANDALONE_APPLICATION=1)
+target_link_libraries (test_shared PRIVATE juce::juce_audio_formats juce::juce_recommended_config_flags)
+
 # Linux only: the host test (the plugin driven as a host would, with its editor) and editor snapshots.
 if (UNIX AND NOT APPLE AND BATCHCUT_LINUX_TOOLS)
     foreach (tool HostTest Snapshot)

@@ -11,6 +11,9 @@
 //                      MidiJaQ; no lanes), and later "pattern" and "rack"
 //   extra parts        any other element in the manifest is kept as it is and handed back on loading
 //   files              extra entries in the zip (an instrument's zones) travel with the file
+//   category           free text ("Texture", "Clubby", ...), written as it is given, so a preset recalls under
+//                      the category it was saved with. Empty means uncategorised. A reader that does not know
+//                      the attribute ignores it, so a categorised file still opens in Batchcut 2.x.
 #pragma once
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -35,6 +38,7 @@ struct Kit
 {
     juce::String name = "Untitled", author, madeWith;
     juce::String kind = "kit";                                       // "kit", "loop", "instrument" ... (version 2)
+    juce::String category;                                           // free text, empty: uncategorised (version 2)
     std::vector<std::shared_ptr<juce::XmlElement>> extras;          // other parts of the manifest (version 2)
     std::vector<std::pair<juce::String, std::shared_ptr<juce::MemoryBlock>>> files;   // other entries of the zip (version 2)
     const juce::XmlElement* extra (const juce::String& tag) const { for (const auto& e : extras) if (e != nullptr && e->hasTagName (tag)) return e.get(); return nullptr; }
@@ -46,11 +50,33 @@ struct Kit
     int patternIndex = -1;         // which of the 128 patterns it was auditioned with (-1: its own)
 };
 
+// The categories a picker offers. Free text is allowed everywhere: whatever is typed is written as it is given,
+// and a browser groups by what it finds, so this is a starting point rather than a closed set.
+inline juce::StringArray suggestedCategories()
+{
+    return { "Texture", "Clubby", "Experimental", "Acoustic", "Metallic", "Liquid", "Rubber",
+             "Percussive", "Tonal", "Bass", "Keys", "Strings", "Found sound", "Broken" };
+}
+
+// Tidy a typed category: control characters become spaces, runs of space collapse, the ends are trimmed. The
+// capitalisation is left as typed, because how someone writes their own category is theirs to keep.
+inline juce::String tidyCategory (const juce::String& s)
+{
+    juce::String out;
+    for (const auto c : s) out += (juce::juce_wchar) (c < ' ' ? ' ' : c);
+    while (out.contains ("  ")) out = out.replace ("  ", " ");
+    return out.trim();
+}
+
+// What a browser groups on, so "clubby" and "Clubby" fall in one group and the first spelling seen is shown.
+inline juce::String categoryKey (const juce::String& s) { return tidyCategory (s).toLowerCase(); }
+
 inline bool save (const juce::File& file, const Kit& kit, juce::String& error)
 {
     juce::XmlElement root ("NJQ");
     root.setAttribute ("version", 2);
     if (kit.kind.isNotEmpty() && kit.kind != "kit") root.setAttribute ("kind", kit.kind);
+    if (const auto cat = tidyCategory (kit.category); cat.isNotEmpty()) root.setAttribute ("category", cat);
     root.setAttribute ("name", kit.name); root.setAttribute ("author", kit.author); root.setAttribute ("madeWith", kit.madeWith);
     root.setAttribute ("bpm", kit.bpm); root.setAttribute ("swing", (double) kit.swing); root.setAttribute ("patternIndex", kit.patternIndex);
     juce::ZipFile::Builder zip;
@@ -128,6 +154,7 @@ inline bool load (const juce::File& file, Kit& kit, juce::String& error, bool sa
     kit.swing = (float) juce::jlimit (0.5, 0.75, xml->getDoubleAttribute ("swing", 0.62));
     kit.patternIndex = xml->getIntAttribute ("patternIndex", -1);
     kit.kind = xml->getStringAttribute ("kind", "kit");
+    kit.category = tidyCategory (xml->getStringAttribute ("category"));
     for (auto* e : xml->getChildIterator())
         if (! e->hasTagName ("LANE") && ! e->hasTagName ("SCENE") && ! e->hasTagName ("SONG")) kit.extras.push_back (std::make_shared<juce::XmlElement> (*e));
     if (samples)
@@ -195,12 +222,21 @@ inline juce::File dir()
 }
 inline juce::File learnerFile() { return dir().getChildFile ("learner.txt"); }
 
+// The four assigned folders: one per kind of file the plugins write. Each is chosen once, in Settings, and is
+// remembered from then on. Saving a single file somewhere else is not an assignment — a save dialog opens in the
+// assigned folder, and wherever it ends up going, the folder itself does not move. Only assign() changes one.
+// Importing is deliberately not in here: it stays loose, and remembers only the last place it was pointed at.
+enum class Folder { Wav, Midi, Njq, Njqi };
+
 struct Settings
 {
-    juce::String presetFolder;      // where .NJQ files live: both apps save there and NeoBeat lists what is in it
+    juce::String presetFolder;      // .NJQ: both apps save there and NeoBeat lists what is in it
+    juce::String instrumentFolder;  // .NJQi: the instruments MidiJaQ plays
+    juce::String midiFolder;        // .mid: the MIDI files Batchcut writes and NeoBeat exports
+    juce::String exportFolder;      // .wav: one-shots, chops, stems
     juce::String startupNjq;        // the sequence a new NeoBeat opens with (empty: the stock one)
     bool askDefault = true;         // ask "make this a default sequence?" after saving or loading one
-    juce::String exportFolder, importFolder;
+    juce::String importFolder;      // the last place something was imported from: loose, never an assignment
 
     static juce::File file() { return dir().getChildFile ("settings.xml"); }
     static Settings load()
@@ -211,6 +247,7 @@ struct Settings
             s.presetFolder = xml->getStringAttribute ("presetFolder"); s.startupNjq = xml->getStringAttribute ("startupNjq");
             s.askDefault = xml->getIntAttribute ("askDefault", 1) != 0;
             s.exportFolder = xml->getStringAttribute ("exportFolder"); s.importFolder = xml->getStringAttribute ("importFolder");
+            s.instrumentFolder = xml->getStringAttribute ("instrumentFolder"); s.midiFolder = xml->getStringAttribute ("midiFolder");
         }
         return s;
     }
@@ -219,14 +256,52 @@ struct Settings
         juce::XmlElement xml ("MARBELITE_SHARED");
         xml.setAttribute ("presetFolder", presetFolder); xml.setAttribute ("startupNjq", startupNjq); xml.setAttribute ("askDefault", askDefault ? 1 : 0);
         xml.setAttribute ("exportFolder", exportFolder); xml.setAttribute ("importFolder", importFolder);
+        xml.setAttribute ("instrumentFolder", instrumentFolder); xml.setAttribute ("midiFolder", midiFolder);
         xml.writeTo (file());
     }
-    // the preset folder (until one is chosen: Documents/Marbelite/NJQ)
-    juce::File presets() const
+
+    static const char* name (Folder k)
     {
-        juce::File f = presetFolder.isNotEmpty() ? juce::File (presetFolder) : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Marbelite").getChildFile ("NJQ");
-        f.createDirectory();
+        switch (k) { case Folder::Wav: return "WAV"; case Folder::Midi: return "MIDI";
+                     case Folder::Njq: return ".NJQ"; case Folder::Njqi: default: return ".NJQi"; }
+    }
+    // where a kind goes until one is assigned
+    static juce::File defaultFolder (Folder k)
+    {
+        const auto docs = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Marbelite");
+        switch (k)
+        {
+            case Folder::Wav:  return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Batchcut").getChildFile ("One-shots");
+            case Folder::Midi: return docs.getChildFile ("MIDI");
+            case Folder::Njq:  return docs.getChildFile ("NJQ");
+            case Folder::Njqi: default: return docs.getChildFile ("Instruments");
+        }
+    }
+    const juce::String& assigned (Folder k) const
+    {
+        switch (k) { case Folder::Wav: return exportFolder; case Folder::Midi: return midiFolder;
+                     case Folder::Njq: return presetFolder; case Folder::Njqi: default: return instrumentFolder; }
+    }
+    juce::String& assigned (Folder k)
+    {
+        switch (k) { case Folder::Wav: return exportFolder; case Folder::Midi: return midiFolder;
+                     case Folder::Njq: return presetFolder; case Folder::Njqi: default: return instrumentFolder; }
+    }
+    // the folder of a kind, made if it is not there yet. A folder that was assigned and has since been deleted or
+    // unplugged falls back to the default rather than failing a save, and the assignment is left alone.
+    juce::File folder (Folder k) const
+    {
+        const auto& a = assigned (k);
+        juce::File f = a.isNotEmpty() ? juce::File (a) : defaultFolder (k);
+        if (! f.createDirectory().wasOk()) { f = defaultFolder (k); f.createDirectory(); }
         return f;
     }
+    // the only way an assignment changes. Saves never call this; the settings panel does.
+    void assign (Folder k, const juce::File& f) { assigned (k) = f.getFullPathName(); }
+
+    juce::File presets()     const { return folder (Folder::Njq); }
+    juce::File instruments() const { return folder (Folder::Njqi); }
+    juce::File wavs()        const { return folder (Folder::Wav); }
+    juce::File midis()       const { return folder (Folder::Midi); }
 };
 } // namespace shared

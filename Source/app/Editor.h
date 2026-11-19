@@ -4,6 +4,7 @@
 
 #include "Processor.h"
 #include "Ui.h"
+#include "../neobeat/shared/FoldersUi.h"
 
 // What the editor shows and works on, shared by all its parts, and the actions they take.
 struct View
@@ -277,6 +278,18 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
+// FOLDERS: the four assigned folders, shared with NeoBeat and MidiJaQ. The panel itself is the shared one
+// (Source/neobeat/shared/FoldersUi.h); this only puts it in a tab.
+class FoldersTab final : public Panel
+{
+public:
+    explicit FoldersTab (View& v);
+    void refresh() override { panel.refresh(); }
+    void resized() override;
+private:
+    nsui::FoldersPanel panel;
+};
+
 class Inspector final : public juce::Component
 {
 public:
@@ -287,9 +300,10 @@ public:
     void show (int tab);
     int current() const noexcept { return tabs.getSelected(); }
 private:
-    bcui::Segmented tabs { { "Detect", "Events", "Layers", "Export" } };
-    DetectPanel detect; EventsPanel events; LayersPanel layers; ExportPanel exportP;
-    Panel* panels[4];
+    static constexpr int kNumTabs = 5;
+    bcui::Segmented tabs { { "Detect", "Events", "Layers", "Export", "Folders" } };
+    DetectPanel detect; EventsPanel events; LayersPanel layers; ExportPanel exportP; FoldersTab folders;
+    Panel* panels[kNumTabs];
 };
 
 class Header final : public juce::Component

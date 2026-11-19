@@ -158,6 +158,7 @@ public:
     juce::File stopRecording();                                  // the recording's file (added and opened), or none
     juce::File renderToTemp (const bc::Event& e);                // one event as a WAV, for dragging out to a DAW
     juce::File exportDir() const;
+    juce::File midiDir() const;
     juce::File recordingsDir() const;
     juce::String lastMessage;                                    // shown in the header (a recording saved, a file that failed)
 

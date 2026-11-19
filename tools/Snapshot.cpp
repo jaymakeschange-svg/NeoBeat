@@ -172,6 +172,18 @@ int main (int argc, char** argv)
     ed->setSize (960, 600); pump (*proc, 100);
     shot (*ed, outDir, "16_keys_small");
 
+    // FOLDERS: the four assigned folders, one of them pointed somewhere of its own
+    ed->setSize (1280, 800);
+    ed->showRoom (0); pump (*proc, 120);
+    {
+        auto s = shared::Settings::load();
+        s.assign (shared::Folder::Njq, dir.getChildFile ("Neosystem").getChildFile ("Presets"));
+        s.save();
+    }
+    ed->getInspector().show (4);
+    pump (*proc, 120);
+    shot (*ed, outDir, "17_folders");
+
     ed.reset();
     proc.reset();
     dir.deleteRecursively();

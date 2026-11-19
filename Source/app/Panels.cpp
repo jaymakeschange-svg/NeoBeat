@@ -703,11 +703,26 @@ void ExportPanel::resized()
 
 // ---------------------------------------------------------------- the inspector
 
-Inspector::Inspector (View& v) : detect (v), events (v), layers (v), exportP (v)
+// ---------------------------------------------------------------- FOLDERS
+
+FoldersTab::FoldersTab (View& v) : Panel (v)
 {
-    panels[0] = &detect; panels[1] = &events; panels[2] = &layers; panels[3] = &exportP;
+    addAndMakeVisible (panel);
+    // a new folder changes where the next save opens, and the EXPORT tab shows a path
+    panel.onChange = [this] { if (view.refreshPanels) view.refreshPanels(); };
+}
+
+void FoldersTab::resized()
+{
+    panel.setBounds (getLocalBounds().withHeight (std::min (getHeight(), nsui::FoldersPanel::wantedHeight())));
+}
+
+Inspector::Inspector (View& v) : detect (v), events (v), layers (v), exportP (v), folders (v)
+{
+    panels[0] = &detect; panels[1] = &events; panels[2] = &layers; panels[3] = &exportP; panels[4] = &folders;
     addAndMakeVisible (tabs);
     for (auto* p : panels) addChildComponent (p);
+    tabs.setItemTooltip (4, "Where each kind of file goes: WAV, MIDI, .NJQ, .NJQi. NeoBeat and MidiJaQ use the same four.");
     tabs.onSelect = [this] (int i) { show (i); };
     show (0);
 }
@@ -715,7 +730,7 @@ Inspector::Inspector (View& v) : detect (v), events (v), layers (v), exportP (v)
 void Inspector::show (int tab)
 {
     tabs.setSelected (tab);
-    for (int i = 0; i < 4; ++i) panels[i]->setVisible (i == tab);
+    for (int i = 0; i < kNumTabs; ++i) panels[i]->setVisible (i == tab);
     panels[tab]->refresh();
 }
 

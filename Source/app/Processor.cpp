@@ -276,9 +276,16 @@ juce::File BcProcessor::recordingsDir() const
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Batchcut").getChildFile ("Recordings");
 }
 
+// the assigned WAV folder (Settings). Until one is assigned: Music/Batchcut/One-shots, as before.
 juce::File BcProcessor::exportDir() const
 {
-    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Batchcut").getChildFile ("One-shots");
+    return shared::Settings::load().wavs();
+}
+
+// the assigned MIDI folder (Settings). Until one is assigned: Documents/Marbelite/MIDI.
+juce::File BcProcessor::midiDir() const
+{
+    return shared::Settings::load().midis();
 }
 
 bool BcProcessor::startRecording()

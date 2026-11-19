@@ -138,11 +138,6 @@ inline bool loadInstrument (const juce::File& file, InstrumentFile& ins, juce::S
 
 namespace shared
 {
-// where .NJQ instruments go: beside NeoBeat's preset folder, in a folder of their own
-inline juce::File instrumentsFolder()
-{
-    auto f = Settings::load().presets().getParentDirectory().getChildFile ("Instruments");
-    f.createDirectory();
-    return f;
-}
+// where instruments go: the assigned .NJQi folder (until one is assigned, Documents/Marbelite/Instruments)
+inline juce::File instrumentsFolder() { return Settings::load().instruments(); }
 }
