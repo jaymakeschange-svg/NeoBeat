@@ -296,6 +296,8 @@ void MjqProcessor::prepareToPlay (double sampleRate, int maxBlock)
             voicesFor (t).setInstrument (cur);
 
     // the Orb's effect stack: a chain of its own for every voice, drawing on one shared set of pools
+    for (int t = 0; t < mjq::kSessionTracks; ++t) { roomAir[(size_t) t].prepare (sampleRate); roomReady[(size_t) t] = false; }
+
     const int block = std::max (64, maxBlock);
     fxPools.prepare ((float) sampleRate);
     fxScratch.setSize (2, block, false, false, true);
@@ -424,6 +426,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     // Each track plays its own instrument, at its own level, and they sum into the one output. Keep the
     // events in sample order for the shared voice player, which Batchcut uses too.
     const auto& playing = snapshot->state.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, playingSlot)];
+    shownBeat.store (host.valid ? host.ppq : player.positionInPass(), std::memory_order_relaxed);
     const int numSamples = audio.getNumSamples();
     const bool stereoOut = audio.getNumChannels() > 1;
 
@@ -435,6 +438,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
                          : mjq::OrbBlend {};
         bool anyFx = false;
         for (const auto& slot : blend.stack) anyFx = anyFx || slot.on();
+        const bool inRoom = tr.place.on;
 
         auto& v = voicesFor (track);
         const bool silent = numNotes[track] == 0 && v.active.load() == 0;
@@ -447,9 +451,9 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         });
         v.level.store (tr.level);
 
-        if (! anyFx)
+        if (! anyFx && ! inRoom)
         {
-            // nothing stacked: straight into the output, as before
+            // nothing stacked and standing at the front: straight into the output, as before
             v.process (audio.getWritePointer (0), stereoOut ? audio.getWritePointer (1) : audio.getWritePointer (0),
                        numSamples, notes[track], numNotes[track]);
             continue;
@@ -490,6 +494,33 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
                 const auto* w = fxScratch.getReadPointer (c);
                 for (int i = 0; i < numSamples; ++i) b[i] = dry * b[i] + wet * w[i];
             }
+        }
+
+        // the stereo room: where this voice stands, and where its drawn curve has moved it to. The place is
+        // worked out once a block and glided to across it, so a voice crossing the picture does not zip.
+        if (inRoom)
+        {
+            const double beat = host.valid ? host.ppq : player.positionInPass();
+            const auto want = mjq::roomGain (tr.place, beat, playing.tracks[(size_t) track].line.perBar);
+            auto& air = roomAir[(size_t) track];
+            air.set (want.cutoff);
+
+            auto& was = roomWas[(size_t) track];
+            if (! roomReady[(size_t) track]) { was = want; roomReady[(size_t) track] = true; }
+            const float stepL = (want.l - was.l) / (float) std::max (1, numSamples);
+            const float stepR = (want.r - was.r) / (float) std::max (1, numSamples);
+
+            auto* bl = buf.getWritePointer (0);
+            auto* br = buf.getWritePointer (1);
+            float gl = was.l, gr = was.r;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float l = bl[i] * gl, r = br[i] * gr;
+                air.process (l, r);
+                bl[i] = l; br[i] = r;
+                gl += stepL; gr += stepR;
+            }
+            was = want;
         }
 
         audio.addFrom (0, 0, buf, 0, 0, numSamples);
@@ -697,6 +728,22 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
             tn->setAttribute ("highKey", tr.highKey);
             tn->setAttribute ("level", tr.level);
 
+            // the stereo room: where this voice stands, and the curve that moves it
+            if (tr.place.on || tr.place.x != 0.0f || tr.place.y != 0.35f || tr.place.move != mjq::RoomMove::None)
+            {
+                auto* rn = tn->createNewChildElement ("ROOM");
+                rn->setAttribute ("on", tr.place.on ? 1 : 0);
+                rn->setAttribute ("x", tr.place.x);
+                rn->setAttribute ("y", tr.place.y);
+                rn->setAttribute ("width", tr.place.width);
+                rn->setAttribute ("move", (int) tr.place.move);
+                rn->setAttribute ("depth", tr.place.depth);
+                rn->setAttribute ("bars", tr.place.bars);
+                juce::String drawn;
+                for (int k = 0; k < mjq::kRoomCurve; ++k) drawn += juce::String (tr.place.curve[(size_t) k], 4) + (k + 1 < mjq::kRoomCurve ? " " : "");
+                rn->setAttribute ("curve", drawn);
+            }
+
             // the Orb: its eight corners, and the effects stacked on each
             if (tr.orb.on || tr.orb.anySet())
             {
@@ -808,6 +855,21 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.lowKey = juce::jlimit (0, 127, tn->getIntAttribute ("lowKey", 0));
                 tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
                 tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
+
+                tr.place = mjq::Place {};
+                if (auto* rn = tn->getChildByName ("ROOM"))
+                {
+                    tr.place.on = rn->getBoolAttribute ("on", false);
+                    tr.place.x = (float) juce::jlimit (-1.0, 1.0, rn->getDoubleAttribute ("x", 0.0));
+                    tr.place.y = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("y", 0.35));
+                    tr.place.width = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("width", 0.5));
+                    tr.place.move = (mjq::RoomMove) juce::jlimit (0, 3, rn->getIntAttribute ("move", 0));
+                    tr.place.depth = (float) juce::jlimit (0.0, 1.0, rn->getDoubleAttribute ("depth", 0.5));
+                    tr.place.bars = juce::jlimit (1, 8, rn->getIntAttribute ("bars", 1));
+                    const auto drawn = juce::StringArray::fromTokens (rn->getStringAttribute ("curve"), " ", {});
+                    for (int k = 0; k < mjq::kRoomCurve && k < drawn.size(); ++k)
+                        tr.place.curve[(size_t) k] = (float) juce::jlimit (-1.0, 1.0, drawn[k].getDoubleValue());
+                }
 
                 tr.orb = mjq::Orb {};
                 if (auto* on = tn->getChildByName ("ORB"))

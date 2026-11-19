@@ -2,6 +2,7 @@
 // family around it.
 #include "Editor.h"
 #include "OrbPad.h"
+#include "RoomPad.h"
 #include "../neobeat/shared/NjqInstrument.h"
 
 using namespace mjqui;
@@ -167,7 +168,7 @@ struct MjqEditor::Parts
     Knob bassNote { "BASS", 24.0f, 72.0f, 48.0f };
     int chordBar = 0;
     // the side panel is tabbed, so the line, the multi and the Orb each have room of their own
-    Segmented sideTabs { { "Line", "Voices", "Orb" } };
+    Segmented sideTabs { { "Line", "Voices", "Orb", "Room" } };
     Segmented voicePick { { "1", "2", "3", "4" } };
     Pill openInst { "Open instrument" }, closeInst { "Clear" };
     Knob level { "LEVEL", 0.0f, 1.5f, 0.8f };
@@ -179,6 +180,12 @@ struct MjqEditor::Parts
     juce::ComboBox orbFxBox[mjq::kOrbStack];
     Knob orbFxMix[mjq::kOrbStack] { { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f }, { "MIX", 0.0f, 1.0f, 1.0f } };
     int orbCorner = 0;
+    // the stereo room
+    mjq::RoomPad roomPad;
+    mjq::RoomCurve roomCurve;
+    Pill roomOn { "Room on", true }, roomFlatten { "Flatten" };
+    Segmented roomMove { { "Still", "Left-right", "Near-far", "Both" } };
+    Knob roomWidth { "WIDTH", 0.0f, 1.0f, 0.5f }, roomDepth { "DEPTH", 0.0f, 1.0f, 0.5f }, roomBars { "BARS", 1.0f, 8.0f, 1.0f };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> head, body, side, under, ranges, orbStack;
 };
@@ -193,6 +200,8 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
             &q.orbPad, &q.orbOn, &q.orbPut, &q.orbClearCorner, &q.orbGrip,
             &q.orbFxBox[0], &q.orbFxBox[1], &q.orbFxBox[2], &q.orbFxBox[3],
             &q.orbFxMix[0], &q.orbFxMix[1], &q.orbFxMix[2], &q.orbFxMix[3],
+            &q.roomPad, &q.roomCurve, &q.roomOn, &q.roomFlatten, &q.roomMove,
+            &q.roomWidth, &q.roomDepth, &q.roomBars,
             &q.slotBox, &q.trackBox, &q.writerBox, &q.chordBarBox,
             &q.chordRootBox, &q.chordKindBox, &q.chordLengthBox, &q.cueBox, &q.trackOn, &q.fill,
             &q.chain, &q.amount, &q.hits, &q.rotate, &q.cueN, &q.cueOf, &q.bassNote,
@@ -249,6 +258,7 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
     q.sideTabs.setItemTooltip (0, "The line: how it plays, what key it is in, how long a step is");
     q.sideTabs.setItemTooltip (1, "The voices: what each one plays, and the keys it answers to");
     q.sideTabs.setItemTooltip (2, "The Orb");
+    q.sideTabs.setItemTooltip (3, "The room: where each voice stands, and how it moves while it plays");
     q.sideTabs.onSelect = [this] (int) { resized(); refresh(); };
 
     q.voicePick.setTooltip ("Which of the four voices the controls below belong to");
@@ -321,6 +331,54 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
         proc.lineChanged();
         refresh();
     };
+
+    // ---- the stereo room
+    auto eachSlot = [this] (std::function<void (mjq::Place&)> change)
+    {
+        const int t = proc.chosenTrack();
+        for (int p = 0; p < mjq::kSessionSlots; ++p) change (proc.session.slots[(size_t) p].tracks[(size_t) t].place);
+        proc.lineChanged();
+        refresh();
+    };
+
+    q.roomPad.setTooltip ("Drag a voice around the room: left and right across, close and far up the page. "
+                          "You are at the bottom. All four voices are shown, so a multi can be arranged by eye.");
+    q.roomPad.onMove = [eachSlot] (float x, float y) { eachSlot ([x, y] (mjq::Place& p) { p.x = x; p.y = y; }); };
+
+    q.roomOn.setTooltip ("Put this voice in the room. With it off the voice goes straight out, as it always did.");
+    q.roomOn.onClick = [this, eachSlot] { const bool on = parts->roomOn.getToggleState(); eachSlot ([on] (mjq::Place& p) { p.on = on; }); };
+
+    q.roomWidth.setTooltip ("How wide the voice sits: a point, or spread across the picture");
+    q.roomWidth.toText = [] (float v) { return juce::String ((int) std::round (v * 100.0f)) + "%"; };
+    q.roomWidth.onCommit = [this, eachSlot] { const float w = parts->roomWidth.getValue(); eachSlot ([w] (mjq::Place& p) { p.width = w; }); };
+
+    q.roomMove.setTooltip ("What the drawn curve moves this voice through");
+    q.roomMove.onSelect = [eachSlot] (int i) { eachSlot ([i] (mjq::Place& p) { p.move = (mjq::RoomMove) i; }); };
+
+    q.roomDepth.setTooltip ("How far the curve pushes it");
+    q.roomDepth.toText = [] (float v) { return juce::String ((int) std::round (v * 100.0f)) + "%"; };
+    q.roomDepth.onCommit = [this, eachSlot] { const float d = parts->roomDepth.getValue(); eachSlot ([d] (mjq::Place& p) { p.depth = d; }); };
+
+    q.roomBars.setTooltip ("How many bars the curve is read over");
+    q.roomBars.step = 1.0f;
+    q.roomBars.toText = [] (float v) { return juce::String ((int) std::round (v)); };
+    q.roomBars.onCommit = [this, eachSlot] { const int b = (int) std::round (parts->roomBars.getValue()); eachSlot ([b] (mjq::Place& p) { p.bars = b; }); };
+
+    q.roomFlatten.setTooltip ("Rub the drawn curve out, so the voice stands still again");
+    q.roomFlatten.onClick = [eachSlot] { eachSlot ([] (mjq::Place& p) { p.curve.fill (0.0f); }); };
+
+    q.roomCurve.setTooltip ("Draw how the voice moves through the bar. Drag across to draw.");
+    q.roomCurve.onDraw = [this] (int i, float v)
+    {
+        const int t = proc.chosenTrack();
+        for (int p = 0; p < mjq::kSessionSlots; ++p)
+        {
+            auto& place = proc.session.slots[(size_t) p].tracks[(size_t) t].place;
+            if (i >= 0 && i < mjq::kRoomCurve) place.curve[(size_t) i] = v;
+        }
+        refresh();
+    };
+    q.roomCurve.onDone = [this] { proc.lineChanged(); refresh(); };
 
     // the four stacked effects of the chosen corner
     for (int s = 0; s < mjq::kOrbStack; ++s)
@@ -555,6 +613,24 @@ void MjqEditor::refresh()
             q.orbFxMix[s].setEnabled (corner.set && corner.stack[(size_t) s].fx >= 0);
         }
     }
+
+    // the room
+    {
+        const auto& place = tr.place;
+        std::array<mjq::Place, 4> all {};
+        const auto& here = proc.session.current();
+        for (int v = 0; v < mjq::kSessionTracks && v < 4; ++v) all[(size_t) v] = here.tracks[(size_t) v].place;
+        const double beat = proc.displayBeat();
+        q.roomPad.setVoices (all, proc.session.selectedTrack, beat, tr.line.perBar);
+        q.roomCurve.setCurve (place, beat);
+        q.roomOn.setToggleState (place.on, juce::dontSendNotification);
+        q.roomWidth.setValue (place.width);
+        q.roomMove.setSelected ((int) place.move);
+        q.roomDepth.setValue (place.depth);
+        q.roomBars.setValue ((float) place.bars);
+        for (juce::Component* c : std::initializer_list<juce::Component*> { &q.roomWidth, &q.roomMove, &q.roomDepth, &q.roomBars, &q.roomCurve, &q.roomFlatten })
+            c->setEnabled (place.on);
+    }
     q.writerBox.setSelectedId ((int) tr.generator.kind + 1, juce::dontSendNotification);
     q.chain.setValue ((float) proc.session.chainLength);
     q.amount.setValue (tr.generator.amount);
@@ -652,7 +728,7 @@ void MjqEditor::paintOrb (juce::Graphics& g)
 
 void MjqEditor::showSideTab (int tab)
 {
-    parts->sideTabs.setSelected (juce::jlimit (0, 2, tab));
+    parts->sideTabs.setSelected (juce::jlimit (0, 3, tab));
     resized();
     refresh();
 }
@@ -842,4 +918,19 @@ void MjqEditor::resized()
         q.orbFxBox[s].setBounds (x, rowY + 12, w - 60, 24);
         q.orbFxMix[s].setBounds (x + w - 56, rowY + 2, 56, 44);
     }
+
+    // the room
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &q.roomPad, &q.roomCurve, &q.roomOn,
+                                                                       &q.roomFlatten, &q.roomMove, &q.roomWidth,
+                                                                       &q.roomDepth, &q.roomBars })
+        c->setVisible (tab == 3 && ! compact);
+    q.roomOn.setBounds (x, top, w, 26);
+    q.roomPad.setBounds (x, top + 32, w, (int) (w * 0.82f));
+    const int afterRoom = top + 32 + (int) (w * 0.82f) + 10;
+    q.roomWidth.setBounds (x, afterRoom, 66, 58);
+    q.roomMove.setBounds (x, afterRoom + 80, w, 26);
+    q.roomCurve.setBounds (x, afterRoom + 124, w, 68);
+    q.roomDepth.setBounds (x, afterRoom + 198, 66, 58);
+    q.roomBars.setBounds (x + 72, afterRoom + 198, 66, 58);
+    q.roomFlatten.setBounds (x + w - 72, afterRoom + 214, 72, 24);
 }

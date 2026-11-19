@@ -92,6 +92,32 @@ int main (int argc, char** argv)
         shot (*ed, dir, "5_orb");
     }
 
+    // the stereo room: four voices placed, the chosen one swinging left and right
+    {
+        for (int p = 0; p < mjq::kSessionSlots; ++p)
+        {
+            auto& tracks = proc->session.slots[(size_t) p].tracks;
+            tracks[0].place.on = true; tracks[0].place.x = -0.15f; tracks[0].place.y = 0.18f; tracks[0].place.width = 0.35f;
+            tracks[1].place.on = true; tracks[1].place.x = 0.62f;  tracks[1].place.y = 0.55f; tracks[1].place.width = 0.2f;
+            tracks[2].place.on = true; tracks[2].place.x = -0.7f;  tracks[2].place.y = 0.8f;  tracks[2].place.width = 0.8f;
+            tracks[3].place.on = true; tracks[3].place.x = 0.25f;  tracks[3].place.y = 0.95f; tracks[3].place.width = 0.6f;
+            auto& chosen = tracks[0].place;
+            chosen.move = mjq::RoomMove::LeftRight;
+            chosen.depth = 0.7f;
+            chosen.bars = 2;
+            for (int i = 0; i < mjq::kRoomCurve; ++i)
+            {
+                const float t = (float) i / (float) mjq::kRoomCurve;
+                chosen.curve[(size_t) i] = std::sin (6.28318531f * t) * 0.8f + 0.2f * std::sin (18.84955592f * t);
+            }
+        }
+        proc->chooseTrack (0);
+        ed->setBounds (0, 0, 1120, 820);
+        ed->showSideTab (3);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
+        shot (*ed, dir, "6_room");
+    }
+
     ed.reset();
     proc->releaseResources();
     return 0;

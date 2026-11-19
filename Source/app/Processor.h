@@ -69,6 +69,8 @@ public:
     void clearOrbCorner (int track, int corner);
     void recallOrbCorner (int track, int corner);                  // the joystick travels to that corner
     mjq::OrbBlend orbBlend (int track) const;
+    // where the music has got to, for anything on screen that moves in time with it
+    double displayBeat() const noexcept { return shownBeat.load (std::memory_order_relaxed); }
 
     void lineChanged();                              // rebuild the snapshot and bump the version
     void roll();                                     // JAQ: a new family from a new seed
@@ -122,8 +124,14 @@ private:
     std::array<juce::AudioBuffer<float>, mjq::kSessionTracks> voiceBuf;
     std::array<std::array<nb::LiveFx, mjq::kOrbStack>, mjq::kSessionTracks> orbFx;
     std::array<std::array<mjq::OrbFx, mjq::kOrbStack>, mjq::kSessionTracks> orbFxLast {};
+    std::atomic<double> shownBeat { 0.0 };
     uint64_t orbFxVersion = 0;
     juce::AudioBuffer<float> fxScratch;
+
+    // the stereo room, per voice: the air filter, and where it stood last block so it glides rather than zips
+    std::array<mjq::RoomAir, mjq::kSessionTracks> roomAir;
+    std::array<mjq::RoomGain, mjq::kSessionTracks> roomWas {};
+    std::array<bool, mjq::kSessionTracks> roomReady {};
     std::vector<std::shared_ptr<const mjq::Instrument>> keep;   // the one just replaced, until the audio thread is past it
     double keepSince = 0.0;
     std::atomic<int> lastStep { -1 };

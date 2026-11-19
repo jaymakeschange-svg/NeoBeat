@@ -13,7 +13,7 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void refresh();
-    void showSideTab (int tab);           // 0 the line, 1 the voices, 2 the Orb
+    void showSideTab (int tab);           // 0 the line, 1 the voices, 2 the Orb, 3 the room
 
     MjqProcessor& proc;
     int chosenStep = -1, chosenLane = 1;  // where the editor is, for the keyboard

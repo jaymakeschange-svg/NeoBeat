@@ -5,6 +5,7 @@
 
 #include "Jaq.h"
 #include "Orb.h"
+#include "Room.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -118,6 +119,7 @@ struct Track
     bool enabled = true;
 
     Orb orb;                            // the eight corners this voice morphs between
+    Place place;                        // where this voice stands in the stereo room
     std::string instrumentFile;         // the .NJQi (or .NJQ) this voice plays; empty: silent
     int lowKey = 0, highKey = 127;      // the keys that steer it, in Follow, Bass and Parts
     float level = 0.8f;                 // so the layers of a multi can be balanced (the player's own default)
