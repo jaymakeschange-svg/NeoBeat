@@ -368,7 +368,9 @@ public:
     std::function<void (float)> onChange;      // while dragging
     std::function<void()> onCommit;            // when a drag (or a click, wheel, reset) is over
     std::function<juce::String (float)> toText;
+    std::function<void()> onRightClick;        // the randomiser lives here
     bool main = false;
+    bool cycling = false;                      // drawn with a ring, so a knob that moves on its own shows it
     float step = 0.0f;                         // > 0: values snap to steps of this
 
     void setValue (float v) { v = juce::jlimit (std::min (minV, maxV), std::max (minV, maxV), v); if (v != value) { value = v; repaint(); } }
@@ -392,6 +394,8 @@ public:
         };
         arc (rKnob + 4.0f, a0, a1, col (s.knobRingBack), 2.5f);
         arc (rKnob + 4.0f, a0, ang, main ? C::teal() : col (s.knobRingIdle), 2.5f);
+        // a knob that is moving on its own wears a ring, so you can see which ones are not yours any more
+        if (cycling) arc (rKnob + 7.5f, a0, a1, C::amber().withAlpha (0.85f), 1.6f);
         for (int i = 0; i < 36; ++i)
         {
             const float t = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
@@ -417,7 +421,11 @@ public:
     }
 
     void enablementChanged() override { setAlpha (isEnabled() ? 1.0f : 0.4f); }
-    void mouseDown (const juce::MouseEvent&) override { dragStart = toNorm (value); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && onRightClick) { onRightClick(); return; }
+        dragStart = toNorm (value);
+    }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         const float sens = e.mods.isShiftDown() ? 0.0012f : 0.005f;

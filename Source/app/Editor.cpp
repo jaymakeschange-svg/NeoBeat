@@ -332,6 +332,66 @@ MjqEditor::MjqEditor (MjqProcessor& p) : juce::AudioProcessorEditor (&p), proc (
         refresh();
     };
 
+    // ---- the randomiser: right-click any of the five played controls
+    auto randomiserMenu = [this] (mjq::Cycled what)
+    {
+        const int t = proc.chosenTrack();
+        const auto& cyc = proc.session.current().tracks[(size_t) t].randomiser.cycles[(size_t) what];
+
+        auto change = [this, t, what] (std::function<void (mjq::Cycle&)> edit)
+        {
+            for (int p = 0; p < mjq::kSessionSlots; ++p)
+                edit (proc.session.slots[(size_t) p].tracks[(size_t) t].randomiser.cycles[(size_t) what]);
+            proc.lineChanged();
+            refresh();
+        };
+
+        juce::PopupMenu m;
+        m.addSectionHeader (juce::String (mjq::cycledName (what)));
+        m.addItem (1, cyc.on ? "Stop cycling (lands back here)" : "Cycle", true, cyc.on);
+        m.addItem (2, "Roll a different take");
+        m.addSeparator();
+
+        juce::PopupMenu rate;
+        const float rates[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+        const char* rateNames[] = { "every 4 beats", "every 2 beats", "every beat", "twice a beat", "four a beat" };
+        for (int i = 0; i < 5; ++i) rate.addItem (10 + i, rateNames[i], true, std::abs (cyc.rate - rates[i]) < 0.01f);
+        m.addSubMenu ("Speed", rate);
+
+        juce::PopupMenu sw;
+        const float swings[] = { 0.5f, 0.58f, 0.66f, 0.72f };
+        const char* swingNames[] = { "straight", "a little", "swung", "hard" };
+        for (int i = 0; i < 4; ++i) sw.addItem (20 + i, swingNames[i], true, std::abs (cyc.swing - swings[i]) < 0.01f);
+        m.addSubMenu ("Swing", sw);
+
+        juce::PopupMenu ex;
+        const float amounts[] = { 0.15f, 0.35f, 0.6f, 1.0f };
+        const char* amountNames[] = { "a nudge", "some", "a lot", "anywhere" };
+        for (int i = 0; i < 4; ++i) ex.addItem (30 + i, amountNames[i], true, std::abs (cyc.extremity - amounts[i]) < 0.01f);
+        m.addSubMenu ("Extremity", ex);
+
+        m.showMenuAsync (juce::PopupMenu::Options{}, [change, what, this] (int r)
+        {
+            if (r == 0) return;
+            if (r == 1)
+                change ([this, what] (mjq::Cycle& c)
+                {
+                    if (! c.on) c.home = currentValueOf (what);     // remember where to land
+                    c.on = ! c.on;
+                });
+            else if (r == 2) change ([] (mjq::Cycle& c) { c.seed = (uint64_t) juce::Random::getSystemRandom().nextInt64() | 1ull; });
+            else if (r >= 10 && r < 20) { const float v = (const float[]) { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f }[r - 10]; change ([v] (mjq::Cycle& c) { c.rate = v; }); }
+            else if (r >= 20 && r < 30) { const float v = (const float[]) { 0.5f, 0.58f, 0.66f, 0.72f }[r - 20]; change ([v] (mjq::Cycle& c) { c.swing = v; }); }
+            else if (r >= 30 && r < 40) { const float v = (const float[]) { 0.15f, 0.35f, 0.6f, 1.0f }[r - 30]; change ([v] (mjq::Cycle& c) { c.extremity = v; }); }
+        });
+    };
+
+    q.dialect.onRightClick = [randomiserMenu] { randomiserMenu (mjq::Cycled::Dialect); };
+    q.traffic.onRightClick = [randomiserMenu] { randomiserMenu (mjq::Cycled::Traffic); };
+    q.accent.onRightClick  = [randomiserMenu] { randomiserMenu (mjq::Cycled::Accent); };
+    q.gate.onRightClick    = [randomiserMenu] { randomiserMenu (mjq::Cycled::Gate); };
+    q.swing.onRightClick   = [randomiserMenu] { randomiserMenu (mjq::Cycled::Swing); };
+
     // ---- the stereo room
     auto eachSlot = [this] (std::function<void (mjq::Place&)> change)
     {
@@ -580,8 +640,18 @@ void MjqEditor::refresh()
 {
     auto& q = *parts;
     const auto& L = proc.line;
-    q.dialect.setValue (L.dialect); q.traffic.setValue (L.traffic); q.accent.setValue (L.accent);
-    q.gate.setValue (L.gate); q.swing.setValue (L.swing);
+    {
+        // a cycling control shows where it is now, with a ring to say it is moving on its own
+        const auto& rnd = proc.session.current().tracks[(size_t) proc.session.selectedTrack].randomiser;
+        const auto now = mjq::cycleRead (rnd, proc.displayBeat());
+        mjqui::Knob* const knobs[] = { &q.dialect, &q.traffic, &q.accent, &q.gate, &q.swing };
+        const float written[] = { L.dialect, L.traffic, L.accent, L.gate, L.swing };
+        for (int i = 0; i < (int) mjq::Cycled::Count; ++i)
+        {
+            knobs[i]->cycling = now.live[(size_t) i];
+            knobs[i]->setValue (now.live[(size_t) i] ? now.value[(size_t) i] : written[i]);
+        }
+    }
     q.steps.setValue ((float) L.numSteps); q.offset.setValue ((float) L.offset); q.transpose.setValue ((float) L.transpose);
     q.mode.setSelected ((int) L.mode);
     q.slotBox.setSelectedId (proc.session.selected + 1, juce::dontSendNotification);
@@ -724,6 +794,21 @@ void MjqEditor::paintOrb (juce::Graphics& g)
                 readout, juce::Justification::centredLeft, false);
 
     paintLabel (g, "Stacked on this corner", { q.orbStack.getX(), q.orbStack.getY() - 2, 200, 12 }, juce::Justification::centredLeft, 8.0f);
+}
+
+// Where one of the played controls sits right now: what a cycle remembers, and lands back on.
+float MjqEditor::currentValueOf (mjq::Cycled what) const
+{
+    const auto& L = proc.line;
+    switch (what)
+    {
+        case mjq::Cycled::Dialect: return L.dialect;
+        case mjq::Cycled::Traffic: return L.traffic;
+        case mjq::Cycled::Accent:  return L.accent;
+        case mjq::Cycled::Gate:    return L.gate;
+        case mjq::Cycled::Swing:   return L.swing;
+        default:                   return 0.5f;
+    }
 }
 
 void MjqEditor::showSideTab (int tab)

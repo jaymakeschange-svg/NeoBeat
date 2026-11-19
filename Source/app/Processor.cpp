@@ -414,7 +414,24 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             }
             mjq::MidiOut out[256];
             const auto& tr = slot.tracks[(size_t) track];
-            const int count = seq.process (tr.line, passes[(size_t) track], clockMode, segmentTime,
+
+            // a cycling knob is laid over the line as it plays. DIALECT, TRAFFIC, ACCENT, GATE and SWING are
+            // read at playing time, so this is heard at once rather than waiting for the line to be rewritten.
+            const mjq::Line* linePtr = &tr.line;
+            mjq::Line cycled;
+            if (tr.randomiser.any())
+            {
+                const auto now = mjq::cycleRead (tr.randomiser, host.valid ? beat : seq.positionInPass());
+                cycled = tr.line;
+                if (now.live[(size_t) mjq::Cycled::Dialect]) cycled.dialect = now.value[(size_t) mjq::Cycled::Dialect];
+                if (now.live[(size_t) mjq::Cycled::Traffic]) cycled.traffic = now.value[(size_t) mjq::Cycled::Traffic];
+                if (now.live[(size_t) mjq::Cycled::Accent])  cycled.accent  = now.value[(size_t) mjq::Cycled::Accent];
+                if (now.live[(size_t) mjq::Cycled::Gate])    cycled.gate    = now.value[(size_t) mjq::Cycled::Gate];
+                if (now.live[(size_t) mjq::Cycled::Swing])   cycled.swing   = now.value[(size_t) mjq::Cycled::Swing];
+                linePtr = &cycled;
+            }
+
+            const int count = seq.process (*linePtr, passes[(size_t) track], clockMode, segmentTime,
                                            segment, out, 256, &slot.chords, &tr.generator,
                                            host.valid ? beat : seq.positionInPass(),
                                            snapshot->evolving[(size_t) slotNumber][(size_t) track].get());
@@ -728,6 +745,24 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
             tn->setAttribute ("highKey", tr.highKey);
             tn->setAttribute ("level", tr.level);
 
+            // the randomiser: any control left cycling
+            if (tr.randomiser.any())
+            {
+                auto* qn = tn->createNewChildElement ("CYCLES");
+                for (int k = 0; k < (int) mjq::Cycled::Count; ++k)
+                {
+                    const auto& c = tr.randomiser.cycles[(size_t) k];
+                    if (! c.on) continue;
+                    auto* cn = qn->createNewChildElement ("CYCLE");
+                    cn->setAttribute ("what", k);
+                    cn->setAttribute ("rate", c.rate);
+                    cn->setAttribute ("swing", c.swing);
+                    cn->setAttribute ("extremity", c.extremity);
+                    cn->setAttribute ("home", c.home);
+                    cn->setAttribute ("seed", juce::String (c.seed));
+                }
+            }
+
             // the stereo room: where this voice stands, and the curve that moves it
             if (tr.place.on || tr.place.x != 0.0f || tr.place.y != 0.35f || tr.place.move != mjq::RoomMove::None)
             {
@@ -855,6 +890,22 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.lowKey = juce::jlimit (0, 127, tn->getIntAttribute ("lowKey", 0));
                 tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
                 tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
+
+                tr.randomiser = mjq::Randomiser {};
+                if (auto* qn = tn->getChildByName ("CYCLES"))
+                    for (auto* cn : qn->getChildWithTagNameIterator ("CYCLE"))
+                    {
+                        const int k = cn->getIntAttribute ("what", -1);
+                        if (k < 0 || k >= (int) mjq::Cycled::Count) continue;
+                        auto& c = tr.randomiser.cycles[(size_t) k];
+                        c.on = true;
+                        c.rate = (float) juce::jlimit (0.03125, 16.0, cn->getDoubleAttribute ("rate", 1.0));
+                        c.swing = (float) juce::jlimit (0.5, 0.9, cn->getDoubleAttribute ("swing", 0.5));
+                        c.extremity = (float) juce::jlimit (0.0, 1.0, cn->getDoubleAttribute ("extremity", 0.5));
+                        c.home = (float) cn->getDoubleAttribute ("home", 0.5);
+                        c.seed = (uint64_t) cn->getStringAttribute ("seed").getLargeIntValue();
+                        if (c.seed == 0) c.seed = 1;
+                    }
 
                 tr.place = mjq::Place {};
                 if (auto* rn = tn->getChildByName ("ROOM"))

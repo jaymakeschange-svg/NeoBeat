@@ -22,6 +22,7 @@ private:
     void timerCallback() override;
     void paintVoices (juce::Graphics&);   // the multi: the chosen instrument, and all four key ranges
     void paintOrb (juce::Graphics&);      // the Orb: what the joystick is reading out, and the stack
+    float currentValueOf (mjq::Cycled) const;   // where a control sits now, so a cycle knows where to land
     struct Parts;
     std::unique_ptr<Parts> parts;
     mjqui::Look look;
