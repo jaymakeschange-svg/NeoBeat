@@ -485,7 +485,7 @@ void MjqEditor::paint (juce::Graphics& g)
     g.setFont (caps (15.0f));
     g.setColour (C::text());
     g.drawText ("MidiJaQ", q.head.getX() + 16, q.head.getY() + 10, 200, 22, juce::Justification::centredLeft);
-    paintLabel (g, "the melodic one", { q.head.getX() + 16, q.head.getY() + 32, 220, 14 }, juce::Justification::centredLeft, 8.5f);
+    paintLabel (g, "3.0 | NJS INSTRUMENT", { q.head.getX() + 16, q.head.getY() + 32, 220, 14 }, juce::Justification::centredLeft, 8.5f);
 
     paintLabel (g, "Key", { q.rootBox.getX(), q.rootBox.getY() - 14, 60, 12 }, juce::Justification::centredLeft, 8.0f);
     paintLabel (g, "Scale", { q.scaleBox.getX(), q.scaleBox.getY() - 14, 80, 12 }, juce::Justification::centredLeft, 8.0f);
