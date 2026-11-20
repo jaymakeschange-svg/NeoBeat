@@ -89,7 +89,7 @@ target_link_libraries (test_shared PRIVATE juce::juce_audio_formats juce::juce_r
 
 # Linux only: the host test (the plugin driven as a host would, with its editor) and editor snapshots.
 if (UNIX AND NOT APPLE AND BATCHCUT_LINUX_TOOLS)
-    foreach (tool HostTest Snapshot)
+    foreach (tool HostTest Snapshot MakePatches)
         juce_add_console_app (Batchcut${tool} PRODUCT_NAME "Batchcut${tool}")
         target_sources (Batchcut${tool} PRIVATE tools/${tool}.cpp ${BATCHCUT_APP_SOURCES})
         target_include_directories (Batchcut${tool} PRIVATE Source)
