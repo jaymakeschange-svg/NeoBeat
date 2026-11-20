@@ -60,6 +60,9 @@ public:
     }
     void changeTrackRange (int track, int lowKey, int highKey);
     void changeTrackLevel (int track, float level);
+    void setTrackMode (int track, bool layer, int follows);
+    void setTrackStack (int track, int semis, float cents, float delayMs);
+    void releaseTrack (int track);
 
     // ---- the Orb. One joystick moves every voice's Orb at once, so a single gesture takes the whole multi
     // somewhere else. Each voice has eight corners of its own.
@@ -134,6 +137,13 @@ private:
     // transport; without one it keeps counting on its own. The player's own position runs from the start of
     // each pass and goes back to nothing every bar, so anything that must not repeat every bar - a cycling
     // knob, a drawn curve in the room - has to be told the time from here instead.
+    // A layer can sit a few milliseconds behind the voice it follows, which at a small block
+    // size puts its note past the end of this block. Those wait here for the next one. Fixed
+    // size on purpose: the audio thread must not allocate.
+    static constexpr int kCarry = 256;
+    mjq::PlayNote layerCarry[mjq::kSessionTracks][kCarry] {};
+    int numCarry[mjq::kSessionTracks] {};
+
     double freeBeats = 0.0;
     double hostBeatsPerSample() const noexcept { return lastBpm / (60.0 * (hostSampleRate > 0.0 ? hostSampleRate : 48000.0)); }
     double lastBpm = 120.0;

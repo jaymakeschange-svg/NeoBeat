@@ -130,7 +130,9 @@ struct InstrumentT
     }
 };
 
-struct PlayNote { int offset = 0, note = 60; float velocity = 0.8f; bool on = true; };
+// `fine` shifts the pitch without moving the key: the zone picked and the key held are still
+// `note`, so a layer detuned a few cents stays the same sound, played a hair sharp or flat.
+struct PlayNote { int offset = 0, note = 60; float velocity = 0.8f; bool on = true; float fine = 0.0f; };
 
 // ------------------------------------------------------------------ the voices
 template <class S>
@@ -238,8 +240,8 @@ private:
             for (auto& v : voices)
                 if (v.z != nullptr && v.stage < 2)
                 {
-                    v.note = key; v.targetNote = key;
-                    if (ins->glideMs <= 0.5f) v.curNote = key;
+                    v.note = key; v.targetNote = (double) key + (double) nt.fine;
+                    if (ins->glideMs <= 0.5f) v.curNote = v.targetNote;
                     return;
                 }
         }
@@ -251,7 +253,8 @@ private:
         for (auto& g : use->grains) g = Grain();
         use->z = z; use->note = key; use->vel = (float) vel / 127.0f; use->order = ++counter;
         use->gain = std::pow (10.0f, z->gainDb / 20.0f) * (0.25f + 0.75f * use->vel);
-        use->targetNote = key; use->curNote = (ins->glideMs > 0.5f && lastNote >= 0) ? (double) lastNote : (double) key;
+        use->targetNote = (double) key + (double) nt.fine;
+        use->curNote = (ins->glideMs > 0.5f && lastNote >= 0) ? (double) lastNote + (double) nt.fine : use->targetNote;
         use->rng = 0x9e3779b9u ^ (uint32_t) (counter * 2654435761u);
         if (ins->mode == PlayMode::Resonator) use->res.reset();   // tuned on its first sample
         lastNote = key;

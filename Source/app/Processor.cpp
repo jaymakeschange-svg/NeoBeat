@@ -164,7 +164,13 @@ bool MjqProcessor::openInstrument (int track, const juce::File& file, juce::Stri
 
     // the path travels in the session, so a multi is saved and reopened whole
     for (int p = 0; p < mjq::kSessionSlots; ++p)
-        session.slots[(size_t) p].tracks[(size_t) track].instrumentFile = file.getFullPathName().toStdString();
+    {
+        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        tr.instrumentFile = file.getFullPathName().toStdString();
+        // Only voice 1 starts switched on, so until now putting a sound on any other voice gave
+        // silence until you found the switch. Putting a sound on a voice is asking to hear it.
+        tr.enabled = true;
+    }
     if (track == 0) instrumentFile = file.getFullPathName();
     message = "Voice " + juce::String (track + 1) + ": " + mjq::describe (*shared);
     version.fetch_add (1);
@@ -318,6 +324,52 @@ void MjqProcessor::changeTrackLevel (int track, float level)
     lineChanged();
 }
 
+// Stacking. A voice is either a Part, writing and playing a line of its own, or a Layer, which
+// writes nothing and plays another voice's notes with its own sound. Setting one applies across
+// every slot, as level does, so a stack survives changing slot.
+void MjqProcessor::setTrackMode (int track, bool layer, int follows)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    follows = juce::jlimit (0, mjq::kSessionTracks - 1, follows);
+    if (follows == track) follows = track == 0 ? 1 : 0;   // a voice cannot stack on itself
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+    {
+        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        tr.mode = layer ? mjq::VoiceMode::Layer : mjq::VoiceMode::Part;
+        tr.layerOf = follows;
+        // A stack is one instrument in several sounds, so a layer hears every key the voice it
+        // follows hears. Narrowing it is what key ranges on the Part are for.
+        if (layer) { tr.lowKey = 0; tr.highKey = 127; }
+    }
+    releaseTrack (track);     // nothing left hanging from how it played a moment ago
+    lineChanged();
+}
+
+void MjqProcessor::setTrackStack (int track, int semis, float cents, float delayMs)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    semis = juce::jlimit (-24, 24, semis);
+    cents = juce::jlimit (-50.0f, 50.0f, cents);
+    delayMs = juce::jlimit (0.0f, 60.0f, delayMs);
+    for (int p = 0; p < mjq::kSessionSlots; ++p)
+    {
+        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        tr.semis = semis; tr.cents = cents; tr.delayMs = delayMs;
+    }
+    lineChanged();
+}
+
+// let go of everything a voice is holding, so changing what it follows cannot leave a note on
+void MjqProcessor::releaseTrack (int track)
+{
+    track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
+    auto& seq = track == 0 ? player : otherPlayers[(size_t) (track - 1)];
+    seq.allKeysUp();
+    seq.reset();
+    voicesFor (track).letGo.store (true);    // the audio thread releases every key on its next block
+    numCarry[track] = 0;
+}
+
 void MjqProcessor::prepareToPlay (double sampleRate, int maxBlock)
 {
     hostSampleRate = sampleRate;
@@ -396,6 +448,19 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     mjq::PlayNote notes[mjq::kSessionTracks][1024];
     int numNotes[mjq::kSessionTracks] {};
     const int total = audio.getNumSamples();
+
+    // layer notes held over from the last block, now due (or due later still)
+    for (int t = 0; t < mjq::kSessionTracks; ++t)
+    {
+        int keep = 0;
+        for (int i = 0; i < numCarry[t]; ++i)
+        {
+            auto n = layerCarry[t][i];
+            if (n.offset < total) { if (numNotes[t] < 1024) notes[t][numNotes[t]++] = n; }
+            else { n.offset -= total; layerCarry[t][keep++] = n; }
+        }
+        numCarry[t] = keep;
+    }
     const double bpm = host.bpm > 1.0 ? host.bpm : 120.0;
     lastBpm = bpm;
     const double beatPerSample = bpm / (60.0 * std::max (1.0, hostSampleRate));
@@ -418,11 +483,32 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         }
 
         // MidiJaQ no longer sends MIDI out: a note goes to its track's own instrument and nowhere else.
+        auto put = [&] (int track, int at, int note, float vel, bool on, float fine)
+        {
+            if (at < total)
+            {
+                if (numNotes[track] < 1024)
+                    notes[track][numNotes[track]++] = { at, note, vel, on, fine };
+            }
+            else if (numCarry[track] < kCarry)     // a delayed layer, landing in a later block
+                layerCarry[track][numCarry[track]++] = { at - total, note, vel, on, fine };
+        };
+
         auto emit = [&] (int track, const mjq::MidiOut& e)
         {
             if (e.on) notesPlayed.fetch_add (1, std::memory_order_relaxed);
-            if (numNotes[track] < 1024)
-                notes[track][numNotes[track]++] = { start + e.sample, e.note, (float) e.velocity / 127.0f, e.on };
+            const float vel = (float) e.velocity / 127.0f;
+            put (track, start + e.sample, e.note, vel, e.on, 0.0f);
+
+            // and every voice stacked on this one plays the same note with its own sound
+            for (int L = 0; L < mjq::kSessionTracks; ++L)
+            {
+                const auto& lt = slot.tracks[(size_t) L];
+                if (L == track || ! lt.enabled || ! lt.stacks() || lt.layerOf != track) continue;
+                const int delay = (int) std::lround ((double) lt.delayMs * 0.001 * std::max (1.0, hostSampleRate));
+                const int note = juce::jlimit (0, 127, e.note + lt.semis);
+                put (L, start + e.sample + delay, note, vel, e.on, lt.cents * 0.01f);
+            }
         };
 
         if (slotNumber != playingSlot)
@@ -443,11 +529,23 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         for (int track = 0; track < mjq::kSessionTracks; ++track)
         {
             auto& seq = track == 0 ? player : otherPlayers[(size_t) (track - 1)];
-            if (! slot.tracks[(size_t) track].enabled)
+            // A layer writes no line of its own: its notes arrive through emit, from the voice
+            // it follows. Its own player stays silent and must let go of anything still held.
+            const auto& tt = slot.tracks[(size_t) track];
+            if (! tt.enabled || tt.isLayer())
             {
                 mjq::MidiOut released[64];
                 const int count = seq.releaseAllNow (released, 64);
-                for (int j = 0; j < count; ++j) emit (track, released[j]);
+                for (int j = 0; j < count; ++j)
+                {
+                    // a Part going quiet has to let go of its layers as well, or they ring on;
+                    // a layer has only its own leftovers to release, and fans out to nobody
+                    if (tt.isLayer())
+                        put (track, start + released[j].sample, released[j].note,
+                             (float) released[j].velocity / 127.0f, released[j].on, 0.0f);
+                    else
+                        emit (track, released[j]);
+                }
                 seq.reset();
                 continue;
             }
@@ -866,6 +964,14 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
             tn->setAttribute ("lowKey", tr.lowKey);
             tn->setAttribute ("highKey", tr.highKey);
             tn->setAttribute ("level", tr.level);
+            // stacking: a Part writes its own line, a Layer plays another voice's notes
+            if (tr.isLayer())
+            {
+                tn->setAttribute ("stack", tr.layerOf);
+                tn->setAttribute ("semis", tr.semis);
+                tn->setAttribute ("cents", tr.cents);
+                tn->setAttribute ("stackDelay", tr.delayMs);
+            }
 
             if (auto legacy = juce::parseXML (toXml (tr.line, clockMode, {})))
                 tn->addChildElement (legacy.release());
@@ -1016,6 +1122,16 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.lowKey = juce::jlimit (0, 127, tn->getIntAttribute ("lowKey", 0));
                 tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
                 tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
+                // a session saved before stacking existed has no "stack", so every voice is a Part
+                if (tn->hasAttribute ("stack"))
+                {
+                    tr.mode = mjq::VoiceMode::Layer;
+                    tr.layerOf = juce::jlimit (0, mjq::kSessionTracks - 1, tn->getIntAttribute ("stack", 0));
+                    if (tr.layerOf == t) tr.layerOf = t == 0 ? 1 : 0;
+                    tr.semis = juce::jlimit (-24, 24, tn->getIntAttribute ("semis", 0));
+                    tr.cents = (float) juce::jlimit (-50.0, 50.0, tn->getDoubleAttribute ("cents", 0.0));
+                    tr.delayMs = (float) juce::jlimit (0.0, 60.0, tn->getDoubleAttribute ("stackDelay", 0.0));
+                }
 
                 if (auto* ln = tn->getChildByName ("MIDIJAQ"))
                 {

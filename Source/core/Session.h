@@ -113,6 +113,11 @@ struct GeneratorSettings
 // One voice of the multi: a line, the writer behind it, the instrument that sounds it, and the stretch of
 // keys it answers to. Ranges may overlap, which is the point: one key can start a piano figure and a
 // bassline at once, each on its own instrument.
+// What a voice is for. A Part writes and plays a line of its own - four Parts are four
+// players in a band. A Layer writes nothing: it plays another voice's notes with its own
+// sound, which is how you stack sounds into one thicker instrument.
+enum class VoiceMode : uint8_t { Part, Layer };
+
 struct Track
 {
     Line line;
@@ -123,7 +128,17 @@ struct Track
     int lowKey = 0, highKey = 127;      // the keys that steer it, in Follow, Bass and Parts
     float level = 0.8f;                 // so the layers of a multi can be balanced (the player's own default)
 
+    // stacking
+    VoiceMode mode = VoiceMode::Part;
+    int layerOf = 0;                    // the voice whose notes it plays, when it is a Layer
+    int semis = 0;                      // moved by whole semitones: -24..24 (an octave up is +12)
+    float cents = 0.0f;                 // and by cents: -50..50. The classic thickener
+    float delayMs = 0.0f;               // 0..60 ms behind. A few ms reads as width, not as an echo
+
     bool answersTo (int note) const noexcept { return note >= lowKey && note <= highKey; }
+    bool isLayer() const noexcept { return mode == VoiceMode::Layer; }
+    // a layer is only sounding if it has a sound of its own to play
+    bool stacks() const noexcept { return isLayer() && ! instrumentFile.empty(); }
 };
 
 struct Slot

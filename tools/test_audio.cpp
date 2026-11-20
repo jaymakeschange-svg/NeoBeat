@@ -55,7 +55,7 @@ struct Transport final : public juce::AudioPlayHead
 // Render some seconds of the plugin and describe what came out. `touch` is called every block, so a test can
 // move a control while it plays - which is where the clicks and the runaways live.
 static Sound listen (MjqProcessor& p, Transport& t, double seconds,
-                     std::function<void (double)> touch = {})
+                     std::function<void (double)> touch = {}, std::vector<float>* wave = nullptr)
 {
     p.setPlayHead (&t);                   // a host tells the plugin where the song is; so must this
 
@@ -143,11 +143,33 @@ static Sound listen (MjqProcessor& p, Transport& t, double seconds,
     s.dc = n ? (float) (sum / (double) n) : 0.0f;
     s.firstHalfRms = firstN ? (float) std::sqrt (firstSq / (double) firstN) : 0.0f;
     s.lastHalfRms = lastN ? (float) std::sqrt (lastSq / (double) lastN) : 0.0f;
+    if (wave != nullptr) *wave = std::move (kept);
     return s;
 }
 
+// How different two renders are once they have been made the same loudness, in dB: 0 means they
+// are the same sound at a different volume, and the further below 0, the less alike they are.
+// This is the question to ask of a layer, because "barely noticeable" is not about level. Turning
+// a layer up makes the number bigger without the sound being any richer, so matching the level
+// first is the whole point.
+static float unlikeDb (const std::vector<float>& a, const std::vector<float>& b)
+{
+    const size_t n = std::min (a.size(), b.size());
+    if (n < 1024) return 0.0f;
+    double ea = 0.0, eb = 0.0;
+    for (size_t i = 0; i < n; ++i) { ea += (double) a[i] * a[i]; eb += (double) b[i] * b[i]; }
+    if (ea < 1.0e-12 || eb < 1.0e-12) return 0.0f;
+    const double g = std::sqrt (ea / eb);          // b, scaled to a's loudness
+    double d = 0.0;
+    for (size_t i = 0; i < n; ++i) { const double e = (double) a[i] - g * b[i]; d += e * e; }
+    return (float) (10.0 * std::log10 (std::max (1.0e-12, d) / ea));
+}
+
 // a plain tuned tone, so what is heard is the plugin and not the sample
-static njq::Zone tone (const juce::String& name, float rootNote, double seconds = 1.0)
+// `colour` picks the harmonics, so two test instruments can be genuinely different sounds rather
+// than the same one twice. Stacking a sound on a copy of itself really is just that sound louder,
+// so a test built from one waveform cannot tell a working layer from a broken one.
+static njq::Zone tone (const juce::String& name, float rootNote, double seconds = 1.0, int colour = 0)
 {
     njq::Zone z;
     z.name = name;
@@ -162,7 +184,13 @@ static njq::Zone tone (const juce::String& name, float rootNote, double seconds 
     {
         const double tt = (double) i / kSr;
         const double env = std::min (1.0, tt / 0.005) * (0.6 + 0.4 * std::exp (-tt * 1.5));
-        z.l[(size_t) i] = (float) (0.5 * env * (std::sin (6.283185307179586 * hz * tt) + 0.25 * std::sin (12.566370614359172 * hz * tt)));
+        const double w = colour == 0
+            ? std::sin (6.283185307179586 * hz * tt) + 0.25 * std::sin (12.566370614359172 * hz * tt)
+            // a reedier sound: odd harmonics, and a slow wobble of its own
+            : 0.7 * std::sin (6.283185307179586 * hz * tt)
+              + 0.45 * std::sin (18.849555921538759 * hz * tt)
+              + 0.22 * std::sin (31.415926535897931 * hz * tt) * (0.6 + 0.4 * std::sin (6.283185307179586 * 5.0 * tt));
+        z.l[(size_t) i] = (float) (0.5 * env * w);
     }
     z.r = z.l;
     z.holdAt = (int) (0.3 * kSr);
@@ -171,7 +199,7 @@ static njq::Zone tone (const juce::String& name, float rootNote, double seconds 
     return z;
 }
 
-static juce::File writeInstrument (const juce::File& dir, const juce::String& name, float root)
+static juce::File writeInstrument (const juce::File& dir, const juce::String& name, float root, int colour = 0)
 {
     njq::InstrumentFile f;
     f.name = name;
@@ -181,7 +209,7 @@ static juce::File writeInstrument (const juce::File& dir, const juce::String& na
     // perfectly whatever the notes do, and a test that compares one bar with the next would see nothing.
     f.sustain = 0;
     f.releaseMs = 120.0f;
-    auto z = tone (name, root);
+    auto z = tone (name, root, 1.0, colour);
     z.lowKey = 0; z.highKey = 127;
     f.zones.push_back (z);
     const auto file = dir.getChildFile (name + ".njqi");
@@ -480,8 +508,83 @@ int main()
         const auto both = listen (*two, t2, 3.0);
 
         CHECK (! both.silent(), "a second voice with its own instrument plays (%.1f dB)", both.db());
+        // This only ever proved it got louder, which is why "barely noticeable" got past it: two
+        // voices of a similar level sum to about +3 dB whether or not anything interesting happened.
         CHECK (both.db() - single.db() > 1.5f,
-               "and stacking it is plainly audible (%+.1f dB over one voice)", both.db() - single.db());
+               "a second part raises the level (%+.1f dB over one voice; level only)", both.db() - single.db());
+    }
+
+    std::printf ("\nstacking sounds into one voice\n");
+    {
+        const auto a = writeInstrument (dir, "stackA", 60.0f);
+        const auto b = writeInstrument (dir, "stackB", 60.0f, 1);   // a different sound, as a stack would be
+
+        // one voice on its own, as the thing to beat
+        auto one = playing (a);
+        Transport t1;
+        std::vector<float> wOne;
+        const auto alone = listen (*one, t1, 3.0, {}, &wOne);
+
+        // the same line, with voice 2 stacked on voice 1: its own sound, the same notes
+        auto make = [&] (int semis, float cents, float delayMs, std::vector<float>& w)
+        {
+            auto p = playing (a);
+            juce::String err;
+            p->openInstrument (1, b, err);
+            p->setTrackMode (1, true, 0);
+            p->setTrackStack (1, semis, cents, delayMs);
+            p->lineChanged();
+            Transport t;
+            return listen (*p, t, 3.0, {}, &w);
+        };
+
+        std::vector<float> wUni, wOct, wDet, wDel;
+        const auto uni = make (0,  0.0f,  0.0f, wUni);
+        const auto oct = make (12, 0.0f,  0.0f, wOct);
+        const auto det = make (0, 12.0f,  0.0f, wDet);
+        const auto del = make (0,  0.0f, 14.0f, wDel);
+
+        CHECK (! uni.silent(), "a stacked voice sounds (%.1f dB)", uni.db());
+
+        // the real question. Level-matched, so turning it up cannot fake it.
+        const float dUni = unlikeDb (wOne, wUni), dOct = unlikeDb (wOne, wOct);
+        const float dDet = unlikeDb (wOne, wDet), dDel = unlikeDb (wOne, wDel);
+        std::printf ("     against one voice, level for level: unison %.1f dB, octave %.1f dB, detuned %.1f dB, delayed %.1f dB\n",
+                     dUni, dOct, dDet, dDel);
+        CHECK (dUni > -40.0f, "a stack of two sounds is not just the one sound louder (%.1f dB)", dUni);
+        CHECK (dOct > -12.0f, "an octave layer plainly changes it (%.1f dB)", dOct);
+        // detune is the subtlest of the three by nature - it beats rather than re-colours - so it
+        // gets a lower bar here and the beating check below is what really proves it
+        CHECK (dDet > -20.0f, "a few cents of detune plainly changes it (%.1f dB)", dDet);
+        CHECK (dDel > -12.0f, "a few ms behind plainly changes it (%.1f dB)", dDel);
+
+        // detuning two copies of one sound beats, so the level swings as it plays
+        CHECK (det.movement > uni.movement,
+               "detuning makes it beat (%.2f dB of swing against %.2f unison)", det.movement, uni.movement);
+
+        // and each of the four is a different sound from the others, not one effect wearing four hats
+        CHECK (unlikeDb (wUni, wOct) > -12.0f && unlikeDb (wUni, wDet) > -20.0f && unlikeDb (wUni, wDel) > -12.0f,
+               "octave, detune and delay each do something of their own");
+
+        // a layer must not write a line of its own: stacked, the notes are the same ones twice
+        auto counts = [&] (bool layer)
+        {
+            auto p = playing (a);
+            juce::String err;
+            p->openInstrument (1, b, err);
+            p->setTrackMode (1, layer, 0);
+            p->lineChanged();
+            Transport t;
+            listen (*p, t, 3.0);
+            return p->notesPlayed.load();
+        };
+        const auto asLayer = counts (true), asPart = counts (false);
+        std::printf ("     notes played: stacked %llu, as a second part %llu\n",
+                     (unsigned long long) asLayer, (unsigned long long) asPart);
+        CHECK (asLayer > 0, "a stacked voice plays notes");
+        // a layer rides the one line, so the generator runs once, not twice
+        CHECK (asLayer < asPart, "a stack plays one line, not two (%llu against %llu)",
+               (unsigned long long) asLayer, (unsigned long long) asPart);
     }
 
     dir.deleteRecursively();
