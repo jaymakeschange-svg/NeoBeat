@@ -43,6 +43,7 @@ set (BATCHCUT_APP_SOURCES
     Source/app/Editor.cpp
     Source/app/Display.cpp
     Source/app/Panels.cpp
+    Source/neobeat/shared/rooms/CutRooms.cpp
     Source/neobeat/shared/rooms/KitRooms.cpp
     Source/app/KitRoom.cpp
     Source/neobeat/shared/rooms/LoopsRooms.cpp

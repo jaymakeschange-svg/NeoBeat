@@ -163,103 +163,14 @@ void BcProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
 
 // ---------------------------------------------------------------- files
 
-bool BcProcessor::isAudioFile (const juce::File& f)
-{
-    static const juce::StringArray ext { ".wav", ".wave", ".aif", ".aiff", ".aifc", ".flac", ".ogg", ".mp3" };
-    return f.existsAsFile() && ext.contains (f.getFileExtension().toLowerCase());
-}
 
-int BcProcessor::addPaths (const juce::StringArray& paths)
-{
-    std::vector<std::string> add;
-    for (const auto& p : paths)
-    {
-        const juce::File f (p);
-        if (f.isDirectory())
-        {
-            auto found = f.findChildFiles (juce::File::findFiles, true, "*", juce::File::FollowSymlinks::noCycles);
-            found.sort();
-            for (const auto& c : found) if (isAudioFile (c) && add.size() < 2000) add.push_back (c.getFullPathName().toStdString());
-        }
-        else if (isAudioFile (f)) add.push_back (f.getFullPathName().toStdString());
-    }
-    const size_t before = session.files.size();
-    session.addFiles (add);
-    const int added = (int) (session.files.size() - before);
-    if (added > 0 && ! session.doc()) open ((int) before, 0);
-    stateChanged();
-    sendChangeMessage();
-    return added;
-}
 
-void BcProcessor::open (int file, int part)
-{
-    if (file < 0 || file >= (int) session.files.size()) return;
-    stopPlayback();
-    openFile = file; openPart = std::max (0, part);
-    viewStart = viewEnd = 0.0;   // the editor fits the new part
-    session.open (file, openPart);
-    stateChanged();
-}
 
-void BcProcessor::removeFiles (std::vector<int> rows)
-{
-    std::sort (rows.begin(), rows.end());
-    rows.erase (std::unique (rows.begin(), rows.end()), rows.end());
-    rows.erase (std::remove_if (rows.begin(), rows.end(), [this] (int r) { return r < 0 || r >= (int) session.files.size(); }), rows.end());
-    if (rows.empty()) return;
-    const auto d = session.doc();
-    const int openRow = d ? d->file : -1;
-    const bool openGoes = openRow >= 0 && std::binary_search (rows.begin(), rows.end(), openRow);
-    if (openGoes) stopPlayback();
-    for (auto r = rows.rbegin(); r != rows.rend(); ++r)
-    {
-        session.removeFile (*r);
-        if (openFile == *r) openFile = -1; else if (openFile > *r) --openFile;
-    }
-    const int n = (int) rows.size();
-    lastMessage = "Took " + juce::String (n) + (n == 1 ? " file" : " files") + " off the list";
-    stateChanged();
-    sendChangeMessage();
-    if (openGoes && ! session.files.empty())
-    {
-        // the first file left after the one that was open
-        const int below = (int) (std::lower_bound (rows.begin(), rows.end(), openRow) - rows.begin());
-        open (std::min (openRow - below, (int) session.files.size() - 1), 0);
-    }
-}
 
-void BcProcessor::clearFiles()
-{
-    const int n = (int) session.files.size();
-    if (n == 0) return;
-    stopPlayback();
-    session.clearFiles();
-    openFile = -1; openPart = 0; viewStart = viewEnd = 0.0;
-    lastMessage = "Took all " + juce::String (n) + (n == 1 ? " file" : " files") + " off the list (the files themselves are untouched; the kit pool keeps its sounds)";
-    stateChanged();
-    sendChangeMessage();
-}
 
 // ---------------------------------------------------------------- playback
 
-void BcProcessor::playEvent (const bc::Event& e)
-{
-    auto d = session.doc();
-    if (! d || ! d->audio || ! d->an) return;
-    std::vector<float> l, r;
-    bc::renderEvent (*d->audio, *d->an, d->layers, e, session.settings.exp, -1, l, r);
-    preview.playClip (std::move (l), std::move (r), d->audio->sr);
-    playDoc = d.get(); playOffset = e.start; playingEvent = true;
-}
 
-void BcProcessor::playRange (int64_t from, int64_t to, bool loop)
-{
-    auto d = session.doc();
-    if (! d || ! d->audio || ! d->an) return;
-    preview.play (d->audio, d->an, d->layers, from, to, loop);
-    playDoc = d.get(); playOffset = 0; playingEvent = false;
-}
 
 int64_t BcProcessor::playhead() const
 {
@@ -271,22 +182,8 @@ int64_t BcProcessor::playhead() const
 
 // ---------------------------------------------------------------- recording the input
 
-juce::File BcProcessor::recordingsDir() const
-{
-    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Batchcut").getChildFile ("Recordings");
-}
 
-// the assigned WAV folder (Settings). Until one is assigned: Music/Batchcut/One-shots, as before.
-juce::File BcProcessor::exportDir() const
-{
-    return shared::Settings::load().wavs();
-}
 
-// the assigned MIDI folder (Settings). Until one is assigned: Documents/Marbelite/MIDI.
-juce::File BcProcessor::midiDir() const
-{
-    return shared::Settings::load().midis();
-}
 
 bool BcProcessor::startRecording()
 {
@@ -319,26 +216,6 @@ juce::File BcProcessor::stopRecording()
 
 // ---------------------------------------------------------------- writing
 
-bool bc::Rooms::writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r, double sr, int bits, std::string& err)
-{
-    if (l.empty() || sr <= 0) { err = "nothing to write"; return false; }
-    // written beside the target and moved into place, so a half-written file never has the real name
-    const auto tmp = f.getSiblingFile (f.getFileName() + ".part");
-    tmp.deleteFile();
-    std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (tmp);
-    if (static_cast<juce::FileOutputStream*> (os.get())->failedToOpen()) { err = "could not write " + f.getFullPathName().toStdString(); return false; }
-    juce::WavAudioFormat wav;
-    const auto opts = juce::AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2).withBitsPerSample (bits)
-                          .withSampleFormat (bits == 32 ? juce::AudioFormatWriterOptions::SampleFormat::floatingPoint : juce::AudioFormatWriterOptions::SampleFormat::integral);
-    auto w = wav.createWriterFor (os, opts);
-    if (w == nullptr) { tmp.deleteFile(); err = "could not write " + f.getFullPathName().toStdString(); return false; }
-    const float* ch[2] = { l.data(), r.size() == l.size() ? r.data() : l.data() };
-    const bool ok = w->writeFromFloatArrays (ch, 2, (int) l.size());
-    w.reset();
-    if (! ok) { tmp.deleteFile(); err = "could not write " + f.getFullPathName().toStdString() + " (is the disk full?)"; return false; }
-    if (! tmp.moveFileTo (f)) { tmp.deleteFile(); err = "could not replace " + f.getFullPathName().toStdString(); return false; }
-    return true;
-}
 
 juce::File BcProcessor::renderToTemp (const bc::Event& e)
 {
@@ -458,3 +335,21 @@ void BcProcessor::timerCallback()
 juce::AudioProcessorEditor* BcProcessor::createEditor() { return new BcEditor (*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new BcProcessor(); }
+
+void BcProcessor::playEvent (const bc::Event& e)
+{
+    auto d = session.doc();
+    if (! d || ! d->audio || ! d->an) return;
+    std::vector<float> l, r;
+    bc::renderEvent (*d->audio, *d->an, d->layers, e, session.settings.exp, -1, l, r);
+    preview.playClip (std::move (l), std::move (r), d->audio->sr);
+    playDoc = d.get(); playOffset = e.start; playingEvent = true;
+}
+
+void BcProcessor::playRange (int64_t from, int64_t to, bool loop)
+{
+    auto d = session.doc();
+    if (! d || ! d->audio || ! d->an) return;
+    preview.play (d->audio, d->an, d->layers, from, to, loop);
+    playDoc = d.get(); playOffset = 0; playingEvent = false;
+}

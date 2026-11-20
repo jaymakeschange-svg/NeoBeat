@@ -57,8 +57,30 @@ struct Rooms
     juce::AudioFormatManager formats;
 
     bool stateDirty = true;                                      // something changed: the project wants saving
+    void stateChanged() { stateDirty = true; }
+    juce::String lastMessage;                                    // shown in the header (a file that failed, a recording saved)
+
+    // view state kept with the project
+    double viewStart = 0.0, viewEnd = 0.0;
+    int openFile = -1, openPart = 0;
+
+    // The two things a room cannot do for itself. A host overrides them: one tells whoever is
+    // watching that something changed, the other stops whatever is sounding.
+    virtual void roomsNotify() {}
+    virtual void stopPlayback() { preview.stopPlaying(); }
     double hostRate = 48000.0;                                   // the host's sample rate, when it is playing
     std::atomic<double> hostBpm { 0.0 };
+
+
+    // ---- the files the rooms draw on (CutRooms.cpp)
+    static bool isAudioFile (const juce::File& f);
+    int addPaths (const juce::StringArray& paths);              // files or folders (searched for audio files); returns how many were new
+    void open (int file, int part = 0);
+    void removeFiles (std::vector<int> rows);                    // off the list (the files themselves are not touched)
+    void clearFiles();                                           // Clear all: every file off the list
+    juce::File recordingsDir() const;
+    juce::File exportDir() const;
+    juce::File midiDir() const;
 
     static bool writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r,
                           double sr, int bits, std::string& err);

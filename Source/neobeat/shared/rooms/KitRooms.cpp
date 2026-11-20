@@ -1,5 +1,27 @@
 // Batchcut 2.0 - the Kit room's side of the processor: the pool, the lanes, the audition, the .NJQ file.
 #include "Rooms.h"
+
+// Writing a WAV, used by every room that exports. Lives here so both plugins have it.
+bool bc::Rooms::writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r, double sr, int bits, std::string& err)
+{
+    if (l.empty() || sr <= 0) { err = "nothing to write"; return false; }
+    // written beside the target and moved into place, so a half-written file never has the real name
+    const auto tmp = f.getSiblingFile (f.getFileName() + ".part");
+    tmp.deleteFile();
+    std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (tmp);
+    if (static_cast<juce::FileOutputStream*> (os.get())->failedToOpen()) { err = "could not write " + f.getFullPathName().toStdString(); return false; }
+    juce::WavAudioFormat wav;
+    const auto opts = juce::AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2).withBitsPerSample (bits)
+                          .withSampleFormat (bits == 32 ? juce::AudioFormatWriterOptions::SampleFormat::floatingPoint : juce::AudioFormatWriterOptions::SampleFormat::integral);
+    auto w = wav.createWriterFor (os, opts);
+    if (w == nullptr) { tmp.deleteFile(); err = "could not write " + f.getFullPathName().toStdString(); return false; }
+    const float* ch[2] = { l.data(), r.size() == l.size() ? r.data() : l.data() };
+    const bool ok = w->writeFromFloatArrays (ch, 2, (int) l.size());
+    w.reset();
+    if (! ok) { tmp.deleteFile(); err = "could not write " + f.getFullPathName().toStdString() + " (is the disk full?)"; return false; }
+    if (! tmp.moveFileTo (f)) { tmp.deleteFile(); err = "could not replace " + f.getFullPathName().toStdString(); return false; }
+    return true;
+}
 #ifndef BATCHCUT_VERSION
  #define BATCHCUT_VERSION "3.0.0"
 #endif

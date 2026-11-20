@@ -130,16 +130,12 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     Recorder recorder;
 
-    static bool isAudioFile (const juce::File& f);
-    int addPaths (const juce::StringArray& paths);              // files or folders (searched for audio files); returns how many were new
-    void open (int file, int part = 0);
-    void removeFiles (std::vector<int> rows);                    // off the list (the files themselves are not touched)
-    void clearFiles();                                           // Clear all: every file off the list
 
     // playback of the open part. What plays and from where, for the playhead.
     void playEvent (const bc::Event& e);                         // as it will be exported (fades, level)
     void playRange (int64_t from, int64_t to, bool loop);        // the part with its layers and edits
-    void stopPlayback() { preview.stopPlaying(); playDoc = nullptr; }
+    void stopPlayback() override { preview.stopPlaying(); playDoc = nullptr; }
+    void roomsNotify() override { sendChangeMessage(); }
     bool isPlaying() const noexcept { return preview.playing(); }
     // the playhead in samples of the open part (-1: not playing it)
     int64_t playhead() const;
@@ -148,15 +144,8 @@ public:
     bool startRecording();
     juce::File stopRecording();                                  // the recording's file (added and opened), or none
     juce::File renderToTemp (const bc::Event& e);                // one event as a WAV, for dragging out to a DAW
-    juce::File exportDir() const;
-    juce::File midiDir() const;
-    juce::File recordingsDir() const;
-    juce::String lastMessage;                                    // shown in the header (a recording saved, a file that failed)
 
     // view state kept with the project
-    double viewStart = 0.0, viewEnd = 0.0;
-    int openFile = -1, openPart = 0;
-    void stateChanged() { stateDirty = true; }
 
 
 private:
