@@ -71,6 +71,12 @@ public:
     };
     std::shared_ptr<const StereoState> stereoState;   // what the audio thread is using
     std::shared_ptr<const mjq::MapPattern> mapState;  // the marks the player is reading
+
+    // The inherited rooms (LOOPS, KEYS) render into this and sum into the output, so what the
+    // editor previews is what the plugin plays.
+    juce::AudioBuffer<float> roomBuf;
+    mjq::PlayNote keysCarry[64] {};                   // note-offs a map mark started in an earlier block
+    int numKeysCarry = 0;
     std::vector<RandomTarget> randTargets;
     std::vector<mjq::MapPattern> held;                // rolls kept with HOLD
     int sinceRoll = 0;

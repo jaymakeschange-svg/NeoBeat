@@ -661,6 +661,92 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         start += segment;
     }
 
+    // ---- the rooms MidiJaQ inherits, and the MAP that drives them
+    // CUT, LOOPS and KEYS come from Batchcut whole: the same models, the same players. What MidiJaQ
+    // adds is that they are heard in the plugin rather than only in the editor's preview, and that
+    // the MAP can play them - a keys mark is a degree of the key, a loop mark is one chop.
+    {
+        const int n = audio.getNumSamples();
+        const bool stereoOutEarly = audio.getNumChannels() > 1;
+        if (roomBuf.getNumSamples() < n) roomBuf.setSize (2, n, false, false, true);
+        roomBuf.clear();
+
+        mjq::PlayNote keysNotes[256];
+        int numKeysNotes = 0;
+        bc::LoopNote loopNotes[256];
+        int numLoopNotes = 0;
+
+        // the note-offs a mark started in an earlier block
+        for (int i = 0; i < numKeysCarry; ++i)
+        {
+            auto k = keysCarry[i];
+            if (k.offset < n) { if (numKeysNotes < 256) keysNotes[numKeysNotes++] = k; keysCarry[i].offset = -1; }
+            else keysCarry[i].offset -= n;
+        }
+        { int w = 0; for (int i = 0; i < numKeysCarry; ++i) if (keysCarry[i].offset >= 0) keysCarry[w++] = keysCarry[i]; numKeysCarry = w; }
+
+        if (auto mp = std::atomic_load (&mapState))
+        {
+            if (! mp->marks.empty() && mp->steps > 0)
+            {
+                const double beatsPerStep = 4.0 / (double) std::max (1, mp->perBar);
+                const double lap = (double) mp->steps * beatsPerStep;
+                const double bps = hostBeatsPerSample();
+                const double a = host.valid ? host.ppq : freeBeats;
+                const double b = a + (double) n * bps;
+                const bool rolling = host.valid ? host.playing : true;
+
+                if (rolling && lap > 0.0)
+                {
+                    const auto mask = gen::scale (mp->scale).mask;
+                    for (const auto& m : mp->marks)
+                    {
+                        const double markBeat = (double) m.step * beatsPerStep;
+                        double w = markBeat + lap * std::floor (a / lap);
+                        for (int turn = 0; turn < 2; ++turn, w += lap)
+                        {
+                            if (w < a || w >= b) continue;
+                            const int off = juce::jlimit (0, n - 1, (int) std::lround ((w - a) / std::max (1.0e-9, bps)));
+                            if (m.source == mjq::MarkSource::Keys)
+                            {
+                                const int note = mjq::noteOfRow (m.row, mask, mp->root, mp->octave);
+                                if (numKeysNotes < 256) keysNotes[numKeysNotes++] = { off, note, m.velocity, true, 0.0f };
+                                const int offAt = off + (int) std::lround ((double) std::max (1, m.len) * beatsPerStep / std::max (1.0e-9, bps));
+                                if (offAt < n) { if (numKeysNotes < 256) keysNotes[numKeysNotes++] = { offAt, note, 0.0f, false, 0.0f }; }
+                                else if (numKeysCarry < 64) keysCarry[numKeysCarry++] = { offAt - n, note, 0.0f, false, 0.0f };
+                                notesPlayed.fetch_add (1, std::memory_order_relaxed);
+                            }
+                            else
+                            {
+                                // a chop of that layer: the player maps keys from C2 up, one a chop,
+                                // so the row names the chop directly
+                                if (numLoopNotes < 256) loopNotes[numLoopNotes++] = { off, 48 + m.row, m.velocity, true };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        std::sort (keysNotes, keysNotes + numKeysNotes, [] (const mjq::PlayNote& x, const mjq::PlayNote& y)
+        {
+            if (x.offset != y.offset) return x.offset < y.offset;
+            return ! x.on && y.on;
+        });
+
+        // LOOPS: its own PLAY, plus whatever the MAP fired at it
+        bc::LoopHost lh;
+        lh.valid = host.valid; lh.playing = host.playing; lh.ppq = host.valid ? host.ppq : freeBeats; lh.bpm = host.bpm;
+        loopPlayer.process (roomBuf.getWritePointer (0), roomBuf.getWritePointer (1), n, lh, loopNotes, numLoopNotes);
+
+        // KEYS: the instrument the room built, played by the MAP and by the keyboard
+        keysPlayer.process (roomBuf.getWritePointer (0), roomBuf.getWritePointer (1), n, keysNotes, numKeysNotes);
+
+        audio.addFrom (0, 0, roomBuf, 0, 0, n);
+        if (stereoOutEarly) audio.addFrom (1, 0, roomBuf, 1, 0, n);
+        else               audio.addFrom (0, 0, roomBuf, 1, 0, n);
+    }
+
     // Each track plays its own instrument, at its own level, and they sum into the one output. Keep the
     // events in sample order for the shared voice player, which Batchcut uses too.
     const auto& playing = snapshot->state.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, playingSlot)];
