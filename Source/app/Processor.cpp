@@ -408,6 +408,20 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     // range covers it, which is what makes the multi a multi: hold low and the bass answers, hold in the
     // middle where two ranges overlap and both do, each on its own instrument.
     const int heldSlot = session.selected;
+
+    // Is the song rolling? Worth knowing before the keys are read, because a key means something
+    // different when it is not: with nothing playing there is no line for a key to steer, so the
+    // key plays the sound itself, at its own pitch, the way any instrument would. That is how you
+    // hear what you have loaded without having to start the transport first.
+    bool transportRolling = true;
+    if (auto* ph0 = getPlayHead())
+        if (auto pos0 = ph0->getPosition())
+            transportRolling = pos0->getIsPlaying();
+
+    struct DirectKey { int note; float velocity; bool on; };
+    DirectKey direct[64];
+    int numDirect = 0;
+
     for (const auto m : midi)
     {
         const auto msg = m.getMessage();
@@ -415,6 +429,8 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         {
             player.allKeysUp();
             for (auto& p : otherPlayers) p.allKeysUp();
+            for (int t = 0; t < mjq::kSessionTracks; ++t) voicesFor (t).letGo.store (true);
+            directDown = 0;
             continue;
         }
         if (! msg.isNoteOn() && ! msg.isNoteOff()) continue;
@@ -427,8 +443,18 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             if (msg.isNoteOn()) p.keyDown (note, msg.getVelocity());
             else                p.keyUp (note);
         }
+        if (! transportRolling && numDirect < 64)
+            direct[numDirect++] = { note, (float) msg.getVelocity() / 127.0f, msg.isNoteOn() };
     }
     midi.clear();                                    // what came in played the lines; nothing is passed on
+
+    // the transport started again: let go of anything the keyboard was holding, so a played note
+    // does not hang underneath the sequence that has just begun
+    if (transportRolling && directDown > 0)
+    {
+        for (int t = 0; t < mjq::kSessionTracks; ++t) voicesFor (t).letGo.store (true);
+        directDown = 0;
+    }
 
     auto snapshot = std::atomic_load (&prepared);
     if (snapshot == nullptr) return;
@@ -460,6 +486,37 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             else { n.offset -= total; layerCarry[t][keep++] = n; }
         }
         numCarry[t] = keep;
+    }
+
+    // Keys played while the song is stopped: straight to the sound, at the key's own pitch. A voice
+    // answers only if the key is in its range, so a multi still splits the keyboard, and a stacked
+    // layer answers with the voice it follows, so an auditioned sound is the whole stack.
+    if (numDirect > 0)
+    {
+        const auto& heard = session.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, heldSlot)];
+        for (int d = 0; d < numDirect; ++d)
+        {
+            const auto& k = direct[d];
+            for (int t = 0; t < mjq::kSessionTracks; ++t)
+            {
+                const auto& tr = heard.tracks[(size_t) t];
+                if (! tr.enabled || tr.instrumentFile.empty()) continue;
+
+                int note = k.note; float fine = 0.0f;
+                if (tr.isLayer())
+                {
+                    const auto& src = heard.tracks[(size_t) juce::jlimit (0, mjq::kSessionTracks - 1, tr.layerOf)];
+                    if (! src.answersTo (k.note)) continue;       // the voice it follows did not answer
+                    note = juce::jlimit (0, 127, k.note + tr.semis);
+                    fine = tr.cents * 0.01f;
+                }
+                else if (! tr.answersTo (k.note)) continue;
+
+                if (numNotes[t] < 1024)
+                    notes[t][numNotes[t]++] = { 0, note, k.velocity, k.on, fine };
+            }
+            directDown = std::max (0, directDown + (k.on ? 1 : -1));
+        }
     }
     const double bpm = host.bpm > 1.0 ? host.bpm : 120.0;
     lastBpm = bpm;

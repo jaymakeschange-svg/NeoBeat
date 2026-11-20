@@ -144,6 +144,8 @@ private:
     mjq::PlayNote layerCarry[mjq::kSessionTracks][kCarry] {};
     int numCarry[mjq::kSessionTracks] {};
 
+    int directDown = 0;      // keys the player is holding while the song is stopped
+
     double freeBeats = 0.0;
     double hostBeatsPerSample() const noexcept { return lastBpm / (60.0 * (hostSampleRate > 0.0 ? hostSampleRate : 48000.0)); }
     double lastBpm = 120.0;

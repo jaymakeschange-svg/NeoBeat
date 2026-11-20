@@ -106,7 +106,45 @@ inline bool loadInstrument (const juce::File& file, InstrumentFile& ins, juce::S
     Kit k;
     if (! load (file, k, error)) return false;
     const auto* e = k.extra ("INSTRUMENT");
-    if (k.kind != "instrument" || e == nullptr) { error = file.getFileName() + " is a NeoBeat sequence, not an instrument."; return false; }
+    if (k.kind != "instrument" || e == nullptr)
+    {
+        // Not an instrument file, but a kit is a set of sounds, and a set of sounds laid out on the
+        // keys is an instrument - a drum rack, one lane to a key from C1 up, each sound played at its
+        // own speed. So a .NJQ saved in Batchcut's KIT room opens here and plays, instead of being
+        // turned away for being the wrong kind of file.
+        int lanes = 0;
+        for (const auto& ln : k.lanes) if (ln.set && ln.hasSample && ln.l.size() > 3) ++lanes;
+        if (lanes == 0)
+        {
+            error = file.getFileName() + " holds no sounds to play: it is a sequence, not an instrument.";
+            return false;
+        }
+        ins.name = k.name.isNotEmpty() ? k.name : file.getFileNameWithoutExtension();
+        ins.author = k.author; ins.madeWith = k.madeWith;
+        ins.mode = 2;             // chopped: every sound plays as it is, on its own key
+        ins.sustain = 0;          // a hit, played once
+        ins.mono = false;
+        ins.attackMs = 0.0f; ins.releaseMs = 120.0f;
+        for (int l = 0; l < (int) k.lanes.size(); ++l)
+        {
+            const auto& ln = k.lanes[(size_t) l];
+            if (! (ln.set && ln.hasSample && ln.l.size() > 3)) continue;
+            Zone z;
+            z.name = ln.name.isNotEmpty() ? ln.name : juce::String ("lane ") + juce::String (l + 1);
+            z.source = file.getFileName();
+            z.l = ln.l; z.r = ln.r.size() == ln.l.size() ? ln.r : ln.l;
+            z.sampleRate = ln.sampleRate > 1.0 ? ln.sampleRate : 48000.0;
+            const int key = juce::jlimit (0, 127, 36 + l);     // C1 up, as a drum rack is laid out
+            z.root = (float) key;
+            z.lowKey = key; z.highKey = key;
+            z.lowVel = 1; z.highVel = 127;
+            z.gainDb = ln.levelDb;
+            z.tuned = false;                                   // played at its own speed, not pitched
+            z.loopStart = z.loopEnd = z.holdAt = 0;
+            ins.zones.push_back (std::move (z));
+        }
+        return true;
+    }
     ins.name = k.name; ins.author = k.author; ins.madeWith = k.madeWith;
     ins.mode = juce::jlimit (0, 2, e->getIntAttribute ("mode")); ins.sustain = juce::jlimit (0, 2, e->getIntAttribute ("sustain")); ins.mono = e->getIntAttribute ("mono") != 0;
     ins.attackMs = (float) juce::jlimit (0.0, 5000.0, e->getDoubleAttribute ("attack", 2.0)); ins.releaseMs = (float) juce::jlimit (1.0, 20000.0, e->getDoubleAttribute ("release", 300.0));

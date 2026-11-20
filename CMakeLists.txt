@@ -83,6 +83,13 @@ target_include_directories (test_audio PRIVATE Source)
 target_compile_definitions (test_audio PRIVATE ${MIDIJAQ_DEFINITIONS})
 target_link_libraries (test_audio PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
 
+# The join with Batchcut: opens the .NJQ and .NJQi that Batchcut's MakePatches wrote, and plays them.
+juce_add_console_app (test_endtoend PRODUCT_NAME "test_endtoend")
+target_sources (test_endtoend PRIVATE tools/test_endtoend.cpp ${MIDIJAQ_APP_SOURCES})
+target_include_directories (test_endtoend PRIVATE Source)
+target_compile_definitions (test_endtoend PRIVATE ${MIDIJAQ_DEFINITIONS})
+target_link_libraries (test_endtoend PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
     foreach (tool HostTest Snapshot)

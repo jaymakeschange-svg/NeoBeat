@@ -16,7 +16,7 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build the app, the plugin and the tests
-        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving test_orb test_room test_random test_audio
+        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving test_orb test_room test_random test_audio test_endtoend
 
       - name: The plugin listened to (levels, the room, the Orb's effects, what the randomiser changes)
         if: ${{ !cancelled() }}
@@ -24,6 +24,13 @@ jobs:
         run: |
           & ./build/test_audio_artefacts/Release/test_audio.exe
           if ($LASTEXITCODE -ne 0) { throw 'Audio test failed' }
+
+      - name: Patches Batchcut wrote, opened and played here
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/test_endtoend_artefacts/Release/test_endtoend.exe tests/patches
+          if ($LASTEXITCODE -ne 0) { throw 'End-to-end test failed' }
 
       - name: The Orb, the room and the randomiser
         if: ${{ !cancelled() }}
