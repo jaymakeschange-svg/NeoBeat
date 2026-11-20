@@ -13,37 +13,53 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../plugin/PluginProcessor.h"
+#include "../shared/Ui.h"
 
 namespace ui
 {
 // ------------------------------------------------------------------ colours and drawing
+//
+// The look itself lives in Source/shared/Ui.h, which Batchcut and MidiJaQ draw with too: one copy of the
+// drawing code, with every colour a named token so a skin is a table rather than a rewrite. NeoBeat's own
+// copy had drifted - a heavier plate shadow, a wider corner, a cooler grey, a shade across the chassis -
+// so those values are written down as the "Chrome Pearl Deep" skin and installed at startup, and nothing
+// about NeoBeat looks any different for the merge.
+//
+// What stays here is what is NeoBeat's alone: the colours of its effect families and mod sources, and its
+// own Knob, which is a mod destination as well as a control.
+using nsui::Skin;
+using nsui::skin;
+using nsui::setSkin;
+using nsui::font;
+using nsui::caps;
+using nsui::textW;
+using nsui::paintChassis;
+using nsui::paintPlate;
+using nsui::paintWell;
+using nsui::paintPearl;
+using nsui::paintLcd;
+using nsui::paintGem;
+using nsui::paintLabel;
+using nsui::paintTile;
+using nsui::Look;
+using nsui::Pill;
+using nsui::Segmented;
+
 namespace C
 {
-    inline juce::Colour text()  { return juce::Colour (0xff1f2925); }
-    inline juce::Colour label() { return juce::Colour (0xff2b3631); }
-    inline juce::Colour dim()   { return juce::Colour (0xff4b5852); }
-    inline juce::Colour teal()  { return juce::Colour (0xff1f9e8c); }
-    inline juce::Colour glow()  { return juce::Colour (0xff5fd8c4); }
-    inline juce::Colour lcdText() { return juce::Colour (0xffaaf6d0); }
-    inline juce::Colour lcdDim()  { return juce::Colour (0xff5fae8a); }
-    inline juce::Colour amber() { return juce::Colour (0xfff5b25a); }
+    using nsui::C::text;
+    using nsui::C::label;
+    using nsui::C::dim;
+    using nsui::C::teal;
+    using nsui::C::glow;
+    using nsui::C::lcdText;
+    using nsui::C::lcdDim;
+    using nsui::C::amber;
     juce::Colour family (const juce::String& fam);
     juce::Colour fxColour (const nb::CellFx& fx);
     juce::Colour mod (nb::ModSrc s);
 }
 
-juce::Font font (float size, bool bold = false);
-juce::Font caps (float size);      // the engraved label face: bold caps, tracked
-float textW (const juce::Font& f, const juce::String& t);
-
-void paintChassis (juce::Graphics&, juce::Rectangle<float>);
-void paintPlate (juce::Graphics&, juce::Rectangle<float>, float radius = 14.0f);
-void paintWell (juce::Graphics&, juce::Rectangle<float>, float radius = 12.0f);
-void paintPearl (juce::Graphics&, juce::Rectangle<float>, float radius = 16.0f, bool glow = false);
-void paintLcd (juce::Graphics&, juce::Rectangle<float>, float radius = 8.0f);
-void paintGem (juce::Graphics&, juce::Rectangle<float>, bool on = true);
-void paintLabel (juce::Graphics&, const juce::String&, juce::Rectangle<int>, juce::Justification = juce::Justification::centredLeft, float size = 9.0f, juce::Colour = C::label());
-void paintTile (juce::Graphics&, juce::Rectangle<float>, juce::Colour fill, const juce::String& text, bool selected, juce::Colour ring = {});
 juce::String fxName (const nb::CellFx& fx);
 juce::String fxShort (const nb::CellFx& fx);
 juce::String fxFamily (const nb::CellFx& fx);
@@ -51,23 +67,6 @@ nb::CellFx fxFromIndex (int i);   // 0..23 library, 24 Friction Stretch, 25 Boun
 int fxIndex (const nb::CellFx& fx);
 juce::StringArray fxMenuNames();
 juce::String noteName (int note);
-
-class Look final : public juce::LookAndFeel_V4
-{
-public:
-    Look();
-    void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
-    void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;
-    juce::Font getTextButtonFont (juce::TextButton&, int h) override { return caps (std::min (9.5f, h * 0.36f)); }
-    void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
-    juce::Font getComboBoxFont (juce::ComboBox&) override { return font (12.5f, true); }
-    void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
-    juce::Font getPopupMenuFont() override { return font (13.0f); }
-    void drawPopupMenuBackground (juce::Graphics&, int w, int h) override;
-    void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos, juce::Slider::SliderStyle, juce::Slider&) override;
-    void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool over, bool down) override;
-    void drawScrollbar (juce::Graphics&, juce::ScrollBar&, int x, int y, int w, int h, bool vertical, int thumbStart, int thumbSize, bool over, bool down) override;
-};
 
 // ------------------------------------------------------------------ shared state
 struct Sel
@@ -165,35 +164,12 @@ private:
     juce::RangedAudioParameter* param = nullptr;
 };
 
-class Pill final : public juce::TextButton
-{
-public:
-    explicit Pill (const juce::String& t = {}, bool toggle = false) : juce::TextButton (t) { setClickingTogglesState (toggle); }
-};
-
 class LcdBox final : public juce::Component
 {
 public:
     juce::String line1, line2;
     void set (const juce::String& a, const juce::String& b = {}) { if (a != line1 || b != line2) { line1 = a; line2 = b; repaint(); } }
     void paint (juce::Graphics&) override;
-};
-
-// A row of mutually exclusive pills.
-class Segmented final : public juce::Component
-{
-public:
-    Segmented (juce::StringArray items);
-    std::function<void (int)> onSelect;
-    void setSelected (int i);
-    int getSelected() const noexcept { return selected; }
-    void setTooltip (const juce::String& t) { for (auto* b : buttons) b->setTooltip (t); }
-    void paint (juce::Graphics&) override;
-    void resized() override;
-
-private:
-    juce::OwnedArray<Pill> buttons;
-    int selected = 0;
 };
 
 // ------------------------------------------------------------------ the shell's parts

@@ -49,6 +49,7 @@ struct Skin
     juce::uint32 wellTop = 0xffa7b2ab, wellBottom = 0xffc3ccc6;
     juce::uint32 wellEdge = 0x5a14201a, wellHilite = 0x99ffffff;
     float wellRadius = 12.0f;
+    float segmentedRadiusCap = 14.0f;      // how round the well behind a segmented switch gets
 
     // a pearl: the lit nacre panel a window header wears
     juce::uint32 pearl0 = 0xfff4f1e6, pearl1 = 0xffdceee6, pearl2 = 0xffece1f2, pearl3 = 0xffd9e9f4;
@@ -73,12 +74,27 @@ struct Skin
     juce::uint32 buttonLitHilite = 0xfff2fffb, buttonOnInk = 0xff08352f;
     juce::uint32 buttonEdge = 0x66000000, buttonHilite = 0xe6ffffff;
     juce::uint32 hoverVeil = 0x40ffffff, pressVeil = 0x1a000000, disabledVeil = 0x70c6d0ca;
+    float buttonRadiusCap = 14.0f;         // how round a tall button is allowed to get
+    // How a lit button is filled. 0: a vertical wash that takes a tint, so a button can be given a colour
+    // of its own (solo, mute, record). 1: a radial glow in the accent colour, the same on every button.
+    // These are two real looks rather than two spellings of one, so each skin says which it wants.
+    int litStyle = 0;
+    juce::uint32 litRadialMid = 0xffc9fff1;
 
     // a knob
     juce::uint32 knobRingBack = 0x40586560, knobRingIdle = 0xa01f2925;
     juce::uint32 knobRidgeDark = 0xff7e8b85, knobRidgeLight = 0xfff6f9f7;
     juce::uint32 knobCapHi = 0xffffffff, knobCapMid = 0xffe2e8e4, knobCapLow = 0xff9ca9a2, knobCapLo = 0xff56625c;
     juce::uint32 knobCapEdge = 0x66000000, knobPointer = 0xff1b2420;
+
+    // a slider's track and thumb
+    juce::uint32 sliderThumbTop = 0xffffffff, sliderThumbBottom = 0xff5d6a64, sliderThumbEdge = 0x88000000;
+    float toggleLabelSize = 8.0f;          // the word beside a gem
+    // Does a text field read as a lit readout, or as an ordinary field? NeoBeat styles its editors as LCDs;
+    // Batchcut leaves them plain. That is a look, not a detail, so the skin says which.
+    bool lcdEditors = false;
+    // Does a slider wear the chassis treatment - a sunken track and a chrome thumb - or the stock one?
+    bool styledSliders = false;
 
     // menus, tooltips, scrollbars
     juce::uint32 menuBack = 0xffe6ece8, menuTop = 0xfff1f5f3, menuBottom = 0xffd2dbd6, menuEdge = 0x40000000;
@@ -111,6 +127,13 @@ inline Skin chromePearlDeep()
     s.plateShadowBlur = 14; s.plateShadowDrop = 6;
     s.plateRadius = 14.0f;
     s.gemHaloGrow = 2.5f;
+    s.toggleLabelSize = 8.5f;
+    s.litStyle = 1;                        // NeoBeat lights a button with a radial glow
+    s.disabledVeil = 0x60c6d0ca;
+    s.buttonRadiusCap = 1.0e6f;            // and lets a tall button go fully round
+    s.segmentedRadiusCap = 1.0e6f;
+    s.lcdEditors = true;
+    s.styledSliders = true;
     return s;
 }
 }
@@ -279,6 +302,13 @@ public:
         setColour (juce::PopupMenu::highlightedBackgroundColourId, C::glow().withAlpha (0.55f));
         setColour (juce::PopupMenu::highlightedTextColourId, C::text());
         setColour (juce::ComboBox::textColourId, C::lcdText());
+        if (s.lcdEditors)
+        {
+            setColour (juce::ComboBox::arrowColourId, C::lcdDim());
+            setColour (juce::Label::textColourId, C::text());
+            setColour (juce::TextEditor::backgroundColourId, col (s.lcdBottom));
+            setColour (juce::TextEditor::textColourId, C::lcdText());
+        }
         setColour (juce::TooltipWindow::backgroundColourId, col (s.tooltipBack));
         setColour (juce::TooltipWindow::textColourId, C::lcdText());
         setColour (juce::ScrollBar::thumbColourId, col (s.scrollThumb));
@@ -289,18 +319,30 @@ public:
     {
         const auto& s = skin();
         auto r = b.getLocalBounds().toFloat().reduced (1.0f);
-        const float rad = std::min (r.getHeight() * 0.5f, 14.0f);
+        const float rad = std::min (r.getHeight() * 0.5f, s.buttonRadiusCap);
         const bool on = b.getToggleState();
         // a tint only where one was set on purpose (solo, mute, record); the theme's own default is not one
         const auto tint = b.isColourSpecified (juce::TextButton::buttonOnColourId) ? b.findColour (juce::TextButton::buttonOnColourId) : juce::Colours::transparentBlack;
         if (on)
         {
-            // lit: a pale glow with the tint below it, so the label stays dark on light
             const auto base = tint.isOpaque() ? tint.interpolatedWith (juce::Colours::white, 0.35f) : C::glow();
             g.setColour (base.withAlpha (0.5f)); g.fillRoundedRectangle (r.expanded (1.5f), rad + 1.5f);
-            juce::ColourGradient cg = juce::ColourGradient::vertical (col (s.buttonLitHilite), r.getY(), base, r.getBottom());
-            cg.addColour (0.45, base.interpolatedWith (col (s.buttonLitHilite), 0.55f));
-            g.setGradientFill (cg);
+            if (s.litStyle == 1)
+            {
+                // a radial glow in the accent colour, lit from up and to the left
+                juce::ColourGradient cg (col (s.buttonTop), r.getX() + r.getWidth() * 0.3f, r.getY(),
+                                         C::teal(), r.getX() + r.getWidth() * 0.6f, r.getBottom(), true);
+                cg.addColour (0.3, col (s.litRadialMid));
+                cg.addColour (0.75, C::glow());
+                g.setGradientFill (cg);
+            }
+            else
+            {
+                // a pale vertical wash with the tint below it, so the label stays dark on light
+                juce::ColourGradient cg = juce::ColourGradient::vertical (col (s.buttonLitHilite), r.getY(), base, r.getBottom());
+                cg.addColour (0.45, base.interpolatedWith (col (s.buttonLitHilite), 0.55f));
+                g.setGradientFill (cg);
+            }
         }
         else g.setGradientFill (juce::ColourGradient::vertical (col (s.buttonTop), r.getY(), col (s.buttonBottom), r.getBottom()));
         g.fillRoundedRectangle (r, rad);
@@ -316,7 +358,11 @@ public:
         g.setFont (getTextButtonFont (b, b.getHeight()));
         g.setColour (b.getToggleState() ? col (skin().buttonOnInk) : C::text());
         if (! b.isEnabled()) g.setColour (C::dim().withAlpha (0.6f));
-        g.drawFittedText (b.getButtonText().toUpperCase(), b.getLocalBounds().reduced (6, 1), juce::Justification::centred, 1, 0.8f);
+        // Button labels are set in capitals by the look. A name whose own capitals carry meaning - ".NJQi",
+        // "MidiJaQ" - sets the keepCase property and is drawn as it was written.
+        const bool keepCase = (bool) b.getProperties().getWithDefault ("keepCase", false);
+        g.drawFittedText (keepCase ? b.getButtonText() : b.getButtonText().toUpperCase(),
+                          b.getLocalBounds().reduced (6, 1), juce::Justification::centred, 1, 0.8f);
     }
     void drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox&) override
     {
@@ -344,7 +390,31 @@ public:
     {
         auto r = b.getLocalBounds().toFloat();
         paintGem (g, juce::Rectangle<float> (r.getX() + 3, r.getCentreY() - 6, 12, 12), b.getToggleState());
-        paintLabel (g, b.getButtonText(), b.getLocalBounds().withTrimmedLeft (20), juce::Justification::centredLeft, 8.0f);
+        paintLabel (g, b.getButtonText(), b.getLocalBounds().withTrimmedLeft (20), juce::Justification::centredLeft, skin().toggleLabelSize);
+    }
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
+                           juce::Slider::SliderStyle style, juce::Slider& s) override
+    {
+        const auto& sk = skin();
+        if (! sk.styledSliders)
+        {
+            juce::LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, minPos, maxPos, style, s);
+            return;
+        }
+        const bool vert = style == juce::Slider::LinearVertical;
+        auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+        auto track = vert ? r.withSizeKeepingCentre (8.0f, r.getHeight()) : r.withSizeKeepingCentre (r.getWidth(), 8.0f);
+        paintWell (g, track, 4.0f);
+        const auto fill = s.findColour (juce::Slider::trackColourId);
+        g.setColour (fill.isTransparent() ? C::teal() : fill);
+        if (vert) g.fillRoundedRectangle (track.withTop (pos).reduced (1.5f, 0), 3.0f);
+        else g.fillRoundedRectangle (track.withRight (pos).reduced (0, 1.5f), 3.0f);
+        auto thumb = vert ? juce::Rectangle<float> (track.getCentreX() - 9.0f, pos - 4.0f, 18.0f, 8.0f)
+                          : juce::Rectangle<float> (pos - 4.0f, track.getCentreY() - 8.0f, 8.0f, 16.0f);
+        g.setGradientFill (juce::ColourGradient::vertical (col (sk.sliderThumbTop), thumb.getY(), col (sk.sliderThumbBottom), thumb.getBottom()));
+        g.fillRoundedRectangle (thumb, 3.0f);
+        g.setColour (col (sk.sliderThumbEdge));
+        g.drawRoundedRectangle (thumb, 3.0f, 0.8f);
     }
     void drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int w, int h, bool vertical, int thumbStart, int thumbSize, bool, bool) override
     {
@@ -364,7 +434,9 @@ public:
     std::function<void (float)> onChange;      // while dragging
     std::function<void()> onCommit;            // when a drag (or a click, wheel, reset) is over
     std::function<juce::String (float)> toText;
+    std::function<void()> onRightClick;        // the randomiser lives here
     bool main = false;
+    bool cycling = false;                      // drawn with a ring, so a knob that moves on its own shows it
     float step = 0.0f;                         // > 0: values snap to steps of this
 
     void setValue (float v) { v = juce::jlimit (std::min (minV, maxV), std::max (minV, maxV), v); if (v != value) { value = v; repaint(); } }
@@ -388,6 +460,8 @@ public:
         };
         arc (rKnob + 4.0f, a0, a1, col (s.knobRingBack), 2.5f);
         arc (rKnob + 4.0f, a0, ang, main ? C::teal() : col (s.knobRingIdle), 2.5f);
+        // a knob that is moving on its own wears a ring, so you can see which ones are not yours any more
+        if (cycling) arc (rKnob + 7.5f, a0, a1, C::amber().withAlpha (0.85f), 1.6f);
         for (int i = 0; i < 36; ++i)
         {
             const float t = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
@@ -413,7 +487,11 @@ public:
     }
 
     void enablementChanged() override { setAlpha (isEnabled() ? 1.0f : 0.4f); }
-    void mouseDown (const juce::MouseEvent&) override { dragStart = toNorm (value); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && onRightClick) { onRightClick(); return; }
+        dragStart = toNorm (value);
+    }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         const float sens = e.mods.isShiftDown() ? 0.0012f : 0.005f;
@@ -480,7 +558,13 @@ public:
     int getSelected() const noexcept { return selected; }
     void enablementChanged() override { setAlpha (isEnabled() ? 1.0f : 0.45f); }
     void setItemTooltip (int i, const juce::String& t) { if (i >= 0 && i < buttons.size()) buttons[i]->setTooltip (t); }
-    void paint (juce::Graphics& g) override { paintWell (g, getLocalBounds().toFloat(), std::min (14.0f, (float) getHeight() * 0.5f)); }
+    // the pointer lands on a button, not on the row behind it, so a tooltip for the row goes on every button
+    void setTooltip (const juce::String& t) override
+    {
+        juce::SettableTooltipClient::setTooltip (t);
+        for (auto* b : buttons) b->setTooltip (t);
+    }
+    void paint (juce::Graphics& g) override { paintWell (g, getLocalBounds().toFloat(), std::min (skin().segmentedRadiusCap, (float) getHeight() * 0.5f)); }
     void resized() override
     {
         auto r = getLocalBounds().reduced (3);
