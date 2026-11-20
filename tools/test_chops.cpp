@@ -22,7 +22,21 @@ static constexpr int kBlock = 256;
 struct Heard
 {
     double rmsL = 0.0, rmsR = 0.0;
-    double balanceDb() const { return 20.0 * std::log10 (std::max (1e-9, rmsL) / std::max (1e-9, rmsR)); }
+    // Where the sound sits: -1 hard left, 0 the middle, +1 hard right.
+    //
+    // This used to be a channel ratio in dB, and that was a bad measure. When a chop is hard over,
+    // the quiet side is zero, so the ratio is pinned by whichever epsilon stops the division - it
+    // printed numbers like +103 dB, which is not a loudness and not a position, only "silent on
+    // the other side, as far as the floor allows". It could not tell a full sweep from a 95% one,
+    // and its asymmetry was filter tails rather than anything about the pan.
+    //
+    // An equal-power pan sets L = cos(a) and R = sin(a) with a = (pi/4)(x+1), so the angle between
+    // the two channels gives x back. Bounded, mirror-symmetric, and it says what it measures.
+    double where() const
+    {
+        const double a = std::atan2 (std::max (0.0, rmsR), std::max (0.0, rmsL));
+        return std::max (-1.0, std::min (1.0, a / 0.78539816339744831 - 1.0));
+    }
     double level() const { return std::sqrt (0.5 * (rmsL * rmsL + rmsR * rmsR)); }
     bool silent() const { return level() < 1e-6; }
 };
@@ -138,10 +152,12 @@ int main()
         const auto first  = listen (*player, 0.0, 0.9);
         const auto second = listen (*player, 1.0, 1.9);
 
-        std::printf ("     chop 1 balance %+.1f dB, chop 2 balance %+.1f dB\n", first.balanceDb(), second.balanceDb());
+        std::printf ("     chop 1 at %+.3f, chop 2 at %+.3f  (-1 left, +1 right)\n", first.where(), second.where());
         CHECK (! first.silent() && ! second.silent(), "both chops sound");
-        CHECK (first.balanceDb() > 10.0, "the first chop really is on the left (%+.0f dB)", first.balanceDb());
-        CHECK (second.balanceDb() < -10.0, "the second really is on the right (%+.0f dB)", second.balanceDb());
+        CHECK (first.where() < -0.97, "the first chop really is hard left (%+.3f)", first.where());
+        CHECK (second.where() > 0.97, "the second really is hard right (%+.3f)", second.where());
+        CHECK (std::fabs (first.where() + second.where()) < 0.02,
+               "and the two are mirror images (%+.3f against %+.3f)", first.where(), second.where());
     }
 
     std::printf ("\nplacing a chop does not change how loud it is\n");
@@ -171,9 +187,9 @@ int main()
 
         auto player = fresh (places);
         const auto h = listen (*player, 0.0, 0.9);
-        std::printf ("     locked chop balance %+.2f dB\n", h.balanceDb());
+        std::printf ("     locked chop at %+.3f\n", h.where());
         CHECK (! h.silent(), "it still sounds (%.4f)", h.level());
-        CHECK (std::fabs (h.balanceDb()) < 1.0, "it stays in the middle however it is set (%+.2f dB)", h.balanceDb());
+        CHECK (std::fabs (h.where()) < 0.02, "it stays in the middle however it is set (%+.3f)", h.where());
     }
 
     std::printf ("\na travelling chop is somewhere different later in the bar\n");
@@ -195,18 +211,22 @@ int main()
         // Beats 0 and 2 are the two points where a one-bar sway crosses the middle, so measuring
         // there proves nothing: beats 1 and 3 are the extremes.
         auto player = fresh (places);
-        const auto left  = listen (*player, 1.0, 1.9);    // a quarter of the way round: hard over
-        const auto right = listen (*player, 3.0, 3.9);    // three quarters: the other side
+        // Short windows, held near each extreme: a long one averages most of the path and tells
+        // you about the window rather than the pan.
+        const auto over  = listen (*player, 1.0, 1.25);   // a quarter of the way round: hard over
+        const auto back  = listen (*player, 3.0, 3.25);   // three quarters: the other side
+        const auto mid   = listen (*player, 0.0, 0.25);   // the top of the lap, in the middle
 
-        std::printf ("     beat 2 %+.1f dB, beat 4 %+.1f dB\n", left.balanceDb(), right.balanceDb());
-        CHECK (! left.silent() && ! right.silent(), "both sound");
-        CHECK (std::fabs (left.balanceDb() - right.balanceDb()) > 8.0,
-               "it has travelled across the field (%+.0f dB against %+.0f dB)", left.balanceDb(), right.balanceDb());
-
-        // and the middle of the lap really is the middle, which is the other half of the claim
-        const auto mid = listen (*player, 0.0, 0.9);
-        CHECK (std::fabs (mid.balanceDb()) < 3.0,
-               "and passes through the middle on the way (%+.1f dB)", mid.balanceDb());
+        std::printf ("     a quarter round %+.2f, three quarters %+.2f, the middle %+.2f\n",
+                     over.where(), back.where(), mid.where());
+        CHECK (! over.silent() && ! back.silent(), "both sound");
+        CHECK (over.where() > 0.55, "a quarter of the way round it is over to one side (%+.2f)", over.where());
+        CHECK (back.where() < -0.55, "three quarters round it is over to the other (%+.2f)", back.where());
+        CHECK (std::fabs (mid.where()) < 0.25, "and passes through the middle on the way (%+.2f)", mid.where());
+        // The path is a sway about the middle, so the two extremes have to mirror each other. A
+        // channel ratio in dB could not ask this: its magnitudes were set by the clamp.
+        CHECK (std::fabs (over.where() + back.where()) < 0.2,
+               "the sway is even on both sides (%+.2f against %+.2f)", over.where(), back.where());
     }
 
     std::printf ("\nwith nothing placed, nothing changes\n");
