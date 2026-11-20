@@ -370,6 +370,43 @@ bool bc::Rooms::loopsBounce (juce::String& error)
 }
 
 // ---------------------------------------------------------------- the loop in the project
+// ------------------------------------------------------------------ a loop as a preset
+// LOOPS could already write a NeoBeat kit, but that is a one-way flattening: the layers become
+// lanes and the chops become samples, so nothing brings the loop itself back. A preset has to
+// round-trip or it is not a preset - you cannot scroll through presets you can only export.
+//
+// loopsToXml already writes everything the room holds, with the audio its chops use embedded as
+// FLAC, so this is that XML in a file and nothing more. Self-contained, so a preset carries its
+// samples to another machine.
+bool bc::Rooms::loopsSavePreset (const juce::File& file, juce::String& error)
+{
+    auto x = loopsToXml();
+    if (x == nullptr) { error = "The loop could not be written."; return false; }
+    bool any = false;
+    for (int i = 0; i < loops.numLayers; ++i) any = any || ! loops.layers[(size_t) i].hits.empty();
+    if (! any) { error = "The loop has no chops yet: ROLL a layer first."; return false; }
+
+    auto root = std::make_unique<juce::XmlElement> ("NJQ_LOOP");
+    root->setAttribute ("version", 1);
+    root->setAttribute ("madeWith", "Batchcut " BATCHCUT_VERSION);
+    root->addChildElement (x.release());
+    if (! file.getParentDirectory().createDirectory()) { error = "That folder could not be made."; return false; }
+    if (! root->writeTo (file)) { error = "It could not be written to " + file.getFullPathName(); return false; }
+    return true;
+}
+
+bool bc::Rooms::loopsOpenPreset (const juce::File& file, juce::String& error)
+{
+    auto root = juce::parseXML (file);
+    if (root == nullptr) { error = "That file could not be read."; return false; }
+    // the preset wrapper, or a bare LOOPS element from a project
+    const auto* x = root->hasTagName ("LOOPS") ? root.get() : root->getChildByName ("LOOPS");
+    if (x == nullptr) { error = "That is not a loop preset."; return false; }
+    loopsFromXml (*x);
+    loopsChanged();
+    return true;
+}
+
 std::unique_ptr<juce::XmlElement> bc::Rooms::loopsToXml()
 {
     auto root = std::make_unique<juce::XmlElement> ("LOOPS");

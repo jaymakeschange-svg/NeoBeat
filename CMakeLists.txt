@@ -45,6 +45,7 @@ set (BATCHCUT_APP_SOURCES
     Source/app/Panels.cpp
     Source/neobeat/shared/rooms/CutRooms.cpp
     Source/neobeat/shared/rooms/KitRooms.cpp
+    Source/neobeat/shared/rooms/PresetBar.cpp
     Source/neobeat/shared/rooms/KitRoomUi.cpp
     Source/neobeat/shared/rooms/LoopsRooms.cpp
     Source/neobeat/shared/rooms/LoopsRoomUi.cpp

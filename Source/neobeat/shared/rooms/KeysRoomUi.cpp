@@ -1,6 +1,7 @@
 // Batchcut 3.0 - the KEYS room: where the sounds come from (the pool) and the sounds the instrument holds on
 // the left, its map of keys and velocities and the keys to play it in the middle, how it plays on the right.
 #include "RoomView.h"
+#include "PresetBar.h"
 #include "../Ui.h"
 #include "../../gen/Scale.h"
 #include "../NjqInstrument.h"
@@ -235,6 +236,7 @@ struct bc::KeysRoom::Parts
     Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" };
     juce::TextEditor name;
     Pill build { "Build" }, undo { "Undo" }, redo { "Redo" }, open { "Open" }, save { "Save .NJQi" }, clear { "Clear all" };
+    PresetBar presets;                     // its own, independent of the one in LOOPS
     juce::ComboBox chordBox;
     Segmented mode { { "Tuned", "Resonator", "Chops" } }, sustain { { "As recorded", "Loop", "Hold" } };
     Knob attack { "ATTACK", 1.0f, 2000.0f, 2.0f, true }, release { "RELEASE", 10.0f, 8000.0f, 300.0f, true }, glide { "GLIDE", 0.0f, 1000.0f, 0.0f };
@@ -251,8 +253,42 @@ bc::KeysRoom::KeysRoom (bc::RoomView& v) : view (v), parts (std::make_unique<Par
 {
     auto& p = *parts;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &p.sources, &p.zones, &p.map, &p.keys, &p.fromFile, &p.fromAll, &p.folder, &p.name, &p.build, &p.undo, &p.redo,
-            &p.open, &p.save, &p.clear, &p.chordBox, &p.mode, &p.sustain, &p.attack, &p.release, &p.glide, &p.resonance, &p.brightness, &p.mono, &p.tune, &p.gain, &p.leaveOut })
+            &p.open, &p.save, &p.clear, &p.chordBox, &p.mode, &p.sustain, &p.attack, &p.release, &p.glide, &p.resonance, &p.brightness, &p.mono, &p.tune, &p.gain, &p.leaveOut,
+            &p.presets })
         addAndMakeVisible (c);
+    // The preset bar, over the .NJQi instruments Batchcut already writes - which is the workflow:
+    // build them there, scroll through them here. Hover loads and strikes a chord, and moving away
+    // without choosing puts back what was loaded, so browsing cannot cost you the instrument you had.
+    {
+        p.presets.setFolder (shared::Settings::load().presets(), "*.njqi");
+        p.presets.onLoad = [this] (const juce::File& f)
+        {
+            juce::String error;
+            const bool ok = view.rooms.keysOpenNjq (f, error);
+            if (! ok) view.rooms.lastMessage = error;
+            if (ok) { view.keysZone = -1; refresh(); if (view.repaintAll) view.repaintAll(); }
+            return ok;
+        };
+        p.presets.onSnapshot = [this] { return view.rooms.keysToXml(); };
+        p.presets.onRestore  = [this] (const juce::XmlElement& x)
+        {
+            view.rooms.keysFromXml (x);
+            view.rooms.keysChanged();
+            view.keysZone = -1; refresh();
+            if (view.repaintAll) view.repaintAll();
+        };
+        // a chord rather than one note: it says more about an instrument in the same second
+        // Through the keyboard state, the way the on-screen keys go: the player's own note() runs
+        // on the audio thread, and this is the message thread.
+        p.presets.onAudition = [this]
+        {
+            const int root = 60;
+            for (int n : { root, root + 4, root + 7, root + 11 })
+                view.rooms.keyboard.noteOn (1, n, 0.8f);
+        };
+        p.presets.onAuditionStop = [this] { view.rooms.keyboard.allNotesOff (1); };
+    }
+
     auto done = [this] { view.rooms.keysMark(); refresh(); };
     auto rebuild = [this] { view.rooms.keysBuild(); view.keysZone = -1; };
 
@@ -476,7 +512,8 @@ void bc::KeysRoom::resized()
       p.build.setBounds (x + 242, 11, 66, 28); p.open.setBounds (x + 314, 11, 58, 28); p.save.setBounds (x + 378, 11, 84, 28);
       p.clear.setBounds (x + 468, 11, 76, 28);
       p.undo.setBounds (x + 552, 11, 44, 28); p.redo.setBounds (x + 600, 11, 44, 28);
-      p.map.setBounds (x + 12, 48, p.mainPlate.getWidth() - 24, 470);
+      p.presets.setBounds (x + 12, 44, p.mainPlate.getWidth() - 24, 26);
+      p.map.setBounds (x + 12, 78, p.mainPlate.getWidth() - 24, 440);
       p.chordBox.setBounds (x + 12, 548, 180, 28);
       p.keys.setBounds (x + 12, 588, p.mainPlate.getWidth() - 24, 128); }
     { const int x = p.insPlate.getX() + 14, w = p.insPlate.getWidth() - 28, k3 = w / 3;

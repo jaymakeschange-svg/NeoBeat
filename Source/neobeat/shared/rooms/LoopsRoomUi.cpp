@@ -1,6 +1,7 @@
 // Batchcut 3.0 - the LOOPS room: where the sounds come from (the pool the Kit room shares) on the left, the
 // layers of chops in the middle, the selected layer and chop on the right.
 #include "RoomView.h"
+#include "PresetBar.h"
 #include "../Ui.h"
 
 using namespace nsui;
@@ -322,6 +323,8 @@ struct bc::LoopsRoom::Parts
     Knob bpm { "BPM", 50.0f, 200.0f, 100.0f }, swing { "SWING", 50.0f, 75.0f, 62.0f };
     juce::ComboBox rootBox, scaleBox;
     Pill wav { "WAV" }, stems { "Stems" }, midi { "MIDI" }, njq { ".NJQ" }, bounce { "Bounce to pool" };
+    PresetBar presets;                     // its own, independent of the one in KEYS
+    Pill savePreset { "Save preset" };
     // the selected layer
     Segmented mode { { "Slice", "Pool", "Stutter", "Melody" } };
     Knob density { "DENSITY", 0.0f, 1.0f, 0.5f }, dejavu { "DEJA VU", 0.0f, 1.0f, 0.6f }, level { "LEVEL", -36.0f, 12.0f, 0.0f }, pan { "PAN", -1.0f, 1.0f, 0.0f };
@@ -343,9 +346,50 @@ bc::LoopsRoom::LoopsRoom (bc::RoomView& v) : view (v), parts (std::make_unique<P
     auto& p = *parts;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &p.sources, &p.grid, &p.fromFile, &p.fromAll, &p.folder, &p.name, &p.rollAll, &p.undo, &p.redo, &p.addLayer, &p.clear,
             &p.play, &p.bpm, &p.swing, &p.rootBox, &p.scaleBox, &p.wav, &p.stems, &p.midi, &p.njq, &p.bounce, &p.mode, &p.density, &p.dejavu, &p.level, &p.pan,
-            &p.bars, &p.gridBox, &p.rhythmBox, &p.laneBox, &p.random, &p.midiMode, &p.roll, &p.remove, &p.chopReroll, &p.chopLock, &p.chopReverse, &p.chopPitch, &p.chopLevel })
+            &p.bars, &p.gridBox, &p.rhythmBox, &p.laneBox, &p.random, &p.midiMode, &p.roll, &p.remove, &p.chopReroll, &p.chopLock, &p.chopReverse, &p.chopPitch, &p.chopLevel,
+            &p.presets, &p.savePreset })
         addAndMakeVisible (c);
     auto& proc = view.rooms;
+
+    // The preset bar. Switching is live - the arrows load as you step, and the list loads on hover
+    // and puts the room back if you move away without choosing, so trying things costs nothing.
+    {
+        const auto dir = shared::Settings::load().presets().getChildFile ("Loops");
+        p.presets.setFolder (dir, "*.njqloop");
+        p.presets.onLoad = [this] (const juce::File& f)
+        {
+            juce::String error;
+            const bool ok = view.rooms.loopsOpenPreset (f, error);
+            if (! ok) view.rooms.lastMessage = error;
+            if (ok) { view.loopHit = -1; refresh(); if (view.repaintAll) view.repaintAll(); }
+            return ok;
+        };
+        p.presets.onSnapshot = [this] { return view.rooms.loopsToXml(); };
+        p.presets.onRestore  = [this] (const juce::XmlElement& x)
+        {
+            view.rooms.loopsFromXml (x);
+            view.rooms.loopsChanged();
+            view.loopHit = -1; refresh();
+            if (view.repaintAll) view.repaintAll();
+        };
+        p.presets.onAudition     = [this] { view.rooms.loopPlayer.playing.store (true); parts->play.setToggleState (true, juce::dontSendNotification); };
+        p.presets.onAuditionStop = [this] { view.rooms.loopPlayer.playing.store (false); parts->play.setToggleState (false, juce::dontSendNotification); };
+
+        p.savePreset.setTooltip ("Save this loop as a preset, samples and all, so it comes back exactly");
+        p.savePreset.onClick = [this]
+        {
+            const auto dir2 = shared::Settings::load().presets().getChildFile ("Loops");
+            dir2.createDirectory();
+            auto nm = juce::String (view.rooms.loops.name).trim();
+            if (nm.isEmpty()) nm = "My loop";
+            juce::String error;
+            const auto f = dir2.getNonexistentChildFile (juce::File::createLegalFileName (nm), ".njqloop");
+            if (view.rooms.loopsSavePreset (f, error)) { view.rooms.lastMessage = "Saved " + f.getFileName(); parts->presets.rescan(); }
+            else                                        view.rooms.lastMessage = error;
+            if (view.refreshPanels) view.refreshPanels();
+        };
+    }
+
     auto layer = [this] () -> bc::LoopLayer& { auto& lp = view.rooms.loops; return lp.layers[(size_t) juce::jlimit (0, lp.numLayers - 1, view.loopLayer)]; };
     auto rollSame = [this] { view.rooms.loopsRoll (view.loopLayer, false); view.loopHit = -1; };   // a setting changed: the same roll, the new setting
     auto done = [this] { view.rooms.loopsMark(); refresh(); };
@@ -663,7 +707,10 @@ void bc::LoopsRoom::resized()
     { const int x = p.mainPlate.getX();
       p.name.setBounds (x + 52, 12, 230, 26);
       p.rollAll.setBounds (x + 292, 11, 92, 28); p.clear.setBounds (x + 392, 11, 92, 28); p.undo.setBounds (x + 520, 11, 56, 28); p.redo.setBounds (x + 582, 11, 56, 28);
-      p.grid.setBounds (x + 8, 44, p.mainPlate.getWidth() - 16, LayerGrid::kRuler + bc::kLoopLayers * LayerGrid::kRowH);
+      // the preset bar below the header, across the width of the loop
+      p.presets.setBounds (x + 8, 44, p.mainPlate.getWidth() - 130, 26);
+      p.savePreset.setBounds (x + p.mainPlate.getWidth() - 116, 44, 108, 26);
+      p.grid.setBounds (x + 8, 76, p.mainPlate.getWidth() - 16, LayerGrid::kRuler + bc::kLoopLayers * LayerGrid::kRowH);
       const int y = p.grid.getBottom() + 6;
       p.addLayer.setBounds (x + 14, y, 120, 26);
       p.play.setBounds (x + 14, y + 52, 84, 34);
