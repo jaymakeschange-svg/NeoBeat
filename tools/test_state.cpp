@@ -221,6 +221,70 @@ int main()
         CHECK (peak > 1.0e-3f, "the map plays what was reopened (peak %.4f)", peak);
     }
 
+    std::printf ("\nthe KEYS room's own keyboard plays\n");
+    {
+        // The on-screen keys, and anything auditioning through them (the preset bar strikes a
+        // chord this way). The keyboard state was not read in processBlock at all, so the room's
+        // keys were as silent as its player was.
+        struct Transport final : public juce::AudioPlayHead
+        {
+            juce::Optional<PositionInfo> getPosition() const override
+            { PositionInfo p; p.setPpqPosition (0.0); p.setBpm (120.0); p.setIsPlaying (false); return p; }
+        } t;
+        auto c = fresh();
+        c->keys = b->keys;
+        c->keysChanged();
+
+        juce::AudioBuffer<float> buf (2, kBlock);
+        auto run = [&] (double seconds)
+        {
+            float peak = 0.0f;
+            for (int blk = 0; blk < (int) (seconds * kSr / kBlock); ++blk)
+            {
+                buf.clear(); juce::MidiBuffer midi;
+                c->processBlock (buf, midi);
+                peak = std::max (peak, buf.getMagnitude (0, kBlock));
+            }
+            return peak;
+        };
+        c->setPlayHead (&t);
+
+        CHECK (run (0.2) < 1.0e-4f, "nothing sounds before a key is touched");
+        for (int nn : { 60, 64, 67 }) c->keyboard.noteOn (1, nn, 0.8f);
+        const float held = run (0.5);
+        CHECK (held > 1.0e-3f, "a chord on the on-screen keys sounds (peak %.4f)", held);
+        c->keyboard.allNotesOff (1);
+        run (1.5);                                  // the release
+        CHECK (run (0.3) < 1.0e-3f, "and stops when the keys are let go");
+    }
+
+    std::printf ("\na loop preset comes back exactly\n");
+    {
+        // What the preset bar scrolls through. The old .NJQ export flattens a loop into NeoBeat
+        // lanes and cannot be read back, so there was nothing to scroll between.
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("mjq-preset-test");
+        dir.createDirectory();
+        const auto f = dir.getChildFile ("round trip.njqloop");
+        f.deleteFile();
+
+        juce::String error;
+        CHECK (a->loopsSavePreset (f, error), "it saves (%s)", error.isEmpty() ? f.getFileName().toRawUTF8() : error.toRawUTF8());
+        CHECK (f.getSize() > 1000, "with its samples in it (%.0f KB)", (double) f.getSize() / 1024.0);
+
+        auto d = fresh();
+        CHECK (d->loops.layers[0].hits.empty(), "the third plugin starts with an empty loop");
+        CHECK (d->loopsOpenPreset (f, error), "it opens (%s)", error.isEmpty() ? "ok" : error.toRawUTF8());
+        CHECK (juce::String (d->loops.name) == "a loop worth keeping", "its name (%s)", d->loops.name.c_str());
+        CHECK (d->loops.numLayers == 2, "both layers (%d)", d->loops.numLayers);
+        int hits = 0, sounding = 0;
+        for (int L = 0; L < d->loops.numLayers; ++L)
+            for (const auto& h : d->loops.layers[(size_t) L].hits)
+            { ++hits; if (h.sound != nullptr && h.sound->l.size() > 64) ++sounding; }
+        CHECK (hits == 8, "every chop (%d of 8)", hits);
+        CHECK (hits > 0 && sounding == hits, "each with its sound (%d of %d)", sounding, hits);
+        f.deleteFile(); dir.deleteRecursively();
+    }
+
     std::printf ("\n%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

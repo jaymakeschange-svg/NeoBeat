@@ -135,6 +135,9 @@ struct Rooms
     bool loopsExportAudio (const juce::File& dir, bool stems, juce::String& error);
     bool loopsExportMidi (const juce::File& file, juce::String& error);
     bool loopsSaveNjq (const juce::File& file, juce::String& error);
+    // a loop that comes back: the room's own XML in a file, samples embedded, so presets round-trip
+    bool loopsSavePreset (const juce::File& file, juce::String& error);
+    bool loopsOpenPreset (const juce::File& file, juce::String& error);
     bool loopsBounce (juce::String& error);                      // the loop as one new sound in the pool
     double loopsRate() const noexcept { return hostRate > 0 ? hostRate : 48000.0; }
 

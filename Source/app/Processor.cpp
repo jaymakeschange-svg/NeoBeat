@@ -734,6 +734,22 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             }
         }
 
+        // The KEYS room's on-screen keyboard, and anything auditioning through it. It was not read
+        // here at all, so the room's own keys were as silent as its player was.
+        {
+            juce::MidiBuffer km;
+            keyboard.processNextMidiBuffer (km, 0, n, true);
+            for (const auto meta : km)
+            {
+                const auto m = meta.getMessage();
+                if (! m.isNoteOnOrOff() || numKeysNotes >= 256) continue;
+                keysNotes[numKeysNotes++] = { juce::jlimit (0, n - 1, meta.samplePosition),
+                                              m.getNoteNumber(),
+                                              m.isNoteOn() ? m.getFloatVelocity() : 0.0f,
+                                              m.isNoteOn(), 0.0f };
+            }
+        }
+
         std::sort (keysNotes, keysNotes + numKeysNotes, [] (const mjq::PlayNote& x, const mjq::PlayNote& y)
         {
             if (x.offset != y.offset) return x.offset < y.offset;

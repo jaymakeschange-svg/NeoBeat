@@ -50,6 +50,7 @@ set (MIDIJAQ_APP_SOURCES
     Source/neobeat/shared/rooms/KitRooms.cpp
     Source/neobeat/shared/rooms/LoopsRooms.cpp
     Source/neobeat/shared/rooms/KeysRooms.cpp
+    Source/neobeat/shared/rooms/PresetBar.cpp
     Source/neobeat/shared/rooms/KitRoomUi.cpp
     Source/neobeat/shared/rooms/LoopsRoomUi.cpp
     Source/neobeat/shared/rooms/KeysRoomUi.cpp)
