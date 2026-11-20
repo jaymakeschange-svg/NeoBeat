@@ -1,7 +1,7 @@
 // BatchCut engine tests: synthetic recordings where every event's true start is known.
 // test_engine [outdir] also writes the test recordings and some one-shots as WAVs.
-#include "core/Engine.h"
-#include "core/Player.h"
+#include "neobeat/shared/rooms/Engine.h"
+#include "neobeat/shared/rooms/Player.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

@@ -2,7 +2,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include "../core/Session.h"
+#include "neobeat/shared/rooms/Session.h"
 
 namespace bcstate
 {

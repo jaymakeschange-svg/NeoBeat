@@ -18,8 +18,8 @@
 #pragma once
 
 #include "Kit.h"
-#include "../neobeat/gen/Generators.h"
-#include "../neobeat/gen/Scale.h"
+#include "../../gen/Generators.h"
+#include "../../gen/Scale.h"
 #include <algorithm>
 #include <array>
 #include <atomic>

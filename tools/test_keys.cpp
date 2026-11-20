@@ -1,7 +1,7 @@
 // Batchcut 3.0 - KEYS without any framework: an instrument built from pitched sounds (zones by pitch,
 // velocity layers, round robins), in tune across the keyboard, loops and holds that sustain without a
 // click, the release, the resonator for unpitched sounds, chops on keys, mono with glide.
-#include "../Source/core/Keys.h"
+#include "../Source/neobeat/shared/rooms/Keys.h"
 #include "../Source/neobeat/gen/Scale.h"
 #include <cstdlib>
 #include "Portable.h"

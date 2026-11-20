@@ -13,8 +13,8 @@
 #pragma once
 
 #include "Kit.h"
-#include "../neobeat/gen/Rng.h"
-#include "../neobeat/shared/InstrumentPlay.h"
+#include "../../gen/Rng.h"
+#include "../InstrumentPlay.h"
 #include <algorithm>
 #include <array>
 #include <atomic>

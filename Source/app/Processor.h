@@ -5,11 +5,11 @@
 #include <set>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_utils/juce_audio_utils.h>
-#include "../core/Player.h"
-#include "../core/Session.h"
-#include "../core/Kit.h"
-#include "../core/Loops.h"
-#include "../core/Keys.h"
+#include "neobeat/shared/rooms/Player.h"
+#include "neobeat/shared/rooms/Session.h"
+#include "neobeat/shared/rooms/Kit.h"
+#include "neobeat/shared/rooms/Loops.h"
+#include "neobeat/shared/rooms/Keys.h"
 #include "../neobeat/shared/LearnerStore.h"
 #include <deque>
 

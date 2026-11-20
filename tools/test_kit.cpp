@@ -1,5 +1,5 @@
 // Batchcut 2.0 - the kit model and its audition player, without any framework.
-#include "../Source/core/Kit.h"
+#include "../Source/neobeat/shared/rooms/Kit.h"
 #include "Portable.h"
 #include <algorithm>
 #include <cmath>

@@ -10,10 +10,10 @@
 //   KitPlayer     the kit played by one of NeoBeat's 128 patterns, at the kit's tempo and swing
 #pragma once
 
-#include "../neobeat/engine/PatternBank.h"
-#include "../neobeat/gen/Dealer.h"
-#include "../neobeat/shared/Learner.h"
-#include "../neobeat/shared/Loudness.h"
+#include "../../engine/PatternBank.h"
+#include "../../gen/Dealer.h"
+#include "../Learner.h"
+#include "../Loudness.h"
 #include <algorithm>
 #include <array>
 #include <atomic>

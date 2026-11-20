@@ -1,7 +1,7 @@
 // BatchCut detection benchmark: harder, field-recording-like scenes than the unit tests (changing
 // backgrounds, reverb, rain, babble, fast bounce trains). Every target's true start is known.
 // bench_detect [outdir]   prints recall / extras / timing per scene, and writes the scenes as WAVs.
-#include "core/Engine.h"
+#include "neobeat/shared/rooms/Engine.h"
 #include <chrono>
 #include <cstdio>
 #include <random>

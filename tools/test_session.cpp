@@ -1,6 +1,6 @@
 // BatchCut session tests: files, parts of long recordings, the user's edits, FIND MORE across files, and
 // the batch export, against an in-memory "disk".
-#include "core/Session.h"
+#include "neobeat/shared/rooms/Session.h"
 #include <chrono>
 #include <cstdio>
 #include <random>

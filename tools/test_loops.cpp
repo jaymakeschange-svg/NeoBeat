@@ -1,7 +1,7 @@
 // Batchcut 3.0 - LOOPS without any framework: rolling layers by the rules, deja vu, seeds, locks, the four
 // fills, borrowed rhythms, the swung events, the rendered loop (tails wrapped round), and the player
 // (transport, Trigger and Slices from MIDI) against the render.
-#include "../Source/core/Loops.h"
+#include "../Source/neobeat/shared/rooms/Loops.h"
 #include "Portable.h"
 #include <cmath>
 #include <cstdio>
