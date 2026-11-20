@@ -103,6 +103,12 @@ target_compile_definitions (test_endtoend PRIVATE ${MIDIJAQ_DEFINITIONS})
 target_link_libraries (test_endtoend PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
 
 # Per-chop placement, listened to rather than looked at.
+juce_add_console_app (test_state PRODUCT_NAME "test_state")
+target_sources (test_state PRIVATE tools/test_state.cpp ${MIDIJAQ_APP_SOURCES})
+target_include_directories (test_state PRIVATE Source)
+target_compile_definitions (test_state PRIVATE ${MIDIJAQ_DEFINITIONS})
+target_link_libraries (test_state PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+
 juce_add_console_app (test_depth PRODUCT_NAME "test_depth")
 target_sources (test_depth PRIVATE tools/test_depth.cpp ${MIDIJAQ_APP_SOURCES})
 target_include_directories (test_depth PRIVATE Source)

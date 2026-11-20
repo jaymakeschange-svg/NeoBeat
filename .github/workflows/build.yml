@@ -16,7 +16,7 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build the app, the plugin and the tests
-        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving test_orb test_room test_random test_audio test_endtoend
+        run: cmake --build build --config Release --parallel --target MidiJaQ_VST3 MidiJaQ_Standalone test_jaq test_clock test_inst test_session test_evolving test_orb test_room test_random test_audio test_chops test_map test_depth test_state test_endtoend
 
       - name: The plugin listened to (levels, the room, the Orb's effects, what the randomiser changes)
         if: ${{ !cancelled() }}
@@ -24,6 +24,29 @@ jobs:
         run: |
           & ./build/test_audio_artefacts/Release/test_audio.exe
           if ($LASTEXITCODE -ne 0) { throw 'Audio test failed' }
+
+      - name: What survives saving the project (the rooms, their samples, the map, the stage)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/test_state_artefacts/Release/test_state.exe
+          if ($LASTEXITCODE -ne 0) { throw 'State round-trip failed' }
+
+      - name: The Stereoroom listened to (per-chop placing, and depth as a ratio not a level)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/test_chops_artefacts/Release/test_chops.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Per-chop placement failed' }
+          & ./build/test_depth_artefacts/Release/test_depth.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Depth failed' }
+
+      - name: The MAP played (a row is a degree, a mark fires a chop)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ./build/test_map_artefacts/Release/test_map.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Map playback failed' }
 
       - name: Patches Batchcut wrote, opened and played here
         if: ${{ !cancelled() }}

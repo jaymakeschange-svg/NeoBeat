@@ -1166,6 +1166,46 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
                 tn->addChildElement (legacy.release());
         }
     }
+    // ---- the rooms MidiJaQ inherited
+    // These were not written at all, so a loop built in LOOPS, an instrument built in KEYS and
+    // every sample in the pool were lost the moment the project was saved and reopened. The three
+    // serialisers already existed - Batchcut writes its projects with them, audio embedded as FLAC
+    // - and MidiJaQ simply never called them.
+    if (auto k = kitToXml())   root.addChildElement (k.release());
+    if (auto l = loopsToXml()) root.addChildElement (l.release());
+    if (auto y = keysToXml())  root.addChildElement (y.release());
+
+    // the MAP's marks, and where each chop stands on the Stereoroom's stage
+    {
+        auto* mn = root.createNewChildElement ("MAP");
+        mn->setAttribute ("steps", map.steps); mn->setAttribute ("perBar", map.perBar);
+        mn->setAttribute ("root", map.root);   mn->setAttribute ("scale", map.scale);
+        mn->setAttribute ("octave", map.octave);
+        for (const auto& m : map.marks)
+        {
+            auto* e = mn->createNewChildElement ("MARK");
+            e->setAttribute ("step", m.step); e->setAttribute ("row", m.row); e->setAttribute ("len", m.len);
+            e->setAttribute ("vel", (double) m.velocity); e->setAttribute ("src", (int) m.source);
+            e->setAttribute ("layer", m.layer); e->setAttribute ("ratchet", m.ratchet);
+            if (m.glide) e->setAttribute ("glide", 1);
+        }
+    }
+    {
+        auto* sn = root.createNewChildElement ("STEREOROOM");
+        for (int i = 0; i < (int) places.size(); ++i)
+        {
+            const auto& pl = places[(size_t) i];
+            if (! pl.on && pl.x == 0.0f && pl.y == 0.0f && ! pl.locked && pl.travel == nsr::Travel::Still) continue;
+            auto* e = sn->createNewChildElement ("NODE");
+            e->setAttribute ("i", i);
+            e->setAttribute ("on", pl.on ? 1 : 0); e->setAttribute ("locked", pl.locked ? 1 : 0);
+            e->setAttribute ("x", (double) pl.x); e->setAttribute ("y", (double) pl.y);
+            e->setAttribute ("width", (double) pl.width);
+            e->setAttribute ("travel", (int) pl.travel); e->setAttribute ("depth", (double) pl.depth);
+            e->setAttribute ("bars", (double) pl.bars); e->setAttribute ("phase", (double) pl.phase);
+        }
+    }
+
     const auto xml = root.toString();
     dest.replaceAll (xml.toRawUTF8(), xml.getNumBytesAsUTF8());
 }
@@ -1363,6 +1403,57 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 + missing.joinIntoString (", ") + " were not where they were: open them again.";
         version.fetch_add (1);
     }
+
+    // ---- the rooms back, with their samples: the other half of what was being lost
+    if (auto* k = root->getChildByName ("KIT"))   { kitFromXml (*k);   kitChanged(); }
+    if (auto* l = root->getChildByName ("LOOPS")) { loopsFromXml (*l); loopsChanged(); }
+    if (auto* y = root->getChildByName ("KEYS"))  { keysFromXml (*y);  keysChanged(); }
+
+    if (auto* mn = root->getChildByName ("MAP"))
+    {
+        map = mjq::MapPattern();
+        map.steps  = juce::jlimit (1, 512, mn->getIntAttribute ("steps", 16));
+        map.perBar = juce::jlimit (1, 48, mn->getIntAttribute ("perBar", 16));
+        map.root   = juce::jlimit (0, 11, mn->getIntAttribute ("root", 2));
+        map.scale  = juce::jlimit (0, gen::numScales() - 1, mn->getIntAttribute ("scale", 3));
+        map.octave = juce::jlimit (0, 9, mn->getIntAttribute ("octave", 4));
+        for (auto* e : mn->getChildWithTagNameIterator ("MARK"))
+        {
+            mjq::Mark m;
+            m.step = juce::jlimit (0, map.steps - 1, e->getIntAttribute ("step"));
+            m.row = juce::jlimit (0, mjq::kMapRows - 1, e->getIntAttribute ("row"));
+            m.len = juce::jlimit (1, map.steps, e->getIntAttribute ("len", 1));
+            m.velocity = (float) juce::jlimit (0.0, 1.0, e->getDoubleAttribute ("vel", 0.9));
+            m.source = e->getIntAttribute ("src") == (int) mjq::MarkSource::Loop ? mjq::MarkSource::Loop : mjq::MarkSource::Keys;
+            m.layer = juce::jlimit (0, bc::kLoopLayers - 1, e->getIntAttribute ("layer"));
+            m.ratchet = juce::jlimit (1, 4, e->getIntAttribute ("ratchet", 1));
+            m.glide = e->getIntAttribute ("glide") != 0;
+            map.marks.push_back (m);
+        }
+        mapChanged();
+    }
+
+    if (auto* sn = root->getChildByName ("STEREOROOM"))
+    {
+        for (auto* e : sn->getChildWithTagNameIterator ("NODE"))
+        {
+            const int i = e->getIntAttribute ("i", -1);
+            if (i < 0) continue;
+            if ((int) places.size() <= i) places.resize ((size_t) i + 1);
+            auto& pl = places[(size_t) i];
+            pl.on = e->getIntAttribute ("on") != 0;
+            pl.locked = e->getIntAttribute ("locked") != 0;
+            pl.x = (float) juce::jlimit (-1.0, 1.0, e->getDoubleAttribute ("x"));
+            pl.y = (float) juce::jlimit (0.0, 1.0, e->getDoubleAttribute ("y"));
+            pl.width = (float) juce::jlimit (0.0, 1.0, e->getDoubleAttribute ("width", 0.5));
+            pl.travel = (nsr::Travel) juce::jlimit (0, 4, e->getIntAttribute ("travel"));
+            pl.depth = (float) juce::jlimit (0.0, 1.0, e->getDoubleAttribute ("depth"));
+            pl.bars = (float) juce::jlimit (0.125, 16.0, e->getDoubleAttribute ("bars", 1.0));
+            pl.phase = (float) juce::jlimit (0.0, 1.0, e->getDoubleAttribute ("phase"));
+        }
+        stereoChanged();
+    }
+    version.fetch_add (1);
 }
 
 juce::AudioProcessorEditor* MjqProcessor::createEditor() { return new MjqEditor (*this); }
