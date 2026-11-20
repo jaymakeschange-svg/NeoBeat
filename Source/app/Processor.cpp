@@ -1271,6 +1271,28 @@ void MjqProcessor::stereoChanged()
     next->stage = stage;
     next->places = places;
     std::atomic_store (&stereoState, std::shared_ptr<const StereoState> (next));
+
+    // and the same places, mapped to chops, for the player. The order has to match the one the
+    // Stereoroom builds its nodes in, or a chop is placed where its neighbour was put.
+    auto pl = std::make_shared<bc::LoopPlacing>();
+    pl->places = places;
+    int stride = 1;
+    for (int layer = 0; layer < loops.numLayers; ++layer)
+        stride = std::max (stride, (int) loops.layers[(size_t) layer].hits.size());
+    pl->stride = stride;
+    pl->index.assign ((size_t) bc::kLoopLayers * (size_t) stride, -1);
+
+    int node = 0;
+    for (int layer = 0; layer < loops.numLayers; ++layer)
+    {
+        const auto& L = loops.layers[(size_t) layer];
+        for (int h = 0; h < (int) L.hits.size(); ++h)
+        {
+            if (! L.hits[(size_t) h].sound) continue;
+            pl->index[(size_t) layer * (size_t) stride + (size_t) h] = node++;
+        }
+    }
+    loopPlayer.setPlacing (pl);
     stateChanged();
 }
 

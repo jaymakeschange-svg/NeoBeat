@@ -102,6 +102,14 @@ target_include_directories (test_endtoend PRIVATE Source)
 target_compile_definitions (test_endtoend PRIVATE ${MIDIJAQ_DEFINITIONS})
 target_link_libraries (test_endtoend PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
 
+# Per-chop placement, listened to rather than looked at.
+juce_add_console_app (test_chops PRODUCT_NAME "test_chops")
+target_sources (test_chops PRIVATE tools/test_chops.cpp ${MIDIJAQ_APP_SOURCES})
+target_include_directories (test_chops PRIVATE Source)
+target_compile_definitions (test_chops PRIVATE ${MIDIJAQ_DEFINITIONS})
+target_link_libraries (test_chops PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+
+
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
     foreach (tool HostTest Snapshot)
