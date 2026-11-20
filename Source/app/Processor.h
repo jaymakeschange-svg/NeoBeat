@@ -7,18 +7,12 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "neobeat/shared/rooms/Player.h"
 #include "neobeat/shared/rooms/Session.h"
+#include "neobeat/shared/rooms/Rooms.h"
 #include "neobeat/shared/rooms/Kit.h"
 #include "neobeat/shared/rooms/Loops.h"
 #include "neobeat/shared/rooms/Keys.h"
 #include "../neobeat/shared/LearnerStore.h"
 #include <deque>
-
-// A pool sound in the project's state, and back (KitProc.cpp)
-namespace bcxml
-{
-std::unique_ptr<juce::XmlElement> sound (const bc::PoolItem& it);
-std::shared_ptr<bc::PoolItem> sound (const juce::XmlElement& e, double maxSeconds = 30.0);
-}
 
 // The input recorder: the audio thread writes into chunks the message thread allocates ahead of it.
 class Recorder
@@ -107,7 +101,7 @@ private:
     bool pendingFree = false;
 };
 
-class BcProcessor final : public juce::AudioProcessor, public juce::ChangeBroadcaster, private juce::AsyncUpdater, private juce::Timer
+class BcProcessor final : public juce::AudioProcessor, public bc::Rooms, public juce::ChangeBroadcaster, private juce::AsyncUpdater, private juce::Timer
 {
 public:
     BcProcessor();
@@ -134,10 +128,7 @@ public:
 
     // ---- for the editor (message thread)
     juce::AudioProcessorValueTreeState apvts;
-    bc::Session session;
-    bc::Preview preview;
     Recorder recorder;
-    juce::AudioFormatManager formats;
 
     static bool isAudioFile (const juce::File& f);
     int addPaths (const juce::StringArray& paths);              // files or folders (searched for audio files); returns how many were new
@@ -167,98 +158,8 @@ public:
     int openFile = -1, openPart = 0;
     void stateChanged() { stateDirty = true; }
 
-    static bool writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r, double sr, int bits, std::string& err);
-
-    // ---- the Kit room: a NeoBeat kit out of the one-shots (message thread)
-    bc::KitModel kit;
-    bc::KitPlayer kitPlayer;
-    void kitGather (bool allFiles);                              // the open file's one-shots, or every file's, into the pool
-    int kitAddFolder (const juce::File& folder);                 // a folder of one-shots into the pool; how many
-    void kitClearPool();                                         // Clear all: the pool empties (sounds still in lanes stay)
-    void kitClearLanes();                                        // every lane that is not locked loses its sounds
-    void kitChoose();                                            // a sound on every lane that is not locked
-    void kitShuffle();                                           // another kit out of the same pool
-    void kitRandom (int lane = 0);                               // RANDOM: fresh sounds dealt with no repeats, no ranking (lane: the one the message counts)
-    bool kitAnyLane = false;                                     // RANDOM ignores the lanes' roles
-    void kitAssign (int lane, int layer, int item, bool teach);  // teach: you put it there, so that is what it is
-    void kitNext (int lane, int dir);                            // the next (or last) best sound for a lane
-    void kitRate (int item, float stars);
-    float kitRating (int item);
-    void kitChanged (int lane = -1);                             // a lane changed (-1: all of them): the player and the project hear of it
-    void kitSetPattern (int index, bool takeTempo = false);       // takeTempo: the kit takes the pattern's own tempo and swing
-    void kitMark();                                              // a change is complete: it can be undone from here
-    void kitUndo(); void kitRedo();
-    bool kitCanUndo() const noexcept { return ! kitUndoStack.empty(); }
-    bool kitCanRedo() const noexcept { return ! kitRedoStack.empty(); }
-    void kitPlayItem (int item);                                 // a pool sound as it is
-    void kitPlayLane (int lane) { kitPlayer.hit (lane); }
-    bool kitSaveNjq (const juce::File& file, juce::String& error);
-    std::vector<int> kitCandidates (int lane) { return kit.candidates (lane, nbkstore::learner()); }
-    std::shared_ptr<const bc::KitSound> kitSound (int lane) const { return lane >= 0 && lane < bc::kLanes ? laneSounds[(size_t) lane] : nullptr; }
-    juce::String kitMessage;
-    int kitVersion = 0;                                          // changes with the kit (the room repaints)
-
-    // ---- LOOPS: the light sample sequencer (message thread). The pool is the Kit room's.
-    bc::LoopSet loops;
-    bc::LoopPlayer loopPlayer;
-    juce::String loopsMessage;
-    int loopsVersion = 0;
-    int loopsAddLayer();                                         // a new layer (from the whole pool), rolled; its index, or -1 (8 already)
-    void loopsRemoveLayer (int layer);
-    void loopsRoll (int layer, bool newSeed = true);             // layer -1: every layer (ROLL ALL); newSeed false: the same roll, new settings
-    bool loopsRerollHit (int layer, int hit);
-    void loopsChanged();                                         // anything changed: the player and the project hear of it
-    void loopsClearAll();                                        // Clear all: every layer empties, back to one
-    void loopsMark();                                            // a change is complete: undoable from here
-    void loopsUndo(); void loopsRedo();
-    bool loopsCanUndo() const noexcept { return ! loopsUndoStack.empty(); }
-    bool loopsCanRedo() const noexcept { return ! loopsRedoStack.empty(); }
-    void loopsPlayHit (int layer, int hit);                      // one chop, as it plays in the loop
-    std::vector<std::string> loopsSources() const;               // the recordings and folders the pool holds sounds from
-    bool loopsExportAudio (const juce::File& dir, bool stems, juce::String& error);   // WAV loops of the mix (and each layer)
-    bool loopsExportMidi (const juce::File& file, juce::String& error);
-    bool loopsSaveNjq (const juce::File& file, juce::String& error);                  // for NeoBeat: the chops as lanes, the loop as a pattern
-    bool loopsBounce (juce::String& error);                      // the loop as one new sound in the pool
-    double loopsRate() const noexcept { return hostRate > 0 ? hostRate : 48000.0; }
-
-    // ---- KEYS: sounds made into an instrument for MidiJaQ (message thread)
-    bc::Instrument keys;
-    bc::KeysPlayer keysPlayer;
-    bc::LoopSource keysSource;                                   // where its sounds come from (in the pool)
-    std::set<std::shared_ptr<const bc::PoolItem>> keysLeftOut;   // sounds LEAVE OUT took out (until the source or the pool changes)
-    juce::MidiKeyboardState keyboard;                            // the on-screen keys
-    std::atomic<int> keysChord { 0 };                            // the on-screen and MIDI keys play chords (0: single notes)
-    std::atomic<int> midiTarget { 2 };                           // where the keys go: 2 LOOPS, 3 KEYS (the last of the two shown)
-    juce::String keysMessage;
-    int keysVersion = 0;
-    std::vector<std::shared_ptr<const bc::PoolItem>> keysSounds() const;
-    void keysBuild();                                            // the instrument from its source's sounds, in its mode
-    void keysChanged();
-    void keysClearAll();                                         // Clear all: every zone goes, the instrument empties
-    void keysMark();
-    void keysUndo(); void keysRedo();
-    bool keysCanUndo() const noexcept { return ! keysUndoStack.empty(); }
-    bool keysCanRedo() const noexcept { return ! keysRedoStack.empty(); }
-    bool keysSaveNjq (const juce::File& file, juce::String& error);
-    bool keysOpenNjq (const juce::File& file, juce::String& error);
-    static int numChords();
-    static const char* chordName (int i);
 
 private:
-    std::unique_ptr<juce::XmlElement> loopsToXml();
-    void loopsFromXml (const juce::XmlElement&);
-    std::vector<bc::LoopSet> loopsUndoStack, loopsRedoStack;
-    bc::LoopSet loopsSaved;
-    std::deque<std::pair<juce::uint32, std::shared_ptr<const bc::LoopSnapshot>>> loopKeep;   // never freed on the audio thread
-    std::atomic<double> hostBpm { 0.0 };
-    std::unique_ptr<juce::XmlElement> loopsXmlCache; int loopsXmlVersion = -1;
-    std::unique_ptr<juce::XmlElement> keysToXml();
-    void keysFromXml (const juce::XmlElement&);
-    std::vector<bc::Instrument> keysUndoStack, keysRedoStack;
-    bc::Instrument keysSaved;
-    std::deque<std::pair<juce::uint32, std::shared_ptr<const bc::Instrument>>> keysKeep;
-    std::unique_ptr<juce::XmlElement> keysXmlCache; int keysXmlVersion = -1;
-    std::atomic<int> chordRoot { 0 }, chordScale { 3 };         // "In key" chords follow LOOPS' key
 
 private:
     void handleAsyncUpdate() override;
@@ -267,26 +168,15 @@ private:
     void applyState (const juce::XmlElement& root);
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
 
-    void kitTakeGathered();
-    std::unique_ptr<juce::XmlElement> kitToXml();
-    void kitFromXml (const juce::XmlElement&);
-    std::array<std::shared_ptr<const bc::KitSound>, bc::kLanes> laneSounds {};
-    std::vector<std::shared_ptr<const bc::KitSound>> kitKeep;   // never freed on the audio thread
-    std::unique_ptr<juce::XmlElement> kitXmlCache; int kitXmlVersion = -1;
-    using KitLanes = std::array<bc::KitLane, bc::kLanes>;
-    KitLanes kitSaved {};
-    std::vector<KitLanes> kitUndoStack, kitRedoStack;
 
     std::atomic<float>* level = nullptr;
     std::atomic<float>* thru = nullptr;
-    double hostRate = 48000.0;
     std::vector<float> scratch;                                  // a second channel for a mono output
     const bc::Doc* playDoc = nullptr;
     int64_t playOffset = 0;
     juce::CriticalSection stateLock;
     juce::MemoryBlock stateCache;
     std::unique_ptr<juce::XmlElement> pendingState;
-    bool stateDirty = true;
     int ticks = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BcProcessor)
 };

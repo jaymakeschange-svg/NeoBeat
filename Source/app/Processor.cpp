@@ -319,7 +319,7 @@ juce::File BcProcessor::stopRecording()
 
 // ---------------------------------------------------------------- writing
 
-bool BcProcessor::writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r, double sr, int bits, std::string& err)
+bool bc::Rooms::writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r, double sr, int bits, std::string& err)
 {
     if (l.empty() || sr <= 0) { err = "nothing to write"; return false; }
     // written beside the target and moved into place, so a half-written file never has the real name

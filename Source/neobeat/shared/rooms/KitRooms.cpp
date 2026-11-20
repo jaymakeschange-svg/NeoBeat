@@ -1,5 +1,5 @@
 // Batchcut 2.0 - the Kit room's side of the processor: the pool, the lanes, the audition, the .NJQ file.
-#include "Processor.h"
+#include "Rooms.h"
 #ifndef BATCHCUT_VERSION
  #define BATCHCUT_VERSION "3.0.0"
 #endif
@@ -59,13 +59,13 @@ std::shared_ptr<bc::PoolItem> bcxml::sound (const juce::XmlElement& ie, double m
     return it;
 }
 
-void BcProcessor::kitGather (bool allFiles)
+void bc::Rooms::kitGather (bool allFiles)
 {
     kitMessage = "Gathering the one-shots...";
     session.gather (allFiles);
 }
 
-void BcProcessor::kitTakeGathered()
+void bc::Rooms::kitTakeGathered()
 {
     auto clips = session.takeGathered();
     if (clips.empty()) return;
@@ -83,7 +83,7 @@ void BcProcessor::kitTakeGathered()
     ++kitVersion; stateDirty = true;
 }
 
-int BcProcessor::kitAddFolder (const juce::File& folder)
+int bc::Rooms::kitAddFolder (const juce::File& folder)
 {
     if (! folder.isDirectory()) return 0;
     auto found = folder.findChildFiles (juce::File::findFiles, true, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
@@ -113,7 +113,7 @@ int BcProcessor::kitAddFolder (const juce::File& folder)
     return added;
 }
 
-void BcProcessor::kitClearPool()
+void bc::Rooms::kitClearPool()
 {
     // what the lanes use stays; the rest goes
     std::vector<std::shared_ptr<bc::PoolItem>> keep; std::vector<int> map (kit.pool.size(), -1);
@@ -133,7 +133,7 @@ void BcProcessor::kitClearPool()
     kitChanged();
 }
 
-void BcProcessor::kitClearLanes()
+void bc::Rooms::kitClearLanes()
 {
     const int n = kit.clearLanes();
     int locked = 0; for (const auto& ln : kit.lanes) locked += ln.locked && ! ln.empty() ? 1 : 0;
@@ -142,7 +142,7 @@ void BcProcessor::kitClearLanes()
     kitChanged(); kitMark();
 }
 
-void BcProcessor::kitRandom (int messageLane)
+void bc::Rooms::kitRandom (int messageLane)
 {
     if (kit.pool.empty()) { kitMessage = "The pool is empty: gather one-shots or add a folder first"; return; }
     const int n = kit.randomize (kitAnyLane, (uint32_t) juce::Random::getSystemRandom().nextInt());
@@ -155,7 +155,7 @@ void BcProcessor::kitRandom (int messageLane)
     kitChanged(); kitMark();
 }
 
-void BcProcessor::kitChoose()
+void bc::Rooms::kitChoose()
 {
     kit.choose (nbkstore::learner());
     int n = 0; for (const auto& ln : kit.lanes) n += ln.empty() ? 0 : 1;
@@ -163,14 +163,14 @@ void BcProcessor::kitChoose()
     kitChanged(); kitMark();
 }
 
-void BcProcessor::kitShuffle()
+void bc::Rooms::kitShuffle()
 {
     kit.shuffle (nbkstore::learner(), (uint32_t) juce::Random::getSystemRandom().nextInt());
     kitMessage = kit.pool.empty() ? juce::String ("The pool is empty: gather one-shots or add a folder first") : juce::String ("Shuffled: locked lanes kept theirs");
     kitChanged(); kitMark();
 }
 
-void BcProcessor::kitAssign (int lane, int layer, int item, bool teach)
+void bc::Rooms::kitAssign (int lane, int layer, int item, bool teach)
 {
     if (lane < 0 || lane >= bc::kLanes || layer < 0 || layer >= bc::kLayers) return;
     auto& ly = kit.lanes[(size_t) lane].layers[(size_t) layer];
@@ -187,7 +187,7 @@ void BcProcessor::kitAssign (int lane, int layer, int item, bool teach)
     kitChanged (lane); kitMark();
 }
 
-void BcProcessor::kitNext (int lane, int dir)
+void bc::Rooms::kitNext (int lane, int dir)
 {
     if (lane < 0 || lane >= bc::kLanes) return;
     const auto c = kitCandidates (lane);
@@ -199,7 +199,7 @@ void BcProcessor::kitNext (int lane, int dir)
     kitPlayLane (lane);
 }
 
-void BcProcessor::kitRate (int item, float stars)
+void bc::Rooms::kitRate (int item, float stars)
 {
     if (item < 0 || item >= (int) kit.pool.size()) return;
     auto& it = *kit.pool[(size_t) item];
@@ -207,12 +207,12 @@ void BcProcessor::kitRate (int item, float stars)
     nbkstore::save();
     ++kitVersion;
 }
-float BcProcessor::kitRating (int item)
+float bc::Rooms::kitRating (int item)
 {
     return item >= 0 && item < (int) kit.pool.size() ? nbkstore::learner().ratingOf (kit.pool[(size_t) item]->x) : 0.0f;
 }
 
-void BcProcessor::kitChanged (int lane)
+void bc::Rooms::kitChanged (int lane)
 {
     for (int l = 0; l < bc::kLanes; ++l)
     {
@@ -229,27 +229,27 @@ void BcProcessor::kitChanged (int lane)
     ++kitVersion; stateDirty = true;
 }
 
-void BcProcessor::kitMark()
+void bc::Rooms::kitMark()
 {
     if (kit.lanes == kitSaved) return;
     kitUndoStack.push_back (kitSaved); kitRedoStack.clear(); kitSaved = kit.lanes;
     if (kitUndoStack.size() > 100) kitUndoStack.erase (kitUndoStack.begin());
 }
-void BcProcessor::kitUndo()
+void bc::Rooms::kitUndo()
 {
     kitMark();
     if (kitUndoStack.empty()) return;
     kitRedoStack.push_back (kit.lanes); kit.lanes = kitSaved = kitUndoStack.back(); kitUndoStack.pop_back();
     kitChanged();
 }
-void BcProcessor::kitRedo()
+void bc::Rooms::kitRedo()
 {
     if (kitRedoStack.empty()) return;
     kitUndoStack.push_back (kit.lanes); kit.lanes = kitSaved = kitRedoStack.back(); kitRedoStack.pop_back();
     kitChanged();
 }
 
-void BcProcessor::kitSetPattern (int index, bool takeTempo)
+void bc::Rooms::kitSetPattern (int index, bool takeTempo)
 {
     kit.pattern = juce::jlimit (0, nb::numPatterns() - 1, index);
     const auto p = nb::patternPreset (kit.pattern);
@@ -259,14 +259,14 @@ void BcProcessor::kitSetPattern (int index, bool takeTempo)
     ++kitVersion; stateDirty = true;
 }
 
-void BcProcessor::kitPlayItem (int item)
+void bc::Rooms::kitPlayItem (int item)
 {
     if (item < 0 || item >= (int) kit.pool.size()) return;
     const auto& it = *kit.pool[(size_t) item];
     preview.playClip (it.l, it.r, it.sr);
 }
 
-bool BcProcessor::kitSaveNjq (const juce::File& file, juce::String& error)
+bool bc::Rooms::kitSaveNjq (const juce::File& file, juce::String& error)
 {
     auto k = std::make_unique<njq::Kit>();
     k->name = juce::String (kit.name); k->madeWith = "Batchcut " BATCHCUT_VERSION;
@@ -298,7 +298,7 @@ bool BcProcessor::kitSaveNjq (const juce::File& file, juce::String& error)
 // ---------------------------------------------------------------- the kit in the project
 // The lanes' sounds travel with the project (lossless, a few megabytes at most); the rest of the pool is
 // gathered again with one click.
-std::unique_ptr<juce::XmlElement> BcProcessor::kitToXml()
+std::unique_ptr<juce::XmlElement> bc::Rooms::kitToXml()
 {
     auto root = std::make_unique<juce::XmlElement> ("KIT");
     root->setAttribute ("name", juce::String (kit.name)); root->setAttribute ("bpm", kit.bpm); root->setAttribute ("swing", (double) kit.swing); root->setAttribute ("pattern", kit.pattern);
@@ -322,7 +322,7 @@ std::unique_ptr<juce::XmlElement> BcProcessor::kitToXml()
     return root;
 }
 
-void BcProcessor::kitFromXml (const juce::XmlElement& root)
+void bc::Rooms::kitFromXml (const juce::XmlElement& root)
 {
     kit = bc::KitModel();
     kit.name = root.getStringAttribute ("name", "My kit").toStdString();

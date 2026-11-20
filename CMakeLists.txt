@@ -43,11 +43,11 @@ set (BATCHCUT_APP_SOURCES
     Source/app/Editor.cpp
     Source/app/Display.cpp
     Source/app/Panels.cpp
-    Source/app/KitProc.cpp
+    Source/neobeat/shared/rooms/KitRooms.cpp
     Source/app/KitRoom.cpp
-    Source/app/LoopsProc.cpp
+    Source/neobeat/shared/rooms/LoopsRooms.cpp
     Source/app/LoopsRoom.cpp
-    Source/app/KeysProc.cpp
+    Source/neobeat/shared/rooms/KeysRooms.cpp
     Source/app/KeysRoom.cpp)
 
 set (BATCHCUT_DEFINITIONS

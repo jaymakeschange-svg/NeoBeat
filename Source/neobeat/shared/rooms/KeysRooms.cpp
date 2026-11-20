@@ -1,8 +1,8 @@
 // Batchcut 3.0 - KEYS on the processor's side: the instrument built from the pool's sounds, undo, the player,
 // chords on the keys, the .NJQ instrument for MidiJaQ (saved and opened again), and KEYS in the project.
-#include "Processor.h"
-#include "../neobeat/shared/NjqInstrument.h"
-#include "../neobeat/gen/Scale.h"
+#include "Rooms.h"
+#include "../NjqInstrument.h"
+#include "../../gen/Scale.h"
 #include <set>
 #ifndef BATCHCUT_VERSION
  #define BATCHCUT_VERSION "3.0.0"
@@ -22,17 +22,17 @@ const std::vector<Chord>& chords()
 }
 }
 
-int BcProcessor::numChords() { return (int) chords().size(); }
-const char* BcProcessor::chordName (int i) { return chords()[(size_t) juce::jlimit (0, numChords() - 1, i)].name; }
+int bc::Rooms::numChords() { return (int) chords().size(); }
+const char* bc::Rooms::chordName (int i) { return chords()[(size_t) juce::jlimit (0, numChords() - 1, i)].name; }
 
-std::vector<std::shared_ptr<const bc::PoolItem>> BcProcessor::keysSounds() const
+std::vector<std::shared_ptr<const bc::PoolItem>> bc::Rooms::keysSounds() const
 {
     std::vector<std::shared_ptr<const bc::PoolItem>> out;
     for (const auto& it : kit.pool) if (it && keysSource.takes (*it) && keysLeftOut.count (it) == 0) out.push_back (it);
     return out;
 }
 
-void BcProcessor::keysBuild()
+void bc::Rooms::keysBuild()
 {
     if (kit.pool.empty()) { keysMessage = "The pool is empty: THIS FILE, ALL FILES or FOLDER brings sounds in"; ++keysVersion; return; }
     const auto sounds = keysSounds();
@@ -54,7 +54,7 @@ void BcProcessor::keysBuild()
     keysChanged(); keysMark();
 }
 
-void BcProcessor::keysChanged()
+void bc::Rooms::keysChanged()
 {
     auto ins = std::make_shared<const bc::Instrument> (keys);
     keysPlayer.setInstrument (ins);
@@ -64,27 +64,27 @@ void BcProcessor::keysChanged()
 
 // Clear all: every zone goes, so the instrument is empty and plays nothing. How it plays - tuned or chopped,
 // how it sustains, its attack and release - is not content, so it stays. One Undo brings the zones back.
-void BcProcessor::keysClearAll()
+void bc::Rooms::keysClearAll()
 {
     keys.zones.clear();
     keysChanged();
     keysMark();
 }
 
-void BcProcessor::keysMark()
+void bc::Rooms::keysMark()
 {
     if (keys == keysSaved) return;
     keysUndoStack.push_back (keysSaved); keysRedoStack.clear(); keysSaved = keys;
     if (keysUndoStack.size() > 60) keysUndoStack.erase (keysUndoStack.begin());
 }
-void BcProcessor::keysUndo()
+void bc::Rooms::keysUndo()
 {
     keysMark();
     if (keysUndoStack.empty()) return;
     keysRedoStack.push_back (keys); keys = keysSaved = keysUndoStack.back(); keysUndoStack.pop_back();
     keysChanged();
 }
-void BcProcessor::keysRedo()
+void bc::Rooms::keysRedo()
 {
     if (keysRedoStack.empty()) return;
     keysUndoStack.push_back (keys); keys = keysSaved = keysRedoStack.back(); keysRedoStack.pop_back();
@@ -92,7 +92,7 @@ void BcProcessor::keysRedo()
 }
 
 // ---------------------------------------------------------------- the .NJQ instrument
-bool BcProcessor::keysSaveNjq (const juce::File& file, juce::String& error)
+bool bc::Rooms::keysSaveNjq (const juce::File& file, juce::String& error)
 {
     if (keys.zones.empty()) { error = "The instrument has no sounds yet: BUILD it first."; return false; }
     njq::InstrumentFile f;
@@ -114,7 +114,7 @@ bool BcProcessor::keysSaveNjq (const juce::File& file, juce::String& error)
     return true;
 }
 
-bool BcProcessor::keysOpenNjq (const juce::File& file, juce::String& error)
+bool bc::Rooms::keysOpenNjq (const juce::File& file, juce::String& error)
 {
     njq::InstrumentFile f;
     if (! njq::loadInstrument (file, f, error)) return false;
@@ -137,7 +137,7 @@ bool BcProcessor::keysOpenNjq (const juce::File& file, juce::String& error)
 }
 
 // ---------------------------------------------------------------- KEYS in the project
-std::unique_ptr<juce::XmlElement> BcProcessor::keysToXml()
+std::unique_ptr<juce::XmlElement> bc::Rooms::keysToXml()
 {
     auto root = std::make_unique<juce::XmlElement> ("KEYS");
     root->setAttribute ("name", juce::String (keys.name)); root->setAttribute ("mode", (int) keys.mode); root->setAttribute ("sustain", (int) keys.sustain);
@@ -160,7 +160,7 @@ std::unique_ptr<juce::XmlElement> BcProcessor::keysToXml()
     return root;
 }
 
-void BcProcessor::keysFromXml (const juce::XmlElement& root)
+void bc::Rooms::keysFromXml (const juce::XmlElement& root)
 {
     keys = bc::Instrument(); keysLeftOut.clear();
     keys.name = root.getStringAttribute ("name", "My keys").toStdString();

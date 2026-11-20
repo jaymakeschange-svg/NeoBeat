@@ -1,6 +1,6 @@
 // Batchcut 3.0 - LOOPS on the processor's side: the layers, rolling them, undo, the player, export (WAV,
 // stems, MIDI, .NJQ for NeoBeat), bouncing to the pool, and the loop in the project.
-#include "Processor.h"
+#include "Rooms.h"
 #include <set>
 #ifndef BATCHCUT_VERSION
  #define BATCHCUT_VERSION "3.0.0"
@@ -77,7 +77,7 @@ void laneSample (const LaneCombo& c, std::vector<float>& l, std::vector<float>& 
 } // namespace
 
 // ---------------------------------------------------------------- layers and rolls
-int BcProcessor::loopsAddLayer()
+int bc::Rooms::loopsAddLayer()
 {
     if (loops.numLayers >= bc::kLoopLayers) { loopsMessage = "8 layers is the most a loop has"; return -1; }
     const int i = loops.numLayers++;
@@ -94,7 +94,7 @@ int BcProcessor::loopsAddLayer()
     return i;
 }
 
-void BcProcessor::loopsRemoveLayer (int layer)
+void bc::Rooms::loopsRemoveLayer (int layer)
 {
     if (layer < 0 || layer >= loops.numLayers) return;
     for (int i = layer; i + 1 < loops.numLayers; ++i) loops.layers[(size_t) i] = loops.layers[(size_t) i + 1];
@@ -104,7 +104,7 @@ void BcProcessor::loopsRemoveLayer (int layer)
     loopsChanged(); loopsMark();
 }
 
-void BcProcessor::loopsRoll (int layer, bool newSeed)
+void bc::Rooms::loopsRoll (int layer, bool newSeed)
 {
     if (kit.pool.empty()) { loopsMessage = "The pool is empty: THIS FILE, ALL FILES or FOLDER brings sounds in"; loopsChanged(); return; }
     int rolled = 0, chops = 0; juce::String empty;
@@ -127,7 +127,7 @@ void BcProcessor::loopsRoll (int layer, bool newSeed)
     loopsChanged(); loopsMark();
 }
 
-bool BcProcessor::loopsRerollHit (int layer, int hit)
+bool bc::Rooms::loopsRerollHit (int layer, int hit)
 {
     if (layer < 0 || layer >= loops.numLayers) return false;
     const bool ok = bc::rerollHit (loops.layers[(size_t) layer], hit, kit.pool, &nbkstore::learner(), freshSeed());
@@ -135,7 +135,7 @@ bool BcProcessor::loopsRerollHit (int layer, int hit)
     return ok;
 }
 
-void BcProcessor::loopsChanged()
+void bc::Rooms::loopsChanged()
 {
     for (int i = 0; i < loops.numLayers; ++i) bc::tidyLayer (loops.layers[(size_t) i]);
     auto snap = bc::makeSnapshot (loops);
@@ -146,7 +146,7 @@ void BcProcessor::loopsChanged()
 
 // Clear all: every layer empties and the room goes back to one. What the loop is in - its tempo, its swing,
 // its key and its name - is not content, so it stays. One Undo brings the hits back.
-void BcProcessor::loopsClearAll()
+void bc::Rooms::loopsClearAll()
 {
     for (auto& layer : loops.layers)
     {
@@ -164,27 +164,27 @@ void BcProcessor::loopsClearAll()
     loopsMark();
 }
 
-void BcProcessor::loopsMark()
+void bc::Rooms::loopsMark()
 {
     if (loops == loopsSaved) return;
     loopsUndoStack.push_back (loopsSaved); loopsRedoStack.clear(); loopsSaved = loops;
     if (loopsUndoStack.size() > 100) loopsUndoStack.erase (loopsUndoStack.begin());
 }
-void BcProcessor::loopsUndo()
+void bc::Rooms::loopsUndo()
 {
     loopsMark();
     if (loopsUndoStack.empty()) return;
     loopsRedoStack.push_back (loops); loops = loopsSaved = loopsUndoStack.back(); loopsUndoStack.pop_back();
     loopsChanged();
 }
-void BcProcessor::loopsRedo()
+void bc::Rooms::loopsRedo()
 {
     if (loopsRedoStack.empty()) return;
     loopsUndoStack.push_back (loops); loops = loopsSaved = loopsRedoStack.back(); loopsRedoStack.pop_back();
     loopsChanged();
 }
 
-void BcProcessor::loopsPlayHit (int layer, int hit)
+void bc::Rooms::loopsPlayHit (int layer, int hit)
 {
     if (layer < 0 || layer >= loops.numLayers) return;
     const auto& H = loops.layers[(size_t) layer].hits;
@@ -194,7 +194,7 @@ void BcProcessor::loopsPlayHit (int layer, int hit)
     loopPlayer.audition (h.sound.get(), h.semis, bc::hitGain (h) * std::pow (10.0f, loops.layers[(size_t) layer].levelDb / 20.0f));
 }
 
-std::vector<std::string> BcProcessor::loopsSources() const
+std::vector<std::string> bc::Rooms::loopsSources() const
 {
     std::set<std::string> s;
     for (const auto& it : kit.pool) if (it && ! it->source.empty()) s.insert (it->source);
@@ -202,7 +202,7 @@ std::vector<std::string> BcProcessor::loopsSources() const
 }
 
 // ---------------------------------------------------------------- export
-bool BcProcessor::loopsExportAudio (const juce::File& dir, bool stems, juce::String& error)
+bool bc::Rooms::loopsExportAudio (const juce::File& dir, bool stems, juce::String& error)
 {
     bool any = false; for (int i = 0; i < loops.numLayers; ++i) any = any || ! loops.layers[(size_t) i].hits.empty();
     if (! any) { error = "The loop has no chops yet: ROLL a layer first."; return false; }
@@ -234,7 +234,7 @@ bool BcProcessor::loopsExportAudio (const juce::File& dir, bool stems, juce::Str
     return true;
 }
 
-bool BcProcessor::loopsExportMidi (const juce::File& file, juce::String& error)
+bool bc::Rooms::loopsExportMidi (const juce::File& file, juce::String& error)
 {
     const auto m = laneMap (loops);
     if (m.lanes.empty()) { error = "The loop has no chops yet."; return false; }
@@ -283,7 +283,7 @@ bool BcProcessor::loopsExportMidi (const juce::File& file, juce::String& error)
     return true;
 }
 
-bool BcProcessor::loopsSaveNjq (const juce::File& file, juce::String& error)
+bool bc::Rooms::loopsSaveNjq (const juce::File& file, juce::String& error)
 {
     const auto m = laneMap (loops);
     if (m.lanes.empty()) { error = "The loop has no chops yet: ROLL a layer first."; return false; }
@@ -349,7 +349,7 @@ bool BcProcessor::loopsSaveNjq (const juce::File& file, juce::String& error)
     return true;
 }
 
-bool BcProcessor::loopsBounce (juce::String& error)
+bool bc::Rooms::loopsBounce (juce::String& error)
 {
     bool any = false; for (int i = 0; i < loops.numLayers; ++i) any = any || ! loops.layers[(size_t) i].hits.empty();
     if (! any) { error = "The loop has no chops yet."; return false; }
@@ -370,7 +370,7 @@ bool BcProcessor::loopsBounce (juce::String& error)
 }
 
 // ---------------------------------------------------------------- the loop in the project
-std::unique_ptr<juce::XmlElement> BcProcessor::loopsToXml()
+std::unique_ptr<juce::XmlElement> bc::Rooms::loopsToXml()
 {
     auto root = std::make_unique<juce::XmlElement> ("LOOPS");
     root->setAttribute ("name", juce::String (loops.name)); root->setAttribute ("bpm", loops.bpm); root->setAttribute ("swing", (double) loops.swing);
@@ -399,7 +399,7 @@ std::unique_ptr<juce::XmlElement> BcProcessor::loopsToXml()
     return root;
 }
 
-void BcProcessor::loopsFromXml (const juce::XmlElement& root)
+void bc::Rooms::loopsFromXml (const juce::XmlElement& root)
 {
     loops = bc::LoopSet();
     loops.name = root.getStringAttribute ("name", "My loop").toStdString();
