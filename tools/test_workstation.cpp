@@ -90,6 +90,30 @@ static double rms (const Out& o, int a, int b)
     for (int i = a; i < b; ++i) s += 0.5 * ((double) o.l[(size_t) i] * o.l[(size_t) i] + (double) o.r[(size_t) i] * o.r[(size_t) i]);
     return std::sqrt (s / std::max (1, b - a));
 }
+// one channel at a time. The rms above averages the two, which hides a channel that has
+// gone quiet behind a 3 dB dip and a channel that is climbing behind the other one's level.
+static double rmsCh (const std::vector<float>& v, int a, int b)
+{
+    double s = 0.0; b = std::min (b, (int) v.size());
+    for (int i = a; i < b; ++i) s += (double) v[(size_t) i] * v[(size_t) i];
+    return std::sqrt (s / std::max (1, b - a));
+}
+// + means the left is louder. A drum kit is not symmetrical, so this is for catching a
+// channel that has been dropped or left to accumulate, not for judging a mix.
+static double balanceDb (const Out& o)
+{
+    const int n = (int) o.l.size();
+    return 20.0 * std::log10 (std::max (1e-9, rmsCh (o.l, 0, n)) / std::max (1e-9, rmsCh (o.r, 0, n)));
+}
+// how much louder the second half is than the first. Steady playing should sit near zero;
+// a buffer that is never cleared climbs without ever tripping a peak check early on.
+static double growthDb (const Out& o)
+{
+    const int n = (int) o.l.size(), h = n / 2;
+    const double e = 0.5 * (rmsCh (o.l, 0, h) + rmsCh (o.r, 0, h));
+    const double l = 0.5 * (rmsCh (o.l, h, n) + rmsCh (o.r, h, n));
+    return 20.0 * std::log10 (std::max (1e-9, l) / std::max (1e-9, e));
+}
 static double diff (const Out& a, const Out& b)
 {
     double s = 0.0; const size_t n = std::min (a.l.size(), b.l.size());
@@ -134,6 +158,9 @@ int main (int argc, char** argv)
     Out base = play (*w, in, 4.0);
     CHECK (finite (base), "finite");
     CHECK (peak (base) > 0.05f && peak (base) < 1.0f, "audible and under full scale");
+    CHECK (std::fabs (balanceDb (base)) < 6.0, "both channels carry the kit");
+    CHECK (growthDb (base) < 3.0, "four bars in, it is not climbing");
+    std::printf ("     balance %+.1f dB, second half %+.1f dB against the first\n", balanceDb (base), growthDb (base));
     if (! outdir.empty()) writeWav (outdir + "/01_drum_map.wav", base);
     // where the first snare lands (for the timing checks)
     int snareStep = -1; for (int st = 0; st < in.scenes[0].length && snareStep < 0; ++st) if (in.scenes[0].steps[role::Snare][(size_t) st].vel > 0) snareStep = st;
