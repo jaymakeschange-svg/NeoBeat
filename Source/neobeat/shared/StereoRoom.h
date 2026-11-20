@@ -29,6 +29,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace nsr
 {
@@ -315,6 +316,107 @@ private:
     Glide angle, side, gain, sendAmt;
     float sr = 48000.0f, cut = 20000.0f, zl = 0.0f, zr = 0.0f;
     bool mono = false;
+};
+
+// ------------------------------------------------------------------ the room itself
+// What `Placement.send` is for. Distance is not mainly gain and dullness - those two alone just
+// sound like a quiet, muffled copy in the same spot. What tells the ear how far away something is
+// is how much of the room comes back with it: near the front you hear the sound, at the back you
+// hear the sound plus the room it is in. So the strip sends more of a far element here, and this
+// is the one place that send goes.
+//
+// A feedback delay network of four lines, mixed by a Hadamard matrix. The matrix is orthogonal, so
+// it redistributes energy without creating or destroying it: the decay is set by the loop gain
+// alone and the thing cannot run away. Four lines of coprime length so the early pattern does not
+// comb, a one-pole damper in each loop so the tail darkens as it dies the way a real room does,
+// and the lines paired across the output so what comes back is wide rather than a copy in the
+// middle.
+//
+// It takes the send in stereo rather than summing it. A chop on the left should have its room
+// arriving from the left - that is what makes a placed element sound placed rather than dry-left
+// with a wash behind it.
+class RoomVerb
+{
+public:
+    void prepare (double sampleRate) noexcept
+    {
+        sr = (float) std::max (8000.0, sampleRate);
+        // Coprime lengths, scaled from the rate. The ratios are the usual spread: nothing here is
+        // a multiple of anything else, so the four lines never line up and re-strike together.
+        static constexpr float seconds[kLines] = { 0.0297f, 0.0371f, 0.0411f, 0.0437f };
+        for (int i = 0; i < kLines; ++i)
+        {
+            const int n = std::max (16, (int) (seconds[i] * sr));
+            line[i].assign ((size_t) n, 0.0f);
+            write[i] = 0;
+            damp[i] = 0.0f;
+        }
+        set (0.45f, 1.4f, 4200.0f);
+    }
+
+    // size: how big the room reads, 0..1 (it shortens the lines rather than resampling them)
+    // seconds: how long the tail takes to fall 60 dB
+    // dampHz: where the tail starts losing its top
+    void set (float size, float seconds, float dampHz) noexcept
+    {
+        size = std::max (0.05f, std::min (1.0f, size));
+        for (int i = 0; i < kLines; ++i)
+            use[i] = std::max (16, (int) ((float) line[i].size() * size));
+
+        // The loop gain that gives the asked-for RT60 for this line's own length: a line of length
+        // L seconds goes round 1/L times a second, so g = 10^(-3L/T60).
+        const float t60 = std::max (0.05f, seconds);
+        for (int i = 0; i < kLines; ++i)
+        {
+            const float len = (float) use[i] / sr;
+            g[i] = std::pow (10.0f, -3.0f * len / t60);
+        }
+        const float f = std::max (200.0f, std::min (dampHz, 0.45f * sr));
+        a = 1.0f - std::exp (-6.283185307179586f * f / sr);
+    }
+
+    void clear() noexcept
+    {
+        for (int i = 0; i < kLines; ++i) { std::fill (line[i].begin(), line[i].end(), 0.0f); damp[i] = 0.0f; }
+    }
+
+    // `sendL/sendR` is what the strips put in; `outL/outR` is the mix, which this adds to.
+    void process (const float* sendL, const float* sendR, float* outL, float* outR, int n) noexcept
+    {
+        if (use[0] <= 0) return;
+        for (int i = 0; i < n; ++i)
+        {
+            float d[kLines];
+            for (int k = 0; k < kLines; ++k) d[k] = line[k][(size_t) write[k]];
+
+            // Hadamard, normalised: orthogonal, so the tail decays only by the loop gain above.
+            const float s0 = d[0] + d[1], s1 = d[0] - d[1], s2 = d[2] + d[3], s3 = d[2] - d[3];
+            float m[kLines] = { 0.5f * (s0 + s2), 0.5f * (s1 + s3), 0.5f * (s0 - s2), 0.5f * (s1 - s3) };
+
+            // the two input channels split across the lines, so left stays left-ish on the way back
+            const float il = sendL != nullptr ? sendL[i] : 0.0f;
+            const float ir = sendR != nullptr ? sendR[i] : 0.0f;
+            m[0] += il; m[2] += il;
+            m[1] += ir; m[3] += ir;
+
+            for (int k = 0; k < kLines; ++k)
+            {
+                damp[k] += a * (m[k] * g[k] - damp[k]);          // darkens as it circulates
+                line[k][(size_t) write[k]] = damp[k];
+                if (++write[k] >= use[k]) write[k] = 0;
+            }
+
+            outL[i] += 0.5f * (d[0] + d[2]);
+            outR[i] += 0.5f * (d[1] + d[3]);
+        }
+    }
+
+private:
+    static constexpr int kLines = 4;
+    std::vector<float> line[kLines];
+    int write[kLines] {}, use[kLines] {};
+    float damp[kLines] {}, g[kLines] {};
+    float sr = 48000.0f, a = 1.0f;
 };
 
 // ------------------------------------------------------------------ the safety net
