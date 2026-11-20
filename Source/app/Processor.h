@@ -4,12 +4,13 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <memory>
 
+#include "../neobeat/shared/rooms/Rooms.h"
 #include "../core/Inst.h"
 #include "../neobeat/dsp/LiveFx.h"
 #include "../core/Player.h"
 #include "../core/Session.h"
 
-class MjqProcessor final : public juce::AudioProcessor
+class MjqProcessor final : public juce::AudioProcessor, public bc::Rooms
 {
 public:
     MjqProcessor();
