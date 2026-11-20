@@ -17,6 +17,8 @@
 //   renderLoop  the loop as sound, its tails wrapped round to the start so the file loops without a click
 #pragma once
 
+#include "../StereoRoom.h"
+
 #include "Kit.h"
 #include "../../gen/Generators.h"
 #include "../../gen/Scale.h"
@@ -404,6 +406,7 @@ struct LoopEvent
 {
     double beat = 0.0, lenBeats = 0.25;   // in quarter notes, swung, inside the layer's own loop
     int layer = 0;
+    int hit = -1;                         // which chop of that layer, so each can be placed on its own
     const PoolItem* sound = nullptr;
     float semis = 0.0f, gain = 1.0f;      // gain: the hit's level, velocity and loudness match (the layer's own level apart)
     bool reverse = false;
@@ -446,8 +449,9 @@ inline std::shared_ptr<LoopSnapshot> makeSnapshot (const LoopSet& set)
         s->gainL[(size_t) i] = g * (pan > 0.0f ? 1.0f - pan : 1.0f); s->gainR[(size_t) i] = g * (pan < 0.0f ? 1.0f + pan : 1.0f);
         s->audible[(size_t) i] = set.audible (i);
         s->midiMode[(size_t) i] = L.midiMode;
-        for (const auto& h : L.hits)
+        for (int hitIndex = 0; hitIndex < (int) L.hits.size(); ++hitIndex)
         {
+            const auto& h = L.hits[(size_t) hitIndex];
             if (! h.sound || h.step < 0 || h.step >= L.steps()) continue;
             held[h.sound.get()] = h.sound;
             const double a = gen::swung (h.step, perBar, set.swing), b = gen::swung (h.step + std::max (1, h.len), perBar, set.swing);
@@ -455,7 +459,7 @@ inline std::shared_ptr<LoopSnapshot> makeSnapshot (const LoopSet& set)
             const double each = (gen::swung (h.step + 1, perBar, set.swing) - a) / (double) r;
             for (int k = 0; k < r; ++k)
             {
-                LoopEvent e; e.layer = i; e.sound = h.sound.get(); e.semis = h.semis; e.reverse = h.reverse;
+                LoopEvent e; e.layer = i; e.hit = hitIndex; e.sound = h.sound.get(); e.semis = h.semis; e.reverse = h.reverse;
                 e.beat = a + each * k;
                 e.lenBeats = r > 1 ? each : b - a;
                 // a ratchet rises to the written hit, as a drummer plays a roll
@@ -485,9 +489,28 @@ inline std::shared_ptr<LoopSnapshot> makeSnapshot (const LoopSet& set)
 struct LoopHost { bool valid = false, playing = false; double ppq = 0.0, bpm = 120.0; };
 struct LoopNote { int offset = 0, note = 60; float velocity = 0.8f; bool on = true; };
 
+// What the Stereoroom gives the player: where each chop stands, and how to find a chop's node.
+// Swapped in whole between blocks, so the audio thread never reads a half-written list.
+struct LoopPlacing
+{
+    std::vector<nsr::Place> places;
+    std::vector<int> index;              // layer * stride + hit -> node, or -1
+    int stride = 0;
+    int indexOf (int layer, int hit) const noexcept
+    {
+        if (layer < 0 || hit < 0 || stride <= 0) return -1;
+        const size_t at = (size_t) layer * (size_t) stride + (size_t) hit;
+        return at < index.size() ? index[at] : -1;
+    }
+};
+
 class LoopPlayer
 {
 public:
+    void setPlacing (std::shared_ptr<const LoopPlacing> p) { std::atomic_store (&placing, std::move (p)); }
+    // where the song is, taken from the host each block, so a travelling chop is placed where it
+    // actually is rather than where it was when the list was last written
+    double nowBeats = 0.0;
     static constexpr int kVoices = 64;
     void prepare (double sampleRate)
     {
@@ -508,6 +531,7 @@ public:
     void process (float* l, float* r, int n, const LoopHost& host, const LoopNote* notes = nullptr, int numNotes = 0) noexcept
     {
         if (auto s = std::atomic_exchange (&next, std::shared_ptr<const LoopSnapshot>())) held = std::move (s);
+        nowBeats = host.valid ? host.ppq : nowBeats + (double) n * host.bpm / (60.0 * sr);
         if (const auto* a = pendingSound.exchange (nullptr)) start (a, pendingSemis.load(), pendingGain.load(), 0, -1.0, false, -1);
         const LoopSnapshot* snap = held.get();
         const double bpm = host.valid && host.bpm > 1.0 ? host.bpm : (snap != nullptr ? snap->bpm : 120.0);
@@ -544,7 +568,18 @@ public:
     }
 
 private:
-    struct Voice { const PoolItem* s = nullptr; double pos = 0.0, inc = 1.0; float gl = 1.0f, gr = 1.0f, fade = 1.0f; int delay = 0, left = 0; bool reverse = false; int layer = -1; uint64_t order = 0; };
+    struct Voice
+    {
+        const PoolItem* s = nullptr; double pos = 0.0, inc = 1.0;
+        float gl = 1.0f, gr = 1.0f, fade = 1.0f;
+        int delay = 0, left = 0; bool reverse = false; int layer = -1; int hit = -1;
+        uint64_t order = 0;
+        // where this chop stands, when the Stereoroom has placed it. Each voice keeps its own
+        // filter state, so the dullness that carries distance is per chop rather than per layer.
+        bool placed = false;
+        nsr::Placement place;
+        float zl = 0.0f, zr = 0.0f;
+    };
     struct Trigger { bool on = false; int note = 60; double beat = 0.0; float semis = 0.0f; };
 
     void schedule (const LoopSnapshot& s, double a, double b, int offset, double beatsPerSample, bool byTrigger) noexcept
@@ -568,7 +603,7 @@ private:
                 for (; it != s.events.begin() + e && it->beat < hi; ++it)
                 {
                     const int off = offset + (int) std::lround ((base + it->beat - lo) / beatsPerSample);
-                    start (it->sound, it->semis + (byTrigger ? trig.semis : 0.0f), it->gain, off, it->lenBeats / beatsPerSample, it->reverse, i, &s);
+                    start (it->sound, it->semis + (byTrigger ? trig.semis : 0.0f), it->gain, off, it->lenBeats / beatsPerSample, it->reverse, i, &s, it->hit);
                 }
             }
         }
@@ -590,13 +625,27 @@ private:
         }
         else if (trig.on && nt.note == trig.note) trig.on = false;
     }
-    void start (const PoolItem* s, float semis, float gain, int offset, double lenSamples, bool reverse, int layer, const LoopSnapshot* snap = nullptr) noexcept
+    void start (const PoolItem* s, float semis, float gain, int offset, double lenSamples, bool reverse, int layer, const LoopSnapshot* snap = nullptr, int hit = -1) noexcept
     {
         if (s == nullptr || s->l.size() < 2) return;
         Voice* use = nullptr;
         for (auto& v : voices) if (v.s == nullptr) { use = &v; break; }
         if (use == nullptr) { use = &voices[0]; for (auto& v : voices) if (v.order < use->order) use = &v; }
-        use->s = s; use->reverse = reverse; use->delay = std::max (0, offset); use->layer = layer; use->fade = 1.0f; use->order = ++counter;
+        use->s = s; use->reverse = reverse; use->delay = std::max (0, offset); use->layer = layer; use->hit = hit; use->fade = 1.0f; use->order = ++counter;
+        use->zl = use->zr = 0.0f;
+        use->placed = false;
+        if (auto st = std::atomic_load (&placing))
+        {
+            // a chop that has been placed on the stage plays from where it stands
+            const int idx = st->indexOf (layer, hit);
+            if (idx >= 0 && idx < (int) st->places.size())
+            {
+                float px = 0.0f, py = 0.0f;
+                nsr::placeAt (st->places[(size_t) idx], nowBeats, px, py);
+                use->place = nsr::placementFor (px, py, st->places[(size_t) idx].width, st->places[(size_t) idx].locked);
+                use->placed = true;
+            }
+        }
         use->inc = s->sr / sr * std::exp2 ((double) semis / 12.0);
         use->pos = reverse ? (double) s->l.size() - 2.0 : 0.0;
         const int own = (int) ((double) (s->l.size() - 1) / use->inc);
@@ -625,7 +674,20 @@ private:
                 const int done = (int) (v.reverse ? ((double) len - 2.0 - v.pos) / v.inc : v.pos / v.inc);
                 float env = done < fadeIn ? (float) (done + 1) / (float) fadeIn : 1.0f;
                 if (v.left < fadeLen) env *= (float) v.left / (float) fadeLen;
-                L += v.gl * env * x; R += v.gr * env * y;
+                if (v.placed)
+                {
+                    // the chop's own place: mid/side width, a one-pole that dulls with distance,
+                    // and equal power referred to the middle so moving it does not change its level
+                    float a = v.gl * env * x, b = v.gr * env * y;
+                    if (v.place.mono) { const float m = 0.5f * (a + b); a = m; b = m; }
+                    else { const float mid = 0.5f * (a + b), sd = 0.5f * (a - b) * v.place.side; a = mid + sd; b = mid - sd; }
+                    const float k = 1.0f - std::exp (-6.283185307179586f * std::max (20.0f, v.place.cutoff) / (float) sr);
+                    v.zl += k * (a - v.zl); v.zr += k * (b - v.zr);
+                    const float gl2 = 1.41421356f * std::cos (v.place.angle) * v.place.gain;
+                    const float gr2 = 1.41421356f * std::sin (v.place.angle) * v.place.gain;
+                    L += v.zl * gl2; R += v.zr * gr2;
+                }
+                else { L += v.gl * env * x; R += v.gr * env * y; }
                 v.pos += v.reverse ? -v.inc : v.inc;
                 --v.left;
             }
@@ -644,6 +706,7 @@ private:
     std::shared_ptr<const LoopSnapshot> next, held;
     std::array<Voice, kVoices> voices {};
     uint64_t counter = 0;
+    std::shared_ptr<const LoopPlacing> placing;
     std::atomic<const PoolItem*> pendingSound { nullptr };
     std::atomic<float> pendingSemis { 0.0f }, pendingGain { 1.0f };
 };
