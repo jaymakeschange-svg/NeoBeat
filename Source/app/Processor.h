@@ -75,6 +75,9 @@ public:
     // The inherited rooms (LOOPS, KEYS) render into this and sum into the output, so what the
     // editor previews is what the plugin plays.
     juce::AudioBuffer<float> roomBuf;
+    juce::AudioBuffer<float> sendBuf;                 // what the placed chops send to the room
+    nsr::RoomVerb stereoVerb;                         // the one shared room the Stereoroom's depth feeds
+    nsr::BassMono bassMono;                           // the safety net: the low end stays in the middle
     mjq::PlayNote keysCarry[64] {};                   // note-offs a map mark started in an earlier block
     int numKeysCarry = 0;
     std::vector<RandomTarget> randTargets;

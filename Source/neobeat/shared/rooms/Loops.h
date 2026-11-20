@@ -511,6 +511,8 @@ public:
     // where the song is, taken from the host each block, so a travelling chop is placed where it
     // actually is rather than where it was when the list was last written
     double nowBeats = 0.0;
+    float* sendL = nullptr;
+    float* sendR = nullptr;
     static constexpr int kVoices = 64;
     void prepare (double sampleRate)
     {
@@ -528,6 +530,10 @@ public:
     void audition (const PoolItem* s, float semis = 0.0f, float gain = 1.0f) { pendingSound.store (s); pendingSemis.store (semis); pendingGain.store (gain); }
 
     // adds into l/r
+    // Where the placed chops send their share of the room. Null (the default) means no send bus,
+    // which is Batchcut: nothing is placed there, so nothing is sent.
+    void setSendBus (float* l, float* r) noexcept { sendL = l; sendR = r; }
+
     void process (float* l, float* r, int n, const LoopHost& host, const LoopNote* notes = nullptr, int numNotes = 0) noexcept
     {
         if (auto s = std::atomic_exchange (&next, std::shared_ptr<const LoopSnapshot>())) held = std::move (s);
@@ -659,7 +665,7 @@ private:
         const int fadeLen = std::max (1, (int) (0.005 * sr)), fadeIn = std::max (1, (int) (0.0015 * sr));
         for (int i = 0; i < n; ++i)
         {
-            float L = 0.0f, R = 0.0f;
+            float L = 0.0f, R = 0.0f, SL = 0.0f, SR = 0.0f;
             for (auto& v : voices)
             {
                 if (v.s == nullptr) continue;
@@ -685,7 +691,11 @@ private:
                     v.zl += k * (a - v.zl); v.zr += k * (b - v.zr);
                     const float gl2 = 1.41421356f * std::cos (v.place.angle) * v.place.gain;
                     const float gr2 = 1.41421356f * std::sin (v.place.angle) * v.place.gain;
-                    L += v.zl * gl2; R += v.zr * gr2;
+                    const float pl = v.zl * gl2, pr = v.zr * gr2;
+                    L += pl; R += pr;
+                    // what this chop sends to the room: the distance cue proper, kept in its own
+                    // place so the room comes back from where the chop is
+                    SL += pl * v.place.send; SR += pr * v.place.send;
                 }
                 else { L += v.gl * env * x; R += v.gr * env * y; }
                 v.pos += v.reverse ? -v.inc : v.inc;
@@ -696,6 +706,7 @@ private:
             const float want = pk > 0.89f ? 0.89f / pk : 1.0f;
             limiter = want < limiter ? want : 1.0f - (1.0f - limiter) * release;
             l[i] += lv * limiter * L; r[i] += lv * limiter * R;
+            if (sendL != nullptr) { sendL[i] += lv * limiter * SL; sendR[i] += lv * limiter * SR; }
         }
     }
 

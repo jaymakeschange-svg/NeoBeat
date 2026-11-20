@@ -412,6 +412,10 @@ void MjqProcessor::prepareToPlay (double sampleRate, int maxBlock)
     // the Orb's effect stack: a chain of its own for every voice, drawing on one shared set of pools
     for (int t = 0; t < mjq::kSessionTracks; ++t) { roomAir[(size_t) t].prepare (sampleRate); roomReady[(size_t) t] = false; }
 
+    // the one shared room the Stereoroom's depth feeds, and the net under the whole output
+    stereoVerb.prepare (sampleRate);
+    bassMono.prepare (sampleRate);
+
     const int block = std::max (64, maxBlock);
     fxPools.prepare ((float) sampleRate);
     fxScratch.setSize (2, block, false, false, true);
@@ -669,7 +673,9 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         const int n = audio.getNumSamples();
         const bool stereoOutEarly = audio.getNumChannels() > 1;
         if (roomBuf.getNumSamples() < n) roomBuf.setSize (2, n, false, false, true);
+        if (sendBuf.getNumSamples() < n) sendBuf.setSize (2, n, false, false, true);
         roomBuf.clear();
+        sendBuf.clear();
 
         mjq::PlayNote keysNotes[256];
         int numKeysNotes = 0;
@@ -737,10 +743,25 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         // LOOPS: its own PLAY, plus whatever the MAP fired at it
         bc::LoopHost lh;
         lh.valid = host.valid; lh.playing = host.playing; lh.ppq = host.valid ? host.ppq : freeBeats; lh.bpm = host.bpm;
+        loopPlayer.setSendBus (sendBuf.getWritePointer (0), sendBuf.getWritePointer (1));
         loopPlayer.process (roomBuf.getWritePointer (0), roomBuf.getWritePointer (1), n, lh, loopNotes, numLoopNotes);
 
         // KEYS: the instrument the room built, played by the MAP and by the keyboard
         keysPlayer.process (roomBuf.getWritePointer (0), roomBuf.getWritePointer (1), n, keysNotes, numKeysNotes);
+
+        // The room a placed chop is heard in. Distance is mostly this: gain and dullness alone
+        // sound like a quiet muffled copy in the same spot, not like something further away.
+        stereoVerb.process (sendBuf.getReadPointer (0), sendBuf.getReadPointer (1),
+                            roomBuf.getWritePointer (0), roomBuf.getWritePointer (1), n);
+
+        // The net, over the Stereoroom's own output only. A locked chop is already mono, but a
+        // widened one still has low content of its own, and that is what folds badly on a club
+        // system or a phone. One pole each way, so what comes out of the sides goes into the
+        // middle and the sum is unchanged.
+        //
+        // Deliberately not over the whole mix: the voices have their own panning that presets
+        // already depend on, and centring their low end would quietly change every one of them.
+        bassMono.process (roomBuf.getWritePointer (0), roomBuf.getWritePointer (1), n, 120.0f);
 
         audio.addFrom (0, 0, roomBuf, 0, 0, n);
         if (stereoOutEarly) audio.addFrom (1, 0, roomBuf, 1, 0, n);
