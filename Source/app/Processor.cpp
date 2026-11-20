@@ -1,23 +1,47 @@
 #include "Processor.h"
 #include "Editor.h"
 
+// The list of what the RANDOM room may reach. The two kinds it must never touch are marked here,
+// in one place, rather than being guarded at every point that rolls: a mono lock, and the
+// randomiser's own controls. Randomising a mono lock turns a mix inside out and has to be undone by
+// hand; letting it reach its own rate means its rate randomises its rate.
+static std::vector<MjqProcessor::RandomTarget> makeRandomTargets()
+{
+    return {
+        { "KEYS",       "Zone mapping",     0.35f, true,  false },
+        { "KEYS",       "Attack / release", 0.20f, true,  false },
+        { "LOOPS",      "Chop order",       0.60f, true,  false },
+        { "LOOPS",      "Chop pitch",       0.25f, true,  false },
+        { "MAP",        "Which degrees",    0.45f, true,  false },
+        { "MAP",        "Note length",      0.30f, true,  false },
+        { "MAP",        "Traffic",          0.50f, true,  false },
+        { "MOD",        "Orb position",     0.70f, true,  false },
+        { "MOD",        "LFO rates",        0.15f, false, false },
+        { "STEREOROOM", "Chop places",      0.40f, true,  false },
+        { "STEREOROOM", "Mono locks",       0.00f, false, true  },
+        { "RANDOM",     "Its own controls", 0.00f, false, true  }
+    };
+}
+
 MjqProcessor::MjqProcessor()
     : juce::AudioProcessor (BusesProperties().withOutput ("Out", juce::AudioChannelSet::stereo(), true))
 {
-    line = session.current().tracks[0].line;
+    randTargets = makeRandomTargets();
+
+    line = song.current().tracks[0].line;
     rebuildSession (true);
     message = "JAQ writes a line; DIALECT moves its notes, TRAFFIC how many play.";
 }
 
 void MjqProcessor::rebuildSession (bool full)
 {
-    auto& track = session.current().tracks[(size_t) session.selectedTrack];
+    auto& track = song.current().tracks[(size_t) song.selectedTrack];
     track.line = line;
-    track.line.partIndex = session.selectedTrack;
-    session.touched[(size_t) session.selected] = true;
+    track.line.partIndex = song.selectedTrack;
+    song.touched[(size_t) song.selected] = true;
     auto old = std::atomic_load (&prepared);
     auto next = old != nullptr ? std::make_shared<Prepared> (*old) : std::make_shared<Prepared>();
-    next->state = session;
+    next->state = song;
     auto prepareTrack = [&] (int s, int t)
     {
         const auto& tr = next->state.slots[(size_t) s].tracks[(size_t) t];
@@ -42,9 +66,9 @@ void MjqProcessor::rebuildSession (bool full)
     }
     else
     {
-        for (int t = 0; t < mjq::kSessionTracks; ++t) prepareTrack (session.selected, t);
+        for (int t = 0; t < mjq::kSessionTracks; ++t) prepareTrack (song.selected, t);
     }
-    const auto& preview = next->passes[(size_t) session.selected][(size_t) session.selectedTrack];
+    const auto& preview = next->passes[(size_t) song.selected][(size_t) song.selectedTrack];
     std::atomic_store (&shown, std::shared_ptr<const mjq::Pass> (std::make_shared<mjq::Pass> (preview)));
     std::atomic_store (&prepared, std::shared_ptr<const Prepared> (std::move (next)));
     version.fetch_add (1);
@@ -54,49 +78,49 @@ void MjqProcessor::lineChanged() { rebuildSession(); }
 
 void MjqProcessor::chooseSlot (int index)
 {
-    session.current().tracks[(size_t) session.selectedTrack].line = line;
-    session.selected = juce::jlimit (0, mjq::kSessionSlots - 1, index);
-    line = session.current().tracks[(size_t) session.selectedTrack].line;
+    song.current().tracks[(size_t) song.selectedTrack].line = line;
+    song.selected = juce::jlimit (0, mjq::kSessionSlots - 1, index);
+    line = song.current().tracks[(size_t) song.selectedTrack].line;
     rebuildSession();
 }
 
 void MjqProcessor::chooseTrack (int index)
 {
-    session.current().tracks[(size_t) session.selectedTrack].line = line;
-    session.selectedTrack = juce::jlimit (0, mjq::kSessionTracks - 1, index);
-    line = session.current().tracks[(size_t) session.selectedTrack].line;
-    line.partIndex = session.selectedTrack;
+    song.current().tracks[(size_t) song.selectedTrack].line = line;
+    song.selectedTrack = juce::jlimit (0, mjq::kSessionTracks - 1, index);
+    line = song.current().tracks[(size_t) song.selectedTrack].line;
+    line.partIndex = song.selectedTrack;
     rebuildSession();
 }
 
 void MjqProcessor::changeWriter (mjq::Generator writer)
 {
-    session.current().tracks[(size_t) session.selectedTrack].generator.kind = writer;
+    song.current().tracks[(size_t) song.selectedTrack].generator.kind = writer;
     rebuildSession();
 }
 
 void MjqProcessor::changeChord (int bar, const mjq::Chord& chord)
 {
-    session.current().chords.bars[(size_t) juce::jlimit (0, mjq::kChordBars - 1, bar)] = chord;
+    song.current().chords.bars[(size_t) juce::jlimit (0, mjq::kChordBars - 1, bar)] = chord;
     rebuildSession();
 }
 
 void MjqProcessor::changeChain (int length)
 {
-    session.chainLength = juce::jlimit (1, mjq::kSessionSlots, length);
+    song.chainLength = juce::jlimit (1, mjq::kSessionSlots, length);
     rebuildSession();
 }
 
 void MjqProcessor::changeTrackEnabled (bool enabled)
 {
-    session.current().tracks[(size_t) session.selectedTrack].enabled = enabled;
+    song.current().tracks[(size_t) song.selectedTrack].enabled = enabled;
     rebuildSession();
 }
 
 // the LEVEL knob sets the chosen voice's level; the others keep theirs, so a multi stays balanced
 void MjqProcessor::setInstrumentLevel (float level)
 {
-    changeTrackLevel (session.selectedTrack, level);
+    changeTrackLevel (song.selectedTrack, level);
 }
 
 void MjqProcessor::roll()
@@ -115,7 +139,7 @@ void MjqProcessor::rollLane (mjq::Lane lane)
 
 void MjqProcessor::mark()
 {
-    undoStack.push_back ({ session.selected, session.selectedTrack, line });
+    undoStack.push_back ({ song.selected, song.selectedTrack, line });
     if (undoStack.size() > 64) undoStack.erase (undoStack.begin());
     redoStack.clear();
 }
@@ -123,7 +147,7 @@ void MjqProcessor::mark()
 bool MjqProcessor::undo()
 {
     if (undoStack.empty()) return false;
-    redoStack.push_back ({ session.selected, session.selectedTrack, line });
+    redoStack.push_back ({ song.selected, song.selectedTrack, line });
     const auto prev = undoStack.back();
     undoStack.pop_back();
     chooseSlot (prev.slot);
@@ -136,7 +160,7 @@ bool MjqProcessor::undo()
 bool MjqProcessor::redo()
 {
     if (redoStack.empty()) return false;
-    undoStack.push_back ({ session.selected, session.selectedTrack, line });
+    undoStack.push_back ({ song.selected, song.selectedTrack, line });
     const auto next = redoStack.back();
     redoStack.pop_back();
     chooseSlot (next.slot);
@@ -148,7 +172,7 @@ bool MjqProcessor::redo()
 
 bool MjqProcessor::openInstrument (const juce::File& file, juce::String& error)
 {
-    return openInstrument (session.selectedTrack, file, error);
+    return openInstrument (song.selectedTrack, file, error);
 }
 
 bool MjqProcessor::openInstrument (int track, const juce::File& file, juce::String& error)
@@ -162,10 +186,10 @@ bool MjqProcessor::openInstrument (int track, const juce::File& file, juce::Stri
     std::atomic_store (&loadedTracks[(size_t) track], shared);
     voicesFor (track).setInstrument (shared);
 
-    // the path travels in the session, so a multi is saved and reopened whole
+    // the path travels in the song, so a multi is saved and reopened whole
     for (int p = 0; p < mjq::kSessionSlots; ++p)
     {
-        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        auto& tr = song.slots[(size_t) p].tracks[(size_t) track];
         tr.instrumentFile = file.getFullPathName().toStdString();
         // Only voice 1 starts switched on, so until now putting a sound on any other voice gave
         // silence until you found the switch. Putting a sound on a voice is asking to hear it.
@@ -177,7 +201,7 @@ bool MjqProcessor::openInstrument (int track, const juce::File& file, juce::Stri
     return true;
 }
 
-void MjqProcessor::closeInstrument() { closeInstrument (session.selectedTrack); }
+void MjqProcessor::closeInstrument() { closeInstrument (song.selectedTrack); }
 
 void MjqProcessor::closeInstrument (int track)
 {
@@ -188,7 +212,7 @@ void MjqProcessor::closeInstrument (int track)
     v.setInstrument (nullptr);
     v.letGo.store (true);
     for (int p = 0; p < mjq::kSessionSlots; ++p)
-        session.slots[(size_t) p].tracks[(size_t) track].instrumentFile.clear();
+        song.slots[(size_t) p].tracks[(size_t) track].instrumentFile.clear();
     if (track == 0) instrumentFile.clear();
     message = "Voice " + juce::String (track + 1) + " has no instrument, so it makes no sound.";
     version.fetch_add (1);
@@ -197,7 +221,7 @@ void MjqProcessor::closeInstrument (int track)
 juce::String MjqProcessor::instrumentFileFor (int track) const
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
-    return juce::String (session.current().tracks[(size_t) track].instrumentFile);
+    return juce::String (song.current().tracks[(size_t) track].instrumentFile);
 }
 
 void MjqProcessor::changeTrackRange (int track, int lowKey, int highKey)
@@ -207,7 +231,7 @@ void MjqProcessor::changeTrackRange (int track, int lowKey, int highKey)
     highKey = juce::jlimit (lowKey, 127, highKey);
     for (int p = 0; p < mjq::kSessionSlots; ++p)
     {
-        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        auto& tr = song.slots[(size_t) p].tracks[(size_t) track];
         tr.lowKey = lowKey; tr.highKey = highKey;
     }
     lineChanged();
@@ -219,15 +243,15 @@ void MjqProcessor::moveOrb (float x, float y)
 {
     const float r = std::sqrt (x * x + y * y);
     if (r > 1.0f) { x /= r; y /= r; }          // the joystick stays in its circle
-    session.orbX = x;
-    session.orbY = y;
+    song.orbX = x;
+    song.orbY = y;
     lineChanged();
 }
 
 void MjqProcessor::setOrbOn (int track, bool on)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
-    session.orbs[(size_t) track].on = on;
+    song.orbs[(size_t) track].on = on;
     lineChanged();
 }
 
@@ -236,10 +260,10 @@ void MjqProcessor::putOrbCorner (int track, int corner)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
     corner = juce::jlimit (0, mjq::kOrbCorners - 1, corner);
-    const auto& from = session.current().tracks[(size_t) track].line;
+    const auto& from = song.current().tracks[(size_t) track].line;
 
     {
-        auto& c = session.orbs[(size_t) track].corners[(size_t) corner];
+        auto& c = song.orbs[(size_t) track].corners[(size_t) corner];
         const auto wasName = c.name;
         c = mjq::OrbCorner {};
         c.set = true;
@@ -263,8 +287,8 @@ void MjqProcessor::putOrbCorner (int track, int corner)
 void MjqProcessor::scatterOrb (int track)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
-    const auto& from = session.current().tracks[(size_t) track].line;
-    auto& orb = session.orbs[(size_t) track];
+    const auto& from = song.current().tracks[(size_t) track].line;
+    auto& orb = song.orbs[(size_t) track];
 
     for (int c = 0; c < mjq::kOrbCorners; ++c)
     {
@@ -297,7 +321,7 @@ void MjqProcessor::clearOrbCorner (int track, int corner)
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
     corner = juce::jlimit (0, mjq::kOrbCorners - 1, corner);
-    session.orbs[(size_t) track].corners[(size_t) corner] = mjq::OrbCorner {};
+    song.orbs[(size_t) track].corners[(size_t) corner] = mjq::OrbCorner {};
     lineChanged();
 }
 
@@ -312,7 +336,7 @@ void MjqProcessor::recallOrbCorner (int, int corner)
 mjq::OrbBlend MjqProcessor::orbBlend (int track) const
 {
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
-    return mjq::orbRead (session.orbs[(size_t) track], session.orbX, session.orbY);
+    return mjq::orbRead (song.orbs[(size_t) track], song.orbX, song.orbY);
 }
 
 void MjqProcessor::changeTrackLevel (int track, float level)
@@ -320,7 +344,7 @@ void MjqProcessor::changeTrackLevel (int track, float level)
     track = juce::jlimit (0, mjq::kSessionTracks - 1, track);
     level = juce::jlimit (0.0f, 2.0f, level);
     for (int p = 0; p < mjq::kSessionSlots; ++p)
-        session.slots[(size_t) p].tracks[(size_t) track].level = level;
+        song.slots[(size_t) p].tracks[(size_t) track].level = level;
     lineChanged();
 }
 
@@ -334,7 +358,7 @@ void MjqProcessor::setTrackMode (int track, bool layer, int follows)
     if (follows == track) follows = track == 0 ? 1 : 0;   // a voice cannot stack on itself
     for (int p = 0; p < mjq::kSessionSlots; ++p)
     {
-        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        auto& tr = song.slots[(size_t) p].tracks[(size_t) track];
         tr.mode = layer ? mjq::VoiceMode::Layer : mjq::VoiceMode::Part;
         tr.layerOf = follows;
         // A stack is one instrument in several sounds, so a layer hears every key the voice it
@@ -353,7 +377,7 @@ void MjqProcessor::setTrackStack (int track, int semis, float cents, float delay
     delayMs = juce::jlimit (0.0f, 60.0f, delayMs);
     for (int p = 0; p < mjq::kSessionSlots; ++p)
     {
-        auto& tr = session.slots[(size_t) p].tracks[(size_t) track];
+        auto& tr = song.slots[(size_t) p].tracks[(size_t) track];
         tr.semis = semis; tr.cents = cents; tr.delayMs = delayMs;
     }
     lineChanged();
@@ -369,6 +393,7 @@ void MjqProcessor::releaseTrack (int track)
     voicesFor (track).letGo.store (true);    // the audio thread releases every key on its next block
     numCarry[track] = 0;
 }
+
 
 void MjqProcessor::prepareToPlay (double sampleRate, int maxBlock)
 {
@@ -407,7 +432,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     // The keys held down, for Follow, Bass, Parts and the Gate clock. A key only reaches the voices whose
     // range covers it, which is what makes the multi a multi: hold low and the bass answers, hold in the
     // middle where two ranges overlap and both do, each on its own instrument.
-    const int heldSlot = session.selected;
+    const int heldSlot = song.selected;
 
     // Is the song rolling? Worth knowing before the keys are read, because a key means something
     // different when it is not: with nothing playing there is no line for a key to steer, so the
@@ -436,7 +461,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
         if (! msg.isNoteOn() && ! msg.isNoteOff()) continue;
         const int note = msg.getNoteNumber();
         int reached[mjq::kSessionTracks];
-        const int n = session.voicesFor (heldSlot, note, reached, mjq::kSessionTracks);
+        const int n = song.voicesFor (heldSlot, note, reached, mjq::kSessionTracks);
         for (int i = 0; i < n; ++i)
         {
             auto& p = reached[i] == 0 ? player : otherPlayers[(size_t) (reached[i] - 1)];
@@ -493,7 +518,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
     // layer answers with the voice it follows, so an auditioned sound is the whole stack.
     if (numDirect > 0)
     {
-        const auto& heard = session.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, heldSlot)];
+        const auto& heard = song.slots[(size_t) juce::jlimit (0, mjq::kSessionSlots - 1, heldSlot)];
         for (int d = 0; d < numDirect; ++d)
         {
             const auto& k = direct[d];
@@ -895,12 +920,12 @@ bool MjqProcessor::loadPatterns (const juce::File& file, juce::String& error)
 
 void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    session.current().tracks[(size_t) session.selectedTrack].line = line;
+    song.current().tracks[(size_t) song.selectedTrack].line = line;
     juce::XmlElement root ("MIDIJAQ_SESSION");
     root.setAttribute ("version", 2);
-    root.setAttribute ("selected", session.selected);
-    root.setAttribute ("selectedTrack", session.selectedTrack);
-    root.setAttribute ("orbX", session.orbX);
+    root.setAttribute ("selected", song.selected);
+    root.setAttribute ("selectedTrack", song.selectedTrack);
+    root.setAttribute ("orbX", song.orbX);
 
     // The Orb, the room and the randomiser belong to the voice rather than the slot, so they are written
     // once each here instead of once per slot - four elements instead of five hundred.
@@ -909,12 +934,12 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
         auto* vn = root.createNewChildElement ("VOICE");
         vn->setAttribute ("i", t);
         // the randomiser: any control left cycling
-        if (session.randomisers[(size_t) t].any())
+        if (song.randomisers[(size_t) t].any())
         {
             auto* qn = vn->createNewChildElement ("CYCLES");
             for (int k = 0; k < (int) mjq::Cycled::Count; ++k)
             {
-                const auto& c = session.randomisers[(size_t) t].cycles[(size_t) k];
+                const auto& c = song.randomisers[(size_t) t].cycles[(size_t) k];
                 if (! c.on) continue;
                 auto* cn = qn->createNewChildElement ("CYCLE");
                 cn->setAttribute ("what", k);
@@ -927,31 +952,31 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
         }
 
         // the stereo room: where this voice stands, and the curve that moves it
-        if (session.places[(size_t) t].on || session.places[(size_t) t].x != 0.0f || session.places[(size_t) t].y != 0.35f || session.places[(size_t) t].move != mjq::RoomMove::None)
+        if (song.places[(size_t) t].on || song.places[(size_t) t].x != 0.0f || song.places[(size_t) t].y != 0.35f || song.places[(size_t) t].move != mjq::RoomMove::None)
         {
             auto* rn = vn->createNewChildElement ("ROOM");
-            rn->setAttribute ("on", session.places[(size_t) t].on ? 1 : 0);
-            rn->setAttribute ("x", session.places[(size_t) t].x);
-            rn->setAttribute ("y", session.places[(size_t) t].y);
-            rn->setAttribute ("width", session.places[(size_t) t].width);
-            rn->setAttribute ("move", (int) session.places[(size_t) t].move);
-            rn->setAttribute ("depth", session.places[(size_t) t].depth);
-            rn->setAttribute ("bars", session.places[(size_t) t].bars);
+            rn->setAttribute ("on", song.places[(size_t) t].on ? 1 : 0);
+            rn->setAttribute ("x", song.places[(size_t) t].x);
+            rn->setAttribute ("y", song.places[(size_t) t].y);
+            rn->setAttribute ("width", song.places[(size_t) t].width);
+            rn->setAttribute ("move", (int) song.places[(size_t) t].move);
+            rn->setAttribute ("depth", song.places[(size_t) t].depth);
+            rn->setAttribute ("bars", song.places[(size_t) t].bars);
             juce::String drawn;
-            for (int k = 0; k < mjq::kRoomCurve; ++k) drawn += juce::String (session.places[(size_t) t].curve[(size_t) k], 4) + (k + 1 < mjq::kRoomCurve ? " " : "");
+            for (int k = 0; k < mjq::kRoomCurve; ++k) drawn += juce::String (song.places[(size_t) t].curve[(size_t) k], 4) + (k + 1 < mjq::kRoomCurve ? " " : "");
             rn->setAttribute ("curve", drawn);
         }
 
         // the Orb: its eight corners, and the effects stacked on each
-        if (session.orbs[(size_t) t].on || session.orbs[(size_t) t].anySet())
+        if (song.orbs[(size_t) t].on || song.orbs[(size_t) t].anySet())
         {
             auto* on = vn->createNewChildElement ("ORB");
-            on->setAttribute ("on", session.orbs[(size_t) t].on ? 1 : 0);
-            on->setAttribute ("grip", session.orbs[(size_t) t].grip);
-            on->setAttribute ("salt", juce::String (session.orbs[(size_t) t].salt));
+            on->setAttribute ("on", song.orbs[(size_t) t].on ? 1 : 0);
+            on->setAttribute ("grip", song.orbs[(size_t) t].grip);
+            on->setAttribute ("salt", juce::String (song.orbs[(size_t) t].salt));
             for (int c = 0; c < mjq::kOrbCorners; ++c)
             {
-                const auto& corner = session.orbs[(size_t) t].corners[(size_t) c];
+                const auto& corner = song.orbs[(size_t) t].corners[(size_t) c];
                 if (! corner.set) continue;
                 auto* cn = on->createNewChildElement ("CORNER");
                 cn->setAttribute ("i", c);
@@ -978,14 +1003,14 @@ void MjqProcessor::getStateInformation (juce::MemoryBlock& dest)
         }
     }
 
-    root.setAttribute ("orbY", session.orbY);
-    root.setAttribute ("chain", session.chainLength);
+    root.setAttribute ("orbY", song.orbY);
+    root.setAttribute ("chain", song.chainLength);
     root.setAttribute ("clock", (int) clockMode);
     root.setAttribute ("instrument", instrumentFile);
     for (int s = 0; s < mjq::kSessionSlots; ++s)
     {
-        if (! session.touched[(size_t) s]) continue;
-        const auto& slot = session.slots[(size_t) s];
+        if (! song.touched[(size_t) s]) continue;
+        const auto& slot = song.slots[(size_t) s];
         auto* sn = root.createNewChildElement ("SLOT");
         sn->setAttribute ("index", s);
         sn->setAttribute ("chordLength", slot.chords.length);
@@ -1051,9 +1076,9 @@ void MjqProcessor::setStateInformation (const void* data, int size)
         mjq::Line oldLine;
         auto clock = clockMode;
         if (! fromXml (contents, oldLine, clock, wants)) return;
-        session = mjq::Session();
-        session.selected = 0;
-        session.selectedTrack = 0;
+        song = mjq::Session();
+        song.selected = 0;
+        song.selectedTrack = 0;
         line = oldLine;
         clockMode = clock;
     }
@@ -1179,7 +1204,7 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 tr.lowKey = juce::jlimit (0, 127, tn->getIntAttribute ("lowKey", 0));
                 tr.highKey = juce::jlimit (tr.lowKey, 127, tn->getIntAttribute ("highKey", 127));
                 tr.level = (float) juce::jlimit (0.0, 2.0, tn->getDoubleAttribute ("level", 0.8));
-                // a session saved before stacking existed has no "stack", so every voice is a Part
+                // a song saved before stacking existed has no "stack", so every voice is a Part
                 if (tn->hasAttribute ("stack"))
                 {
                     tr.mode = mjq::VoiceMode::Layer;
@@ -1199,8 +1224,8 @@ void MjqProcessor::setStateInformation (const void* data, int size)
                 }
             }
         }
-        session = std::move (restored);
-        line = session.current().tracks[(size_t) session.selectedTrack].line;
+        song = std::move (restored);
+        line = song.current().tracks[(size_t) song.selectedTrack].line;
     }
     else return;
     playingSlot = -1;
@@ -1211,7 +1236,7 @@ void MjqProcessor::setStateInformation (const void* data, int size)
     juce::StringArray missing;
     for (int t = 0; t < mjq::kSessionTracks; ++t)
     {
-        auto path = juce::String (session.current().tracks[(size_t) t].instrumentFile);
+        auto path = juce::String (song.current().tracks[(size_t) t].instrumentFile);
         if (path.isEmpty() && t == 0) path = wants;
         if (path.isEmpty()) { closeInstrument (t); continue; }
         const juce::File f (path);
@@ -1220,7 +1245,7 @@ void MjqProcessor::setStateInformation (const void* data, int size)
         else
         {
             for (int p = 0; p < mjq::kSessionSlots; ++p)
-                session.slots[(size_t) p].tracks[(size_t) t].instrumentFile = path.toStdString();
+                song.slots[(size_t) p].tracks[(size_t) t].instrumentFile = path.toStdString();
             if (t == 0) instrumentFile = path;
             missing.add (f.getFileName());
         }
@@ -1236,3 +1261,166 @@ void MjqProcessor::setStateInformation (const void* data, int size)
 juce::AudioProcessorEditor* MjqProcessor::createEditor() { return new MjqEditor (*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new MjqProcessor(); }
+
+// ---------------------------------------------------------------- the Stereoroom
+// The places are edited on the message thread and read on the audio thread, so the audio thread
+// works from its own copy and only swaps to a new one between blocks.
+void MjqProcessor::stereoChanged()
+{
+    auto next = std::make_shared<StereoState>();
+    next->stage = stage;
+    next->places = places;
+    std::atomic_store (&stereoState, std::shared_ptr<const StereoState> (next));
+    stateChanged();
+}
+
+double MjqProcessor::stageBeats() const noexcept
+{
+    return freeBeats;
+}
+
+// ---------------------------------------------------------------- MAP
+void MjqProcessor::mapChanged()
+{
+    std::atomic_store (&mapState, std::shared_ptr<const mjq::MapPattern> (std::make_shared<mjq::MapPattern> (map)));
+    stateChanged();
+    lineChanged();
+}
+
+// A phrase in the key, built from whatever the other rooms have loaded. Keys marks for the
+// instrument, loop marks for the chops, so the two interleave on the one grid as they are meant to.
+void MjqProcessor::mapWrite()
+{
+    const auto& sc = gen::scale (map.scale);
+    const int degrees = mjq::degreesIn (sc.mask);
+    const bool haveKeys = ! keys.zones.empty();
+    const bool haveLoop = loops.numLayers > 0 && ! loops.layers[0].hits.empty();
+    if (! haveKeys && ! haveLoop) return;
+
+    map.clear();
+    uint64_t seed = (uint64_t) juce::Random::getSystemRandom().nextInt64() | 1ull;
+    auto next = [&seed]
+    {
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+        return (float) ((double) (seed >> 11) / 9007199254740992.0);
+    };
+
+    const int steps = juce::jlimit (4, mjq::kMapMaxSteps, map.steps);
+    int row = degrees;                                  // start an octave up from the root
+    for (int s = 0; s < steps; ++s)
+    {
+        // the bar's strong steps carry the phrase; the rest are left alone more often than not
+        const bool strong = (s % 4) == 0;
+        if (next() > (strong ? 0.35f : 0.78f)) continue;
+
+        mjq::Mark m;
+        m.step = s;
+        m.len = strong ? 2 : 1;
+        m.velocity = strong ? 0.85f + 0.1f * next() : 0.45f + 0.3f * next();
+
+        if (haveKeys && (! haveLoop || next() < 0.65f))
+        {
+            m.source = mjq::MarkSource::Keys;
+            // a small step more often than a leap, which is what makes a line rather than a scatter
+            const float r = next();
+            const int move = r < 0.45f ? (next() < 0.5f ? 1 : -1)
+                           : r < 0.75f ? (next() < 0.5f ? 2 : -2)
+                                       : (next() < 0.5f ? degrees : -degrees);
+            row = juce::jlimit (0, mjq::kMapRows - 1, row + move);
+            m.row = row;
+        }
+        else
+        {
+            m.source = mjq::MarkSource::Loop;
+            m.layer = 0;
+            const int chops = juce::jmax (1, (int) loops.layers[0].hits.size());
+            m.row = juce::jlimit (0, mjq::kMapRows - 1, (int) (next() * (float) std::min (chops, mjq::kMapRows)));
+        }
+        map.put (m);
+    }
+    mapChanged();
+}
+
+// ---------------------------------------------------------------- the Orb
+void MjqProcessor::clearOrb()
+{
+    auto& orb = song.orbs[(size_t) juce::jlimit (0, mjq::kSessionTracks - 1, chosenTrack())];
+    for (auto& c : orb.corners) c = {};
+    stateChanged();
+    lineChanged();
+}
+
+void MjqProcessor::setOrbGrip (float grip)
+{
+    auto& orb = song.orbs[(size_t) juce::jlimit (0, mjq::kSessionTracks - 1, chosenTrack())];
+    orb.grip = juce::jlimit (0.5f, 6.0f, grip);
+    stateChanged();
+    lineChanged();
+}
+
+// ---------------------------------------------------------------- RANDOM
+void MjqProcessor::toggleRandomTarget (int index)
+{
+    if (index < 0 || index >= (int) randTargets.size()) return;
+    auto& t = randTargets[(size_t) index];
+    if (t.never) return;                                 // not negotiable
+    t.on = ! t.on;
+    stateChanged();
+}
+
+// Rolls everything that is switched on, as far as its reach allows. The two kinds of target that
+// are never touched are refused when the list is built, not here, so there is one place to look.
+void MjqProcessor::rollRandom()
+{
+    for (const auto& t : randTargets)
+    {
+        if (! t.on || t.never) continue;
+        const float reach = juce::jlimit (0.0f, 1.0f, t.reach * randomAmount);
+        const juce::String room (t.room), name (t.name);
+
+        if (room == "MAP" && name.startsWith ("Which"))
+        {
+            for (auto& m : map.marks)
+                if (m.source == mjq::MarkSource::Keys && juce::Random::getSystemRandom().nextFloat() < reach)
+                    m.row = juce::jlimit (0, mjq::kMapRows - 1,
+                                          m.row + (juce::Random::getSystemRandom().nextBool() ? 1 : -1));
+            mapChanged();
+        }
+        else if (room == "MAP" && name.startsWith ("Note"))
+        {
+            for (auto& m : map.marks)
+                if (juce::Random::getSystemRandom().nextFloat() < reach)
+                    m.len = juce::jlimit (1, 8, m.len + (juce::Random::getSystemRandom().nextBool() ? 1 : -1));
+            mapChanged();
+        }
+        else if (room == "MOD")
+        {
+            const float x = juce::jlimit (-1.0f, 1.0f, song.orbX + reach * (juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f));
+            const float y = juce::jlimit (-1.0f, 1.0f, song.orbY + reach * (juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f));
+            moveOrb (x, y);
+        }
+        else if (room == "STEREOROOM")
+        {
+            for (auto& pl : places)
+            {
+                if (pl.locked) continue;                 // a locked element is never moved, by anything
+                pl.on = true;
+                pl.x = juce::jlimit (-1.0f, 1.0f, pl.x + reach * (juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f));
+            }
+            stereoChanged();
+        }
+        else if (room == "LOOPS")
+        {
+            if (juce::Random::getSystemRandom().nextFloat() < reach) loopsRoll (-1, true);
+        }
+    }
+    sinceRoll = 0;
+    sendChangeMessage();
+}
+
+void MjqProcessor::holdRandom()
+{
+    if (held.size() >= 8) held.erase (held.begin());
+    held.push_back (map);
+    stateChanged();
+}

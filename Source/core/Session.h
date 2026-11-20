@@ -1,5 +1,5 @@
 #pragma once
-// MidiJaQ's session: 128 slots, four separate lines, a chord track, and four alternative ways of
+// MidiJaQ's song: 128 slots, four separate lines, a chord track, and four alternative ways of
 // writing a line. This belongs to MidiJaQ; nothing in NeoBeat or Batchcut needs to change.
 // No JUCE in this file: the same decisions are used by the plugin and the tests.
 

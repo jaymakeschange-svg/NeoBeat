@@ -41,10 +41,18 @@ juce_add_plugin (MidiJaQ
 set (MIDIJAQ_APP_SOURCES
     Source/app/Processor.cpp
     Source/app/Editor.cpp
+    Source/app/CutRoom.cpp
+    Source/app/MapRoom.cpp
+    Source/app/ModRoom.cpp
+    Source/app/RandomRoom.cpp
+    Source/app/StereoRoomUi.cpp
     Source/neobeat/shared/rooms/CutRooms.cpp
     Source/neobeat/shared/rooms/KitRooms.cpp
     Source/neobeat/shared/rooms/LoopsRooms.cpp
-    Source/neobeat/shared/rooms/KeysRooms.cpp)
+    Source/neobeat/shared/rooms/KeysRooms.cpp
+    Source/neobeat/shared/rooms/KitRoomUi.cpp
+    Source/neobeat/shared/rooms/LoopsRoomUi.cpp
+    Source/neobeat/shared/rooms/KeysRoomUi.cpp)
 
 set (MIDIJAQ_DEFINITIONS
     JUCE_WEB_BROWSER=0

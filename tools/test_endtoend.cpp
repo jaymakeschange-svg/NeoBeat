@@ -310,7 +310,7 @@ int main (int argc, char** argv)
         both->lineChanged();
         for (int p = 0; p < mjq::kSessionSlots; ++p)
         {
-            auto& tr = both->session.slots[(size_t) p].tracks[1];
+            auto& tr = both->song.slots[(size_t) p].tracks[1];
             tr.line.mode = mjq::Mode::Keys;     // voice 2 answers the keyboard
             tr.lowKey = 0; tr.highKey = 127;
         }

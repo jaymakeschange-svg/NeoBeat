@@ -5,12 +5,14 @@
 #include <memory>
 
 #include "../neobeat/shared/rooms/Rooms.h"
+#include "../neobeat/shared/StereoRoom.h"
+#include "../core/Map.h"
 #include "../core/Inst.h"
 #include "../neobeat/dsp/LiveFx.h"
 #include "../core/Player.h"
 #include "../core/Session.h"
 
-class MjqProcessor final : public juce::AudioProcessor, public bc::Rooms
+class MjqProcessor final : public juce::AudioProcessor, public bc::Rooms, public juce::ChangeBroadcaster
 {
 public:
     MjqProcessor();
@@ -18,13 +20,62 @@ public:
 
     // ---- the line, and the snapshot the audio thread reads
     mjq::Line line;                                  // the selected line, on the message thread
-    mjq::Session session;                             // 128 slots, four lines, chord track
+    mjq::Session song;                             // 128 slots, four lines, chord track
     mjq::Player player;                               // line 1, kept for the original public API
     std::array<mjq::Player, mjq::kSessionTracks - 1> otherPlayers;
     std::array<mjq::InstrumentPlayer, mjq::kSessionTracks - 1> otherVoices;
     void setInstrumentLevel (float level);
-    int chosenSlot() const noexcept { return session.selected; }
-    int chosenTrack() const noexcept { return session.selectedTrack; }
+
+    // ---- the Stereoroom: one stage, every chop standing somewhere on it
+    nsr::Stage stage;
+    std::vector<nsr::Place> places;              // one per node, in the order the room builds them
+    void stereoChanged();                        // the places changed: the audio thread takes a new copy
+    double stageBeats() const noexcept;          // where the song is, so a travelling thing knows where it is
+
+    // ---- MAP: one grid, two kinds of mark
+    mjq::MapPattern map;
+    void roomsNotify() override { sendChangeMessage(); }
+    void mapChanged();                           // the marks changed: the player takes a new copy
+    void mapWrite();                             // a phrase in the key, from whatever is loaded
+
+    // ---- the Orb, for the MOD room
+    const mjq::Orb& orbFor (int track) const noexcept
+        { return song.orbs[(size_t) juce::jlimit (0, mjq::kSessionTracks - 1, track)]; }
+    void scatterOrb() { scatterOrb (chosenTrack()); }
+    void clearOrb();
+    void setOrbGrip (float grip);
+
+    // ---- RANDOM: one roll that reaches every room
+    struct RandomTarget
+    {
+        const char* room;
+        const char* name;
+        float reach = 0.4f;
+        bool on = false;
+        bool never = false;      // a mono lock, the low end, or the randomiser itself
+    };
+    const std::vector<RandomTarget>& randomTargets() const noexcept { return randTargets; }
+    void toggleRandomTarget (int index);
+    void rollRandom();
+    void holdRandom();
+    int heldRolls() const noexcept { return (int) held.size(); }
+
+    bool randomOnKey = false, randomOnGrid = false, randomFree = false;
+    int randomEvery = 4;
+    float randomAmount = 0.45f;
+
+    struct StereoState
+    {
+        nsr::Stage stage;
+        std::vector<nsr::Place> places;
+    };
+    std::shared_ptr<const StereoState> stereoState;   // what the audio thread is using
+    std::shared_ptr<const mjq::MapPattern> mapState;  // the marks the player is reading
+    std::vector<RandomTarget> randTargets;
+    std::vector<mjq::MapPattern> held;                // rolls kept with HOLD
+    int sinceRoll = 0;
+    int chosenSlot() const noexcept { return song.selected; }
+    int chosenTrack() const noexcept { return song.selectedTrack; }
     void chooseSlot (int index);
     void chooseTrack (int index);
     void changeWriter (mjq::Generator);

@@ -279,23 +279,23 @@ int main (int argc, char** argv)
         copy->setPlayConfigDetails (0, 2, 48000.0, 512);
         copy->prepareToPlay (48000.0, 512);
         copy->setStateInformation (state.getData(), (int) state.getSize());
-        CHECK (copy->session.selected == 5 && copy->session.chainLength == 2
-               && copy->session.current().tracks[1].enabled
-               && copy->session.current().tracks[1].line.mode == mjq::Mode::Bass,
+        CHECK (copy->song.selected == 5 && copy->song.chainLength == 2
+               && copy->song.current().tracks[1].enabled
+               && copy->song.current().tracks[1].line.mode == mjq::Mode::Bass,
                "a saved project keeps its slots and chord voices (%d bytes)", (int) state.getSize());
 
-        const auto pattern = dir.getChildFile ("MidiJaQ session.njq");
+        const auto pattern = dir.getChildFile ("MidiJaQ song.njq");
         juce::String error;
         const bool saved = proc->savePatterns (pattern, error);
         const bool loaded = saved && copy->loadPatterns (pattern, error);
-        CHECK (saved && loaded && copy->session.selected == 5 && copy->session.chainLength == 2,
+        CHECK (saved && loaded && copy->song.selected == 5 && copy->song.chainLength == 2,
                "a .NJQ file saves and opens the pattern bank: %s", error.toRawUTF8());
         copy->releaseResources();
         proc->chooseTrack (0); proc->chooseSlot (0); proc->changeChain (1);
         proc->clockMode = mjq::ClockMode::Pattern;
     }
 
-    std::printf ("7. a long random session (seed %d)\n", seed);
+    std::printf ("7. a long random song (seed %d)\n", seed);
     {
         proc->line.mode = mjq::Mode::Free;
         for (int i = 0; i < 400; ++i)

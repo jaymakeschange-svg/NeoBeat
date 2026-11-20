@@ -197,5 +197,5 @@ int main()
         std::puts ("ORBIT plays its ring and no more.");
     }
 
-    std::puts ("MidiJaQ session checks passed.");
+    std::puts ("MidiJaQ song checks passed.");
 }

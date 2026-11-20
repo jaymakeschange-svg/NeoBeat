@@ -262,7 +262,7 @@ int main()
         const auto before = listen (*dry, t1, 3.0);
 
         auto wet = playing (insA);
-        wet->session.places[0].on = true;          // straight on, nothing else touched
+        wet->song.places[0].on = true;          // straight on, nothing else touched
         wet->lineChanged();
         const auto after = listen (*wet, t2, 3.0);
 
@@ -275,14 +275,14 @@ int main()
     {
         Transport tl, tr;
         auto left = playing (insA);
-        left->session.places[0].on = true;
-        left->session.places[0].x = -1.0f;
+        left->song.places[0].on = true;
+        left->song.places[0].x = -1.0f;
         left->lineChanged();
         const auto L = listen (*left, tl, 3.0);
 
         auto right = playing (insA);
-        right->session.places[0].on = true;
-        right->session.places[0].x = 1.0f;
+        right->song.places[0].on = true;
+        right->song.places[0].x = 1.0f;
         right->lineChanged();
         const auto R = listen (*right, tr, 3.0);
 
@@ -293,14 +293,14 @@ int main()
     {
         Transport tn, tf;
         auto near = playing (insA);
-        near->session.places[0].on = true;
-        near->session.places[0].y = 0.0f;
+        near->song.places[0].on = true;
+        near->song.places[0].y = 0.0f;
         near->lineChanged();
         const auto N = listen (*near, tn, 3.0);
 
         auto far = playing (insA);
-        far->session.places[0].on = true;
-        far->session.places[0].y = 1.0f;
+        far->song.places[0].on = true;
+        far->song.places[0].y = 1.0f;
         far->lineChanged();
         const auto F = listen (*far, tf, 3.0);
 
@@ -311,7 +311,7 @@ int main()
         // a voice moving on a drawn curve must not click: no sample may jump further than the sound itself does
         Transport t;
         auto p = playing (insA);
-        auto& place = p->session.places[0];
+        auto& place = p->song.places[0];
         place.on = true;
         place.move = mjq::RoomMove::LeftRight;
         place.depth = 1.0f;
@@ -373,7 +373,7 @@ int main()
         auto p = playing (insA, 5);
         p->putOrbCorner (0, 0);
         p->putOrbCorner (0, 4);
-        auto& orb = p->session.orbs[0];
+        auto& orb = p->song.orbs[0];
         orb.on = true;
         for (int s = 0; s < mjq::kOrbStack; ++s)
         {
@@ -407,7 +407,7 @@ int main()
             Transport t;
             auto p = playing (insA, 3);
             p->putOrbCorner (0, 0);
-            auto& orb = p->session.orbs[0];
+            auto& orb = p->song.orbs[0];
             orb.on = true;
             orb.corners[0].stack[0].fx = fx;
             orb.corners[0].stack[0].mix = 1.0f;
@@ -438,7 +438,7 @@ int main()
 
         auto moving = playing (insA, 21);
         moving->line.traffic = 0.25f;
-        auto& c = moving->session.randomisers[0].cycles[(size_t) mjq::Cycled::Traffic];
+        auto& c = moving->song.randomisers[0].cycles[(size_t) mjq::Cycled::Traffic];
         c.on = true;
         c.home = 0.25f;           // where it was left, and where it lands when switched off
         c.extremity = 0.45f;      // a good swing either side of where it was left
@@ -474,7 +474,7 @@ int main()
 
         auto toggled = playing (insA, 33);
         toggled->line.gate = 0.8f;
-        auto& c = toggled->session.randomisers[0].cycles[(size_t) mjq::Cycled::Gate];
+        auto& c = toggled->song.randomisers[0].cycles[(size_t) mjq::Cycled::Gate];
         c.on = true; c.home = 0.8f; c.extremity = 1.0f; c.rate = 2.0f;
         toggled->lineChanged();
         (void) listen (*toggled, t2, 2.0);
@@ -498,10 +498,10 @@ int main()
         two->openInstrument (1, insB, err);
         for (int p = 0; p < mjq::kSessionSlots; ++p)
         {
-            auto& tr = two->session.slots[(size_t) p].tracks[1];
+            auto& tr = two->song.slots[(size_t) p].tracks[1];
             tr.enabled = true;
             tr.lowKey = 0; tr.highKey = 127;
-            tr.line = two->session.slots[(size_t) p].tracks[0].line;
+            tr.line = two->song.slots[(size_t) p].tracks[0].line;
             tr.line.base = 36;
         }
         two->lineChanged();
