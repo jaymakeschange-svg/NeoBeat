@@ -1,8 +1,9 @@
 // Batchcut 3.0 - the LOOPS room: where the sounds come from (the pool the Kit room shares) on the left, the
 // layers of chops in the middle, the selected layer and chop on the right.
-#include "Editor.h"
+#include "RoomView.h"
+#include "../Ui.h"
 
-using namespace bcui;
+using namespace nsui;
 
 namespace
 {
@@ -18,7 +19,7 @@ const char* gridName (int perBar) { return perBar == 8 ? "8ths" : perBar == 12 ?
 class SourceList final : public juce::Component, private juce::ListBoxModel
 {
 public:
-    explicit SourceList (View& v) : view (v)
+    explicit SourceList (bc::RoomView& v) : view (v)
     {
         list.setModel (this); list.setRowHeight (26);
         list.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
@@ -29,9 +30,9 @@ public:
     void rebuild()
     {
         rows.clear();
-        const auto& pool = view.proc.kit.pool;
+        const auto& pool = view.rooms.kit.pool;
         Row all; all.src = bc::LoopSource(); all.count = (int) pool.size(); rows.push_back (all);
-        for (const auto& s : view.proc.loopsSources())
+        for (const auto& s : view.rooms.loopsSources())
         {
             Row r; r.src.kind = bc::LoopSource::From; r.src.from = s;
             for (const auto& it : pool) r.count += it->source == s ? 1 : 0;
@@ -49,7 +50,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         paintWell (g, getLocalBounds().toFloat(), 8.0f);
-        if (view.proc.kit.pool.empty())
+        if (view.rooms.kit.pool.empty())
         {
             g.setFont (font (11.5f)); g.setColour (C::dim());
             g.drawFittedText ("The pool is empty.\n\nTHIS FILE or ALL FILES gathers the one-shots of your recordings; FOLDER adds sounds you already have (or drop a folder here).\n\nThe Kit room shares this pool.",
@@ -59,12 +60,12 @@ public:
 
 private:
     struct Row { bc::LoopSource src; int count = 0; bool heading = false; };
-    int getNumRows() override { return view.proc.kit.pool.empty() ? 0 : (int) rows.size(); }
+    int getNumRows() override { return view.rooms.kit.pool.empty() ? 0 : (int) rows.size(); }
     void paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool) override
     {
         if (row < 0 || row >= (int) rows.size()) return;
         const auto& r = rows[(size_t) row];
-        const auto& lp = view.proc.loops;
+        const auto& lp = view.rooms.loops;
         const int sel = juce::jlimit (0, lp.numLayers - 1, view.loopLayer);
         const bool current = lp.layers[(size_t) sel].source == r.src;
         if (current) { g.setColour (C::glow().withAlpha (0.45f)); g.fillRoundedRectangle (1.0f, 1.0f, (float) w - 2.0f, (float) h - 2.0f, 5.0f); }
@@ -87,7 +88,7 @@ private:
         if (onPick) onPick (rows[(size_t) row].src);
         list.repaint();
     }
-    View& view;
+    bc::RoomView& view;
     juce::ListBox list;
     std::vector<Row> rows;
 };
@@ -96,7 +97,7 @@ private:
 class LayerGrid final : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    explicit LayerGrid (View& v) : view (v)
+    explicit LayerGrid (bc::RoomView& v) : view (v)
     {
         setTooltip ("Click a layer to choose it, a chop to hear it; drag a chop to move it. Right-click a chop for more. M mutes a layer, S solos it.");
     }
@@ -109,12 +110,12 @@ public:
     float xOf (const bc::LoopLayer& L, int step, double loopBeats) const
     {
         const auto t = timeline();
-        return t.getX() + (float) (gen::swung (step, L.perBar, view.proc.loops.swing) / loopBeats) * t.getWidth();
+        return t.getX() + (float) (gen::swung (step, L.perBar, view.rooms.loops.swing) / loopBeats) * t.getWidth();
     }
 
     void paint (juce::Graphics& g) override
     {
-        const auto& lp = view.proc.loops;
+        const auto& lp = view.rooms.loops;
         const auto t = timeline();
         const double beats = lp.beats();
         const int bars = lp.bars();
@@ -183,7 +184,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        auto& p = view.proc; auto& lp = p.loops;
+        auto& p = view.rooms; auto& lp = p.loops;
         const int i = (e.y - kRuler) / kRowH;
         dragHit = -1;
         if (e.y < kRuler || i < 0 || i >= bc::kLoopLayers) return;
@@ -206,7 +207,7 @@ public:
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        auto& lp = view.proc.loops;
+        auto& lp = view.rooms.loops;
         const int i = view.loopLayer;
         if (dragHit < 0 || i < 0 || i >= lp.numLayers) return;
         auto& L = lp.layers[(size_t) i];
@@ -219,18 +220,18 @@ public:
         const auto keep = L.hits[(size_t) dragHit];
         std::stable_sort (L.hits.begin(), L.hits.end(), [] (const bc::LoopHit& a, const bc::LoopHit& b) { return a.step < b.step; });
         for (int k = 0; k < (int) L.hits.size(); ++k) if (L.hits[(size_t) k] == keep) { dragHit = k; view.loopHit = k; }
-        view.proc.loopsChanged();
+        view.rooms.loopsChanged();
         repaint();
     }
     void mouseUp (const juce::MouseEvent&) override
     {
-        if (dragHit >= 0 && moved) { view.proc.loopsMark(); if (onChange) onChange(); }
+        if (dragHit >= 0 && moved) { view.rooms.loopsMark(); if (onChange) onChange(); }
         dragHit = -1;
     }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         // an empty step: the selected chop again there (or the layer's first)
-        auto& lp = view.proc.loops;
+        auto& lp = view.rooms.loops;
         const int i = (e.y - kRuler) / kRowH;
         if (i < 0 || i >= lp.numLayers || e.x < kLabelW) return;
         auto& L = lp.layers[(size_t) i];
@@ -242,7 +243,7 @@ public:
         L.hits.push_back (h);
         std::stable_sort (L.hits.begin(), L.hits.end(), [] (const bc::LoopHit& a, const bc::LoopHit& b) { return a.step < b.step; });
         for (int k = 0; k < (int) L.hits.size(); ++k) if (L.hits[(size_t) k].step == step) view.loopHit = k;
-        view.proc.loopsChanged(); view.proc.loopsMark();
+        view.rooms.loopsChanged(); view.rooms.loopsMark();
         if (onChange) onChange();
     }
 
@@ -257,17 +258,17 @@ private:
     int stepAt (const bc::LoopLayer& L, float x) const
     {
         const auto t = timeline();
-        const double beats = view.proc.loops.beats();
+        const double beats = view.rooms.loops.beats();
         double b = (double) (x - t.getX()) / std::max (1.0f, t.getWidth()) * beats;
         b = std::fmod (std::max (0.0, b), 4.0 * L.bars);
         // the nearest step on the swung grid
         int best = 0; double d = 1e9;
-        for (int s = 0; s < L.steps(); ++s) { const double ds = std::fabs (gen::swung (s, L.perBar, view.proc.loops.swing) - b); if (ds < d) { d = ds; best = s; } }
+        for (int s = 0; s < L.steps(); ++s) { const double ds = std::fabs (gen::swung (s, L.perBar, view.rooms.loops.swing) - b); if (ds < d) { d = ds; best = s; } }
         return best;
     }
     int hitAt (int i, juce::Point<float> p) const
     {
-        const auto& lp = view.proc.loops;
+        const auto& lp = view.rooms.loops;
         if (i < 0 || i >= lp.numLayers || p.x < kLabelW) return -1;
         const auto& L = lp.layers[(size_t) i];
         const auto t = timeline();
@@ -283,7 +284,7 @@ private:
     void menu (int i, int h)
     {
         juce::PopupMenu m;
-        const auto& hit = view.proc.loops.layers[(size_t) i].hits[(size_t) h];
+        const auto& hit = view.rooms.loops.layers[(size_t) i].hits[(size_t) h];
         m.addItem (1, "Hear it"); m.addItem (2, "Another chop here (re-roll)");
         m.addItem (3, "Lock (a new roll leaves it)", true, hit.locked); m.addItem (4, "Backwards", true, hit.reverse);
         juce::PopupMenu r; for (int k = 1; k <= 4; ++k) r.addItem (10 + k, k == 1 ? juce::String ("One hit") : juce::String (k) + " hits in the step", true, hit.ratchet == k);
@@ -291,7 +292,7 @@ private:
         m.addSeparator(); m.addItem (5, "Delete");
         m.showMenuAsync (juce::PopupMenu::Options(), [this, i, h] (int res)
         {
-            auto& p = view.proc;
+            auto& p = view.rooms;
             if (i >= p.loops.numLayers || h >= (int) p.loops.layers[(size_t) i].hits.size()) return;
             auto& H = p.loops.layers[(size_t) i].hits;
             if (res == 1) p.loopsPlayHit (i, h);
@@ -303,16 +304,16 @@ private:
             if (res != 0 && onChange) onChange();
         });
     }
-    View& view;
+    bc::RoomView& view;
     int dragHit = -1, dragFrom = 0;
     bool moved = false;
 };
 } // namespace
 
 // ---------------------------------------------------------------- the room
-struct LoopsRoom::Parts
+struct bc::LoopsRoom::Parts
 {
-    explicit Parts (View& v) : sources (v), grid (v) {}
+    explicit Parts (bc::RoomView& v) : sources (v), grid (v) {}
     SourceList sources; LayerGrid grid;
     Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" };
     juce::TextEditor name;
@@ -337,24 +338,24 @@ struct LoopsRoom::Parts
     juce::Rectangle<int> srcPlate, mainPlate, layerPlate, chopBox, layerTitle, chopTitle, hint;
 };
 
-LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
+bc::LoopsRoom::LoopsRoom (bc::RoomView& v) : view (v), parts (std::make_unique<Parts> (v))
 {
     auto& p = *parts;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &p.sources, &p.grid, &p.fromFile, &p.fromAll, &p.folder, &p.name, &p.rollAll, &p.undo, &p.redo, &p.addLayer, &p.clear,
             &p.play, &p.bpm, &p.swing, &p.rootBox, &p.scaleBox, &p.wav, &p.stems, &p.midi, &p.njq, &p.bounce, &p.mode, &p.density, &p.dejavu, &p.level, &p.pan,
             &p.bars, &p.gridBox, &p.rhythmBox, &p.laneBox, &p.random, &p.midiMode, &p.roll, &p.remove, &p.chopReroll, &p.chopLock, &p.chopReverse, &p.chopPitch, &p.chopLevel })
         addAndMakeVisible (c);
-    auto& proc = view.proc;
-    auto layer = [this] () -> bc::LoopLayer& { auto& lp = view.proc.loops; return lp.layers[(size_t) juce::jlimit (0, lp.numLayers - 1, view.loopLayer)]; };
-    auto rollSame = [this] { view.proc.loopsRoll (view.loopLayer, false); view.loopHit = -1; };   // a setting changed: the same roll, the new setting
-    auto done = [this] { view.proc.loopsMark(); refresh(); };
+    auto& proc = view.rooms;
+    auto layer = [this] () -> bc::LoopLayer& { auto& lp = view.rooms.loops; return lp.layers[(size_t) juce::jlimit (0, lp.numLayers - 1, view.loopLayer)]; };
+    auto rollSame = [this] { view.rooms.loopsRoll (view.loopLayer, false); view.loopHit = -1; };   // a setting changed: the same roll, the new setting
+    auto done = [this] { view.rooms.loopsMark(); refresh(); };
 
     // ---- where the sounds come from (the pool is the Kit room's)
     p.fromFile.setTooltip ("Gather the one-shots of the open file into the pool (the same cuts EXPORT makes)");
     p.fromAll.setTooltip ("Gather the one-shots of every file in the list");
     p.folder.setTooltip ("Add a folder of sounds you already have to the pool");
-    p.fromFile.onClick = [this] { view.proc.kitGather (false); refresh(); };
-    p.fromAll.onClick = [this] { view.proc.kitGather (true); refresh(); };
+    p.fromFile.onClick = [this] { view.rooms.kitGather (false); refresh(); };
+    p.fromAll.onClick = [this] { view.rooms.kitGather (true); refresh(); };
     p.folder.onClick = [this]
     {
         auto& pr = *parts;
@@ -365,50 +366,50 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
             const auto dir = fc.getResult();
             if (! dir.isDirectory()) return;
             auto s = shared::Settings::load(); s.importFolder = dir.getFullPathName(); s.save();
-            view.proc.kitAddFolder (dir);
+            view.rooms.kitAddFolder (dir);
             refresh();
         });
     };
     p.sources.onPick = [this, layer] (const bc::LoopSource& src)
     {
         layer().source = src;
-        view.proc.loopsRoll (view.loopLayer, false); view.loopHit = -1;
-        view.proc.loopsMark(); refresh();
+        view.rooms.loopsRoll (view.loopLayer, false); view.loopHit = -1;
+        view.rooms.loopsMark(); refresh();
     };
 
     // ---- the loop
     p.name.setTooltip ("The loop's name: its files are called this");
     p.name.setFont (font (13.0f, true)); p.name.setJustification (juce::Justification::centredLeft);
-    p.name.onTextChange = [this] { view.proc.loops.name = parts->name.getText().trim().toStdString(); view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; };
+    p.name.onTextChange = [this] { view.rooms.loops.name = parts->name.getText().trim().toStdString(); view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; };
     p.name.onReturnKey = [this] { unfocusAllComponents(); };
     p.clear.setTooltip ("Clear all: empty every layer and go back to one. The tempo, swing and key stay, and Undo brings the hits back.");
-    p.clear.onClick = [this] { view.proc.loopsClearAll(); view.loopHit = -1; view.loopLayer = 0; refresh(); };
+    p.clear.onClick = [this] { view.rooms.loopsClearAll(); view.loopHit = -1; view.loopLayer = 0; refresh(); };
     p.rollAll.setTooltip ("Roll every layer again with new seeds (Shift+R). Locked chops stay.");
-    p.rollAll.onClick = [this] { view.proc.loopsRoll (-1, true); view.loopHit = -1; refresh(); };
-    p.undo.onClick = [this] { view.proc.loopsUndo(); refresh(); };
-    p.redo.onClick = [this] { view.proc.loopsRedo(); refresh(); };
+    p.rollAll.onClick = [this] { view.rooms.loopsRoll (-1, true); view.loopHit = -1; refresh(); };
+    p.undo.onClick = [this] { view.rooms.loopsUndo(); refresh(); };
+    p.redo.onClick = [this] { view.rooms.loopsRedo(); refresh(); };
     p.undo.setTooltip ("Undo (Ctrl+Z)"); p.redo.setTooltip ("Redo (Ctrl+Shift+Z)");
     p.addLayer.setTooltip ("Another layer (up to 8), rolled from the whole pool: choose its sounds on the left");
-    p.addLayer.onClick = [this] { const int i = view.proc.loopsAddLayer(); if (i >= 0) { view.loopLayer = i; view.loopHit = -1; } refresh(); };
+    p.addLayer.onClick = [this] { const int i = view.rooms.loopsAddLayer(); if (i >= 0) { view.loopLayer = i; view.loopHit = -1; } refresh(); };
     p.play.setTooltip ("Play the loop (Space). In a DAW it follows the song's position while the song plays.");
-    p.play.onClick = [this] { view.proc.loopPlayer.playing.store (parts->play.getToggleState()); refresh(); };
+    p.play.onClick = [this] { view.rooms.loopPlayer.playing.store (parts->play.getToggleState()); refresh(); };
     p.bpm.main = true; p.bpm.step = 1.0f;
     p.bpm.toText = [] (float v) { return juce::String ((int) std::round (v)); };
     p.swing.toText = [] (float v) { return juce::String ((int) std::round (v)) + "%"; };
     p.bpm.setTooltip ("The loop's tempo (in a DAW: the song's). Chops are cut to note values at this tempo.");
     p.swing.setTooltip ("How late every second step is (50% straight), as in NeoBeat");
-    p.bpm.onChange = [this] (float v) { view.proc.loops.bpm = v; view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; };
-    p.swing.onChange = [this] (float v) { view.proc.loops.swing = v / 100.0f; view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; parts->grid.repaint(); };
+    p.bpm.onChange = [this] (float v) { view.rooms.loops.bpm = v; view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; };
+    p.swing.onChange = [this] (float v) { view.rooms.loops.swing = v / 100.0f; view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; parts->grid.repaint(); };
     p.bpm.onCommit = done; p.swing.onCommit = done;
     for (int k = 0; k < 12; ++k) p.rootBox.addItem (gen::pitchName (k), k + 1);
     for (int k = 0; k < gen::numScales(); ++k) p.scaleBox.addItem (gen::scale (k).name, k + 1);
     p.rootBox.setTooltip ("The key: Melody layers are tuned into it"); p.scaleBox.setTooltip ("The scale of the key");
     auto keyChanged = [this]
     {
-        auto& lp = view.proc.loops;
+        auto& lp = view.rooms.loops;
         lp.root = juce::jlimit (0, 11, parts->rootBox.getSelectedId() - 1); lp.scale = juce::jlimit (0, gen::numScales() - 1, parts->scaleBox.getSelectedId() - 1);
-        for (int i = 0; i < lp.numLayers; ++i) if (lp.layers[(size_t) i].mode == bc::LoopMode::Melody) view.proc.loopsRoll (i, false);
-        view.proc.loopsChanged(); view.proc.loopsMark(); refresh();
+        for (int i = 0; i < lp.numLayers; ++i) if (lp.layers[(size_t) i].mode == bc::LoopMode::Melody) view.rooms.loopsRoll (i, false);
+        view.rooms.loopsChanged(); view.rooms.loopsMark(); refresh();
     };
     p.rootBox.onChange = keyChanged; p.scaleBox.onChange = keyChanged;
 
@@ -421,7 +422,7 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     auto exportAudio = [this] (bool stems)
     {
         auto& pr = *parts;
-        const auto dir = view.proc.exportDir().getChildFile ("Loops");
+        const auto dir = view.rooms.exportDir().getChildFile ("Loops");
         dir.createDirectory();
         pr.chooser = std::make_unique<juce::FileChooser> ("A folder for the loop", dir);
         pr.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this, stems] (const juce::FileChooser& fc)
@@ -429,7 +430,7 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
             const auto d = fc.getResult();
             if (! d.isDirectory()) return;
             juce::String err;
-            if (! view.proc.loopsExportAudio (d, stems, err)) view.proc.loopsMessage = "Not written: " + err;
+            if (! view.rooms.loopsExportAudio (d, stems, err)) view.rooms.loopsMessage = "Not written: " + err;
             refresh();
         });
     };
@@ -438,29 +439,29 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.midi.onClick = [this]
     {
         auto& pr = *parts;
-        const auto dir = view.proc.midiDir();
-        auto nm = juce::File::createLegalFileName (juce::String (view.proc.loops.name).trim()); if (nm.isEmpty()) nm = "Loop";
+        const auto dir = view.rooms.midiDir();
+        auto nm = juce::File::createLegalFileName (juce::String (view.rooms.loops.name).trim()); if (nm.isEmpty()) nm = "Loop";
         pr.chooser = std::make_unique<juce::FileChooser> ("Save the loop's MIDI", dir.getChildFile (nm + ".mid"), "*.mid");
         pr.chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc)
         {
             const auto f = fc.getResult(); if (f == juce::File()) return;
-            juce::String err; if (! view.proc.loopsExportMidi (f.withFileExtension ("mid"), err)) view.proc.loopsMessage = "Not written: " + err;
+            juce::String err; if (! view.rooms.loopsExportMidi (f.withFileExtension ("mid"), err)) view.rooms.loopsMessage = "Not written: " + err;
             refresh();
         });
     };
     p.njq.onClick = [this]
     {
         auto& pr = *parts;
-        auto nm = juce::File::createLegalFileName (juce::String (view.proc.loops.name).trim()); if (nm.isEmpty()) nm = "Loop";
+        auto nm = juce::File::createLegalFileName (juce::String (view.rooms.loops.name).trim()); if (nm.isEmpty()) nm = "Loop";
         pr.chooser = std::make_unique<juce::FileChooser> ("Save the loop for NeoBeat", shared::Settings::load().presets().getChildFile (nm + ".njq"), "*.njq");
         pr.chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc)
         {
             const auto f = fc.getResult(); if (f == juce::File()) return;
-            juce::String err; if (! view.proc.loopsSaveNjq (f.withFileExtension ("njq"), err)) view.proc.loopsMessage = "Not saved: " + err;
+            juce::String err; if (! view.rooms.loopsSaveNjq (f.withFileExtension ("njq"), err)) view.rooms.loopsMessage = "Not saved: " + err;
             refresh();
         });
     };
-    p.bounce.onClick = [this] { juce::String err; if (! view.proc.loopsBounce (err)) view.proc.loopsMessage = "Not bounced: " + err; refresh(); };
+    p.bounce.onClick = [this] { juce::String err; if (! view.rooms.loopsBounce (err)) view.rooms.loopsMessage = "Not bounced: " + err; refresh(); };
 
     // ---- the selected layer
     p.mode.setItemTooltip (0, "Slice: one source's chops in a new order, each running into the next");
@@ -474,10 +475,10 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.pan.toText = [] (float v) { return std::fabs (v) < 0.01f ? juce::String ("C") : juce::String ((int) std::round (std::fabs (v) * 100.0f)) + (v < 0 ? " L" : " R"); };
     p.density.setTooltip ("How many steps play");
     p.dejavu.setTooltip ("How often the layer repeats itself: 0 a new bar every time, all the way a bar that loops for ever");
-    p.density.onChange = [this, layer, rollSame] (float v) { layer().density = v; rollSame(); seenVersion = view.proc.loopsVersion; parts->grid.repaint(); };
-    p.dejavu.onChange = [this, layer, rollSame] (float v) { layer().dejavu = v; rollSame(); seenVersion = view.proc.loopsVersion; parts->grid.repaint(); };
-    p.level.onChange = [this, layer] (float v) { layer().levelDb = v; view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; };
-    p.pan.onChange = [this, layer] (float v) { layer().pan = v; view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; };
+    p.density.onChange = [this, layer, rollSame] (float v) { layer().density = v; rollSame(); seenVersion = view.rooms.loopsVersion; parts->grid.repaint(); };
+    p.dejavu.onChange = [this, layer, rollSame] (float v) { layer().dejavu = v; rollSame(); seenVersion = view.rooms.loopsVersion; parts->grid.repaint(); };
+    p.level.onChange = [this, layer] (float v) { layer().levelDb = v; view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; };
+    p.pan.onChange = [this, layer] (float v) { layer().pan = v; view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; };
     for (auto* k : { &p.density, &p.dejavu, &p.level, &p.pan }) k->onCommit = done;
     p.bars.setTooltip ("The layer's length. A shorter layer repeats under a longer one.");
     p.bars.onSelect = [this, layer, rollSame, done] (int i) { static const int b[4] = { 1, 2, 4, 8 }; layer().bars = b[i]; bc::tidyLayer (layer()); rollSame(); done(); };
@@ -495,41 +496,41 @@ LoopsRoom::LoopsRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.random.onClick = [this, layer, rollSame, done] { layer().random = parts->random.getToggleState(); rollSame(); done(); };
     p.midiMode.setItemTooltip (0, "Trigger: a key plays the loop from its start, transposed (C3 as it is)");
     p.midiMode.setItemTooltip (1, "Slices: each key from C3 up plays one of the layer's chops");
-    p.midiMode.onSelect = [this, layer, done] (int i) { layer().midiMode = i; view.proc.loopsChanged(); done(); };
+    p.midiMode.onSelect = [this, layer, done] (int i) { layer().midiMode = i; view.rooms.loopsChanged(); done(); };
     p.roll.setTooltip ("Roll this layer again with a new seed (R). Locked chops stay.");
-    p.roll.onClick = [this] { view.proc.loopsRoll (view.loopLayer, true); view.loopHit = -1; refresh(); };
+    p.roll.onClick = [this] { view.rooms.loopsRoll (view.loopLayer, true); view.loopHit = -1; refresh(); };
     p.remove.setTooltip ("Take this layer out (Undo brings it back)");
-    p.remove.onClick = [this] { view.proc.loopsRemoveLayer (view.loopLayer); view.loopLayer = std::max (0, view.loopLayer - 1); view.loopHit = -1; refresh(); };
+    p.remove.onClick = [this] { view.rooms.loopsRemoveLayer (view.loopLayer); view.loopLayer = std::max (0, view.loopLayer - 1); view.loopHit = -1; refresh(); };
 
     // ---- the selected chop
-    auto hit = [this] () -> bc::LoopHit* { auto& lp = view.proc.loops; if (view.loopLayer < 0 || view.loopLayer >= lp.numLayers) return nullptr; auto& H = lp.layers[(size_t) view.loopLayer].hits; return view.loopHit >= 0 && view.loopHit < (int) H.size() ? &H[(size_t) view.loopHit] : nullptr; };
+    auto hit = [this] () -> bc::LoopHit* { auto& lp = view.rooms.loops; if (view.loopLayer < 0 || view.loopLayer >= lp.numLayers) return nullptr; auto& H = lp.layers[(size_t) view.loopLayer].hits; return view.loopHit >= 0 && view.loopHit < (int) H.size() ? &H[(size_t) view.loopHit] : nullptr; };
     p.chopReroll.setTooltip ("Another chop in this place (the place and length stay)");
-    p.chopReroll.onClick = [this] { view.proc.loopsRerollHit (view.loopLayer, view.loopHit); refresh(); };
+    p.chopReroll.onClick = [this] { view.rooms.loopsRerollHit (view.loopLayer, view.loopHit); refresh(); };
     p.chopLock.setTooltip ("A new roll leaves a locked chop where it is (L)");
-    p.chopLock.onClick = [this, hit] { if (auto* h = hit()) { h->locked = parts->chopLock.getToggleState(); view.proc.loopsChanged(); view.proc.loopsMark(); } refresh(); };
-    p.chopReverse.onClick = [this, hit] { if (auto* h = hit()) { h->reverse = parts->chopReverse.getToggleState(); view.proc.loopsChanged(); view.proc.loopsMark(); view.proc.loopsPlayHit (view.loopLayer, view.loopHit); } refresh(); };
+    p.chopLock.onClick = [this, hit] { if (auto* h = hit()) { h->locked = parts->chopLock.getToggleState(); view.rooms.loopsChanged(); view.rooms.loopsMark(); } refresh(); };
+    p.chopReverse.onClick = [this, hit] { if (auto* h = hit()) { h->reverse = parts->chopReverse.getToggleState(); view.rooms.loopsChanged(); view.rooms.loopsMark(); view.rooms.loopsPlayHit (view.loopLayer, view.loopHit); } refresh(); };
     p.chopPitch.step = 1.0f;
     p.chopPitch.toText = [] (float v) { return (v > 0.0f ? "+" : "") + juce::String ((int) std::round (v)) + " st"; };
     p.chopLevel.toText = [] (float v) { return (v > 0.0f ? "+" : "") + juce::String (v, 1) + " dB"; };
-    p.chopPitch.onChange = [this, hit] (float v) { if (auto* h = hit()) { h->semis = v; view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; parts->grid.repaint(); } };
-    p.chopLevel.onChange = [this, hit] (float v) { if (auto* h = hit()) { h->levelDb = v; view.proc.loopsChanged(); seenVersion = view.proc.loopsVersion; } };
-    p.chopPitch.onCommit = [this] { view.proc.loopsMark(); view.proc.loopsPlayHit (view.loopLayer, view.loopHit); refresh(); };
-    p.chopLevel.onCommit = [this] { view.proc.loopsMark(); view.proc.loopsPlayHit (view.loopLayer, view.loopHit); refresh(); };
+    p.chopPitch.onChange = [this, hit] (float v) { if (auto* h = hit()) { h->semis = v; view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; parts->grid.repaint(); } };
+    p.chopLevel.onChange = [this, hit] (float v) { if (auto* h = hit()) { h->levelDb = v; view.rooms.loopsChanged(); seenVersion = view.rooms.loopsVersion; } };
+    p.chopPitch.onCommit = [this] { view.rooms.loopsMark(); view.rooms.loopsPlayHit (view.loopLayer, view.loopHit); refresh(); };
+    p.chopLevel.onCommit = [this] { view.rooms.loopsMark(); view.rooms.loopsPlayHit (view.loopLayer, view.loopHit); refresh(); };
 
     p.grid.onChange = [this] { refresh(); };
     juce::ignoreUnused (proc);
     startTimerHz (30);
 }
 
-LoopsRoom::~LoopsRoom() { stopTimer(); }
+bc::LoopsRoom::~LoopsRoom() { stopTimer(); }
 
-juce::Component& LoopsRoom::grid() { return parts->grid; }
+juce::Component& bc::LoopsRoom::grid() { return parts->grid; }
 
-void LoopsRoom::visibilityChanged() { if (! isVisible()) { view.proc.loopPlayer.playing.store (false); parts->play.setToggleState (false, juce::dontSendNotification); } }
+void bc::LoopsRoom::visibilityChanged() { if (! isVisible()) { view.rooms.loopPlayer.playing.store (false); parts->play.setToggleState (false, juce::dontSendNotification); } }
 
-void LoopsRoom::refresh()
+void bc::LoopsRoom::refresh()
 {
-    auto& p = *parts; auto& proc = view.proc; auto& lp = proc.loops;
+    auto& p = *parts; auto& proc = view.rooms; auto& lp = proc.loops;
     view.loopLayer = juce::jlimit (0, lp.numLayers - 1, view.loopLayer);
     const auto& L = lp.layers[(size_t) view.loopLayer];
     if (view.loopHit >= (int) L.hits.size()) view.loopHit = -1;
@@ -572,18 +573,18 @@ void LoopsRoom::refresh()
     repaint();
 }
 
-void LoopsRoom::timerCallback()
+void bc::LoopsRoom::timerCallback()
 {
     if (! isVisible()) return;
-    auto& proc = view.proc;
+    auto& proc = view.rooms;
     const double b = proc.loopPlayer.beatNow.load();
     if (std::fabs (b - seenBeat) > 1e-4) { seenBeat = b; parts->grid.beat = b; parts->grid.repaint(); }
     if (proc.loopsVersion != seenVersion || (int) proc.kit.pool.size() != seenPool) refresh();
 }
 
-bool LoopsRoom::key (const juce::KeyPress& key)
+bool bc::LoopsRoom::key (const juce::KeyPress& key)
 {
-    auto& proc = view.proc; auto& lp = proc.loops;
+    auto& proc = view.rooms; auto& lp = proc.loops;
     const auto c = key.getKeyCode();
     const auto letter = c < 256 ? juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) c) : 0;
     const auto mods = key.getModifiers();
@@ -615,12 +616,12 @@ bool LoopsRoom::key (const juce::KeyPress& key)
     return false;
 }
 
-void LoopsRoom::paint (juce::Graphics& g)
+void bc::LoopsRoom::paint (juce::Graphics& g)
 {
-    auto& p = *parts; const auto& lp = view.proc.loops;
+    auto& p = *parts; const auto& lp = view.rooms.loops;
     for (auto r : { p.srcPlate, p.mainPlate, p.layerPlate }) paintPlate (g, r.toFloat(), 12.0f);
     paintLabel (g, "Sounds", { p.srcPlate.getX() + 14, p.srcPlate.getY() + 8, 140, 16 }, juce::Justification::centredLeft, 9.5f);
-    paintLabel (g, juce::String ((int) view.proc.kit.pool.size()) + " in the pool", { p.srcPlate.getRight() - 154, p.srcPlate.getY() + 8, 140, 16 }, juce::Justification::centredRight, 8.0f, C::dim());
+    paintLabel (g, juce::String ((int) view.rooms.kit.pool.size()) + " in the pool", { p.srcPlate.getRight() - 154, p.srcPlate.getY() + 8, 140, 16 }, juce::Justification::centredRight, 8.0f, C::dim());
     g.setFont (font (10.5f)); g.setColour (C::dim());
     g.drawFittedText ("Click a source to give it to the selected layer. One pool, shared with the Kit room. Your stars steer the rolls; RANDOM ignores them.", p.hint, juce::Justification::topLeft, 3);
     paintLabel (g, "Loop", { p.mainPlate.getX() + 14, p.mainPlate.getY() + 10, 40, 16 }, juce::Justification::centredLeft, 9.5f);
@@ -649,7 +650,7 @@ void LoopsRoom::paint (juce::Graphics& g)
                       { p.layerPlate.getX() + 14, p.chopBox.getBottom() + 10, p.layerPlate.getWidth() - 28, 60 }, juce::Justification::topLeft, 4);
 }
 
-void LoopsRoom::resized()
+void bc::LoopsRoom::resized()
 {
     auto& p = *parts;
     p.srcPlate = { 12, 8, 300, 720 }; p.mainPlate = { 322, 8, 652, 720 }; p.layerPlate = { 984, 8, 284, 720 };

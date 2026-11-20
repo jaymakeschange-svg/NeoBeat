@@ -45,11 +45,11 @@ set (BATCHCUT_APP_SOURCES
     Source/app/Panels.cpp
     Source/neobeat/shared/rooms/CutRooms.cpp
     Source/neobeat/shared/rooms/KitRooms.cpp
-    Source/app/KitRoom.cpp
+    Source/neobeat/shared/rooms/KitRoomUi.cpp
     Source/neobeat/shared/rooms/LoopsRooms.cpp
-    Source/app/LoopsRoom.cpp
+    Source/neobeat/shared/rooms/LoopsRoomUi.cpp
     Source/neobeat/shared/rooms/KeysRooms.cpp
-    Source/app/KeysRoom.cpp)
+    Source/neobeat/shared/rooms/KeysRoomUi.cpp)
 
 set (BATCHCUT_DEFINITIONS
     JUCE_WEB_BROWSER=0

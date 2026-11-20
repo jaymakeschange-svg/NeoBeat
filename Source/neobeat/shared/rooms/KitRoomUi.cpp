@@ -1,8 +1,9 @@
 // Batchcut 2.0 - the kit room: the pool of one-shots, the 16 lanes of a NeoBeat kit, the selected lane's
 // layers, and the kit played by one of NeoBeat's 128 patterns.
-#include "Editor.h"
+#include "RoomView.h"
+#include "../Ui.h"
 
-using namespace bcui;
+using namespace nsui;
 
 namespace
 {
@@ -25,7 +26,7 @@ int starAt (juce::Rectangle<int> r, int x) { return juce::jlimit (1, 5, (x - r.g
 class PoolList final : public juce::Component, private juce::ListBoxModel
 {
 public:
-    explicit PoolList (View& v) : view (v)
+    explicit PoolList (bc::RoomView& v) : view (v)
     {
         list.setModel (this); list.setRowHeight (26);
         list.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
@@ -36,7 +37,7 @@ public:
 
     void rebuild()
     {
-        auto& p = view.proc;
+        auto& p = view.rooms;
         order.clear();
         if (mode == 0) order = p.kitCandidates (view.kitLane);
         else for (int i = 0; i < (int) p.kit.pool.size(); ++i) order.push_back (i);
@@ -63,7 +64,7 @@ private:
     {
         if (row < 0 || row >= (int) order.size()) return;
         const int item = order[(size_t) row];
-        const auto* it = view.proc.kit.item (item);
+        const auto* it = view.rooms.kit.item (item);
         if (it == nullptr) return;
         if (item == view.kitItem) { g.setColour (C::glow().withAlpha (0.45f)); g.fillRoundedRectangle (1.0f, 1.0f, (float) w - 2.0f, (float) h - 2.0f, 5.0f); }
         // what it would play in a kit
@@ -76,7 +77,7 @@ private:
         g.drawText (juce::String::fromUTF8 (it->name.c_str()), 68, 0, w - 68 - 116, h, juce::Justification::centredLeft, true);
         g.setFont (font (9.5f)); g.setColour (C::dim());
         g.drawText (lane >= 0 ? "lane " + juce::String (lane + 1) : lengthText (it->seconds()), w - 114, 0, 46, h, juce::Justification::centredRight, true);
-        paintStars (g, starsArea (w, h).toFloat(), view.proc.kitRating (item));
+        paintStars (g, starsArea (w, h).toFloat(), view.rooms.kitRating (item));
     }
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
@@ -94,9 +95,9 @@ private:
             m.addSubMenu ("Put on lane", lanes); m.addSubMenu ("My rating", rate);
             m.showMenuAsync (juce::PopupMenu::Options(), [this, item] (int r)
             {
-                if (r == 1) view.proc.kitAssign (view.kitLane, view.kitLayer, item, true);
-                else if (r >= 200) view.proc.kitRate (item, (float) (r - 200));
-                else if (r >= 100) { view.kitLane = r - 100; view.kitLayer = 0; view.proc.kitAssign (view.kitLane, 0, item, true); }
+                if (r == 1) view.rooms.kitAssign (view.kitLane, view.kitLayer, item, true);
+                else if (r >= 200) view.rooms.kitRate (item, (float) (r - 200));
+                else if (r >= 100) { view.kitLane = r - 100; view.kitLayer = 0; view.rooms.kitAssign (view.kitLane, 0, item, true); }
                 if (r != 0 && onChange) onChange();
             });
             list.repaint();
@@ -105,20 +106,20 @@ private:
         if (stars.contains (e.x, e.y % std::max (1, list.getRowHeight())) || e.x >= stars.getX())
         {
             const float s = (float) starAt (stars, e.x);
-            view.proc.kitRate (item, view.proc.kitRating (item) == s ? 0.0f : s);     // the same star again takes the rating away
+            view.rooms.kitRate (item, view.rooms.kitRating (item) == s ? 0.0f : s);     // the same star again takes the rating away
         }
-        else view.proc.kitPlayItem (item);
+        else view.rooms.kitPlayItem (item);
         if (onChange) onChange();
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent& e) override
     {
         if (row < 0 || row >= (int) order.size() || e.x >= starsArea (list.getWidth(), 26).getX()) return;
-        view.proc.kitAssign (view.kitLane, view.kitLayer, order[(size_t) row], true);
-        view.proc.kitPlayLane (view.kitLane);
+        view.rooms.kitAssign (view.kitLane, view.kitLayer, order[(size_t) row], true);
+        view.rooms.kitPlayLane (view.kitLane);
         if (onChange) onChange();
     }
 
-    View& view;
+    bc::RoomView& view;
     juce::ListBox list;
     std::vector<int> order, used;
 };
@@ -127,14 +128,14 @@ private:
 class LaneList final : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    explicit LaneList (View& v) : view (v) {}
+    explicit LaneList (bc::RoomView& v) : view (v) {}
     std::function<void()> onChange;
     const nb::Pattern* pattern = nullptr;
     int step = -1;
 
     void paint (juce::Graphics& g) override
     {
-        const auto& kit = view.proc.kit;
+        const auto& kit = view.rooms.kit;
         const int W = getWidth(); const float rh = (float) getHeight() / (float) bc::kLanes;
         const Zones z (W);
         const int len = pattern != nullptr ? std::max (1, pattern->length) : 16;
@@ -143,7 +144,7 @@ public:
         {
             const auto row = juce::Rectangle<float> (0.0f, rh * (float) l, (float) W, rh).reduced (0.0f, 1.5f);
             const auto& ln = kit.lanes[(size_t) l];
-            const bool sel = l == view.kitLane, has = ! ln.empty(), muted = view.proc.kitPlayer.mute[(size_t) l].load();
+            const bool sel = l == view.kitLane, has = ! ln.empty(), muted = view.rooms.kitPlayer.mute[(size_t) l].load();
             g.setColour (sel ? C::glow().withAlpha (0.42f) : juce::Colours::white.withAlpha (l % 2 ? 0.10f : 0.22f));
             g.fillRoundedRectangle (row, 6.0f);
             if (sel) { g.setColour (C::teal()); g.drawRoundedRectangle (row.reduced (0.5f), 6.0f, 1.2f); }
@@ -193,7 +194,7 @@ public:
     {
         const int l = juce::jlimit (0, bc::kLanes - 1, e.y * bc::kLanes / std::max (1, getHeight()));
         const Zones z (getWidth());
-        auto& p = view.proc;
+        auto& p = view.rooms;
         const bool otherLane = l != view.kitLane;
         view.kitLane = l; if (otherLane) view.kitLayer = 0;
         if (e.mods.isPopupMenu())
@@ -206,7 +207,7 @@ public:
             m.addItem (5, "Clear the lane", ! p.kit.lanes[(size_t) l].empty());
             m.showMenuAsync (juce::PopupMenu::Options(), [this, l] (int r)
             {
-                auto& pr = view.proc;
+                auto& pr = view.rooms;
                 if (r == 1) pr.kitAssign (l, view.kitLayer, view.kitItem, true);
                 else if (r == 2) pr.kitNext (l, 1);
                 else if (r == 3) pr.kitNext (l, -1);
@@ -229,14 +230,14 @@ private:
         explicit Zones (int W) : strip (W - 6 - (W * 30) / 100) { mute = strip - 30; lock = mute - 44; next = lock - 28; prev = next - 22; }
         int gem = 4, role = 44, name = 124, prev, next, lock, mute, strip;
     };
-    View& view;
+    bc::RoomView& view;
 };
 
 // ---------------------------------------------------------------- a layer's sound, and the part of it that plays
 class WaveView final : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    explicit WaveView (View& v) : view (v) { setTooltip ("Drag the left and right edges: only what is between them plays"); }
+    explicit WaveView (bc::RoomView& v) : view (v) { setTooltip ("Drag the left and right edges: only what is between them plays"); }
     std::function<void (bool done)> onChange;
 
     void paint (juce::Graphics& g) override
@@ -244,7 +245,7 @@ public:
         const auto b = getLocalBounds().toFloat();
         paintLcd (g, b, 8.0f);
         const auto* ly = layer();
-        const auto* it = ly != nullptr ? view.proc.kit.item (ly->item) : nullptr;
+        const auto* it = ly != nullptr ? view.rooms.kit.item (ly->item) : nullptr;
         if (it == nullptr || it->l.empty())
         {
             g.setFont (font (11.0f)); g.setColour (C::lcdDim());
@@ -295,9 +296,9 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override { if (auto* ly = layer()) { ly->start = 0.0f; ly->end = 1.0f; if (onChange) onChange (true); repaint(); } }
 
 private:
-    bc::LaneLayer* layer() { return &view.proc.kit.lanes[(size_t) juce::jlimit (0, bc::kLanes - 1, view.kitLane)].layers[(size_t) juce::jlimit (0, bc::kLayers - 1, view.kitLayer)]; }
+    bc::LaneLayer* layer() { return &view.rooms.kit.lanes[(size_t) juce::jlimit (0, bc::kLanes - 1, view.kitLane)].layers[(size_t) juce::jlimit (0, bc::kLayers - 1, view.kitLayer)]; }
     float at (int x) const { return juce::jlimit (0.0f, 1.0f, ((float) x - 6.0f) / std::max (1.0f, (float) getWidth() - 12.0f)); }
-    View& view;
+    bc::RoomView& view;
     std::vector<float> peaks; const bc::PoolItem* peaksFor = nullptr;
     int grab = 0;
 };
@@ -313,9 +314,9 @@ public:
 } // namespace
 
 // ---------------------------------------------------------------- the room
-struct KitRoom::Parts
+struct bc::KitRoom::Parts
 {
-    explicit Parts (View& v) : pool (v), lanes (v), wave (v) {}
+    explicit Parts (bc::RoomView& v) : pool (v), lanes (v), wave (v) {}
     PoolList pool; LaneList lanes; WaveView wave; StarRow stars;
     Pill fromFile { "This file" }, fromAll { "All files" }, folder { "Folder" }, clear { "Clear all" };
     Segmented sort { { "Fits the lane", "As gathered" } };
@@ -335,9 +336,9 @@ struct KitRoom::Parts
     juce::Rectangle<int> poolPlate, kitPlate, lanePlate, laneTitle, layerName, hint;
 };
 
-KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
+bc::KitRoom::KitRoom (bc::RoomView& v) : view (v), parts (std::make_unique<Parts> (v))
 {
-    auto& p = *parts; auto& proc = view.proc;
+    auto& p = *parts; auto& proc = view.rooms;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &p.pool, &p.lanes, &p.wave, &p.stars, &p.fromFile, &p.fromAll, &p.folder, &p.clear, &p.sort, &p.name,
             &p.fill, &p.shuffle, &p.random, &p.anyLane, &p.clearLanes, &p.undo, &p.redo, &p.play, &p.pPrev, &p.pNext, &p.save, &p.patternBox, &p.bpm, &p.swing, &p.laneLevel, &p.lanePan, &p.laneWidth,
             &p.layerTabs, &p.level, &p.offset, &p.pitch, &p.fade, &p.reverse, &p.usePool, &p.clearLayer })
@@ -350,9 +351,9 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.clear.setTooltip ("Clear all: empty the pool. Sounds still on a lane stay (Clear lanes first to empty it completely).");
     p.sort.setItemTooltip (0, "Best for the selected lane first: how well it fits, how usable it is, how you rate sounds like it");
     p.sort.setItemTooltip (1, "In the order they were gathered");
-    p.fromFile.onClick = [this] { view.proc.kitGather (false); refresh(); };
-    p.fromAll.onClick = [this] { view.proc.kitGather (true); refresh(); };
-    p.clear.onClick = [this] { view.proc.kitClearPool(); view.kitItem = -1; refresh(); };
+    p.fromFile.onClick = [this] { view.rooms.kitGather (false); refresh(); };
+    p.fromAll.onClick = [this] { view.rooms.kitGather (true); refresh(); };
+    p.clear.onClick = [this] { view.rooms.kitClearPool(); view.kitItem = -1; refresh(); };
     p.folder.onClick = [this]
     {
         auto& pr = *parts;
@@ -363,7 +364,7 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
             const auto dir = fc.getResult();
             if (! dir.isDirectory()) return;
             auto s = shared::Settings::load(); s.importFolder = dir.getFullPathName(); s.save();
-            view.proc.kitAddFolder (dir);
+            view.rooms.kitAddFolder (dir);
             refresh();
         });
     };
@@ -373,20 +374,20 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     // ---- the kit
     p.name.setTooltip ("The kit's name: the file is called this");
     p.name.setFont (font (13.0f, true)); p.name.setJustification (juce::Justification::centredLeft);
-    p.name.onTextChange = [this] { view.proc.kit.name = parts->name.getText().trim().toStdString(); ++view.proc.kitVersion; seenVersion = view.proc.kitVersion; view.proc.stateChanged(); };
+    p.name.onTextChange = [this] { view.rooms.kit.name = parts->name.getText().trim().toStdString(); ++view.rooms.kitVersion; seenVersion = view.rooms.kitVersion; view.rooms.stateChanged(); };
     p.name.onReturnKey = [this] { unfocusAllComponents(); };
     p.fill.setTooltip ("A sound on every lane that is not locked: the best fit for each, no sound twice, no two alike");
     p.shuffle.setTooltip ("Another kit from the same pool: each open lane takes one of its four best");
     p.random.setTooltip ("Fresh sounds on every open lane (R): dealt from every sound that fits the lane, ignoring stars and ranking. No sound comes back until all of them have played.");
     p.anyLane.setTooltip ("Random ignores the lanes' roles: any sound can land on any lane, for stranger kits");
     p.clearLanes.setTooltip ("Empty every lane that is not locked (Undo brings them back)");
-    p.fill.onClick = [this] { view.proc.kitChoose(); refresh(); };
-    p.shuffle.onClick = [this] { view.proc.kitShuffle(); refresh(); };
-    p.random.onClick = [this] { view.proc.kitRandom (view.kitLane); refresh(); };
-    p.anyLane.onClick = [this] { view.proc.kitAnyLane = parts->anyLane.getToggleState(); view.proc.stateChanged(); };
-    p.clearLanes.onClick = [this] { view.proc.kitClearLanes(); refresh(); };
-    p.undo.onClick = [this] { view.proc.kitUndo(); refresh(); };
-    p.redo.onClick = [this] { view.proc.kitRedo(); refresh(); };
+    p.fill.onClick = [this] { view.rooms.kitChoose(); refresh(); };
+    p.shuffle.onClick = [this] { view.rooms.kitShuffle(); refresh(); };
+    p.random.onClick = [this] { view.rooms.kitRandom (view.kitLane); refresh(); };
+    p.anyLane.onClick = [this] { view.rooms.kitAnyLane = parts->anyLane.getToggleState(); view.rooms.stateChanged(); };
+    p.clearLanes.onClick = [this] { view.rooms.kitClearLanes(); refresh(); };
+    p.undo.onClick = [this] { view.rooms.kitUndo(); refresh(); };
+    p.redo.onClick = [this] { view.rooms.kitRedo(); refresh(); };
     p.undo.setTooltip ("Undo the last change to the lanes (Ctrl+Z)"); p.redo.setTooltip ("Redo (Ctrl+Shift+Z)");
     p.lanes.setTooltip ("Click a lane to hear it. < and > step through the sounds that fit. LOCK keeps a lane through Auto-fill, Shuffle, Random and Clear lanes. M mutes it in the pattern. Right-click for more.");
     p.lanes.onChange = [this] { refresh(); };
@@ -396,36 +397,36 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.patternBox.setTooltip ("The pattern the kit is heard in: NeoBeat's 128. It is saved in the .NJQ as scene A.");
     p.patternBox.onChange = [this]
     {
-        auto& pr = view.proc;
+        auto& pr = view.rooms;
         const int i = parts->patternBox.getSelectedId() - 1;
         if (i < 0 || i == pr.kit.pattern) return;
         pr.kitSetPattern (i, true);       // a pattern comes with its tempo; the knobs change it
         refresh();
     };
-    p.pPrev.onClick = [this] { parts->patternBox.setSelectedId ((view.proc.kit.pattern + nb::numPatterns() - 1) % nb::numPatterns() + 1, juce::sendNotificationSync); };
-    p.pNext.onClick = [this] { parts->patternBox.setSelectedId ((view.proc.kit.pattern + 1) % nb::numPatterns() + 1, juce::sendNotificationSync); };
+    p.pPrev.onClick = [this] { parts->patternBox.setSelectedId ((view.rooms.kit.pattern + nb::numPatterns() - 1) % nb::numPatterns() + 1, juce::sendNotificationSync); };
+    p.pNext.onClick = [this] { parts->patternBox.setSelectedId ((view.rooms.kit.pattern + 1) % nb::numPatterns() + 1, juce::sendNotificationSync); };
     p.play.setTooltip ("Play the kit in the pattern (Space)");
-    p.play.onClick = [this] { view.proc.kitPlayer.playing.store (parts->play.getToggleState()); refresh(); };
+    p.play.onClick = [this] { view.rooms.kitPlayer.playing.store (parts->play.getToggleState()); refresh(); };
     p.bpm.main = true; p.bpm.step = 1.0f;
     p.bpm.toText = [] (float v) { return juce::String ((int) std::round (v)); };
     p.swing.toText = [] (float v) { return juce::String ((int) std::round (v)) + "%"; };
     p.bpm.setTooltip ("The kit's tempo: saved in the .NJQ, and changeable in NeoBeat");
     p.swing.setTooltip ("How late the off-beat sixteenths are (50% straight)");
-    p.bpm.onChange = [this] (float v) { view.proc.kit.bpm = v; view.proc.kitPlayer.bpm.store (v); view.proc.stateChanged(); ++view.proc.kitVersion; seenVersion = view.proc.kitVersion; };
-    p.swing.onChange = [this] (float v) { view.proc.kit.swing = v / 100.0f; view.proc.kitPlayer.swing.store (v / 100.0f); view.proc.stateChanged(); ++view.proc.kitVersion; seenVersion = view.proc.kitVersion; };
+    p.bpm.onChange = [this] (float v) { view.rooms.kit.bpm = v; view.rooms.kitPlayer.bpm.store (v); view.rooms.stateChanged(); ++view.rooms.kitVersion; seenVersion = view.rooms.kitVersion; };
+    p.swing.onChange = [this] (float v) { view.rooms.kit.swing = v / 100.0f; view.rooms.kitPlayer.swing.store (v / 100.0f); view.rooms.stateChanged(); ++view.rooms.kitVersion; seenVersion = view.rooms.kitVersion; };
     p.save.setTooltip ("Save the kit, its pattern and its tempo as one .NJQ file in your NeoBeat preset folder");
     p.save.onClick = [this]
     {
         auto& pr = *parts;
         const auto dir = shared::Settings::load().presets();
-        auto nm = juce::File::createLegalFileName (juce::String (view.proc.kit.name).trim()); if (nm.isEmpty()) nm = "My kit";
+        auto nm = juce::File::createLegalFileName (juce::String (view.rooms.kit.name).trim()); if (nm.isEmpty()) nm = "My kit";
         pr.chooser = std::make_unique<juce::FileChooser> ("Save the kit for NeoBeat", dir.getChildFile (nm + ".njq"), "*.njq");
         pr.chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [this] (const juce::FileChooser& fc)
         {
             auto f = fc.getResult();
             if (f == juce::File()) return;
             juce::String err;
-            if (! view.proc.kitSaveNjq (f.withFileExtension ("njq"), err)) view.proc.kitMessage = "Not saved: " + err;
+            if (! view.rooms.kitSaveNjq (f.withFileExtension ("njq"), err)) view.rooms.kitMessage = "Not saved: " + err;
             refresh();
         });
     };
@@ -443,10 +444,10 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     p.offset.setTooltip ("When this layer starts against the others: later (or, below 0, earlier)");
     p.pitch.setTooltip ("This layer's pitch, in semitones");
     p.fade.setTooltip ("The fade at the end of the part that plays");
-    auto lane = [this] () -> bc::KitLane& { return view.proc.kit.lanes[(size_t) view.kitLane]; };
-    auto layer = [this] () -> bc::LaneLayer& { return view.proc.kit.lanes[(size_t) view.kitLane].layers[(size_t) view.kitLayer]; };
-    auto live = [this] { view.proc.kitChanged (view.kitLane); seenVersion = view.proc.kitVersion; parts->lanes.repaint(); };
-    auto done = [this] { view.proc.kitMark(); view.proc.kitPlayLane (view.kitLane); refresh(); };
+    auto lane = [this] () -> bc::KitLane& { return view.rooms.kit.lanes[(size_t) view.kitLane]; };
+    auto layer = [this] () -> bc::LaneLayer& { return view.rooms.kit.lanes[(size_t) view.kitLane].layers[(size_t) view.kitLayer]; };
+    auto live = [this] { view.rooms.kitChanged (view.kitLane); seenVersion = view.rooms.kitVersion; parts->lanes.repaint(); };
+    auto done = [this] { view.rooms.kitMark(); view.rooms.kitPlayLane (view.kitLane); refresh(); };
     p.laneLevel.onChange = [lane, live] (float v) { lane().levelDb = v; live(); };
     p.lanePan.onChange = [lane, live] (float v) { lane().pan = v; live(); };
     p.laneWidth.onChange = [lane, live] (float v) { lane().width = v; live(); };
@@ -457,23 +458,23 @@ KitRoom::KitRoom (View& v) : view (v), parts (std::make_unique<Parts> (v))
     for (auto* k : { &p.laneLevel, &p.lanePan, &p.laneWidth, &p.level, &p.offset, &p.pitch, &p.fade }) k->onCommit = done;
     p.layerTabs.onSelect = [this] (int i) { view.kitLayer = i; refresh(); };
     p.reverse.setTooltip ("Play this layer backwards");
-    p.reverse.onClick = [this, layer, done] { layer().reverse = parts->reverse.getToggleState(); view.proc.kitChanged (view.kitLane); done(); };
+    p.reverse.onClick = [this, layer, done] { layer().reverse = parts->reverse.getToggleState(); view.rooms.kitChanged (view.kitLane); done(); };
     p.usePool.setTooltip ("Put the sound selected in the pool on this layer (the same as double-clicking it)");
-    p.usePool.onClick = [this] { view.proc.kitAssign (view.kitLane, view.kitLayer, view.kitItem, true); view.proc.kitPlayLane (view.kitLane); refresh(); };
-    p.clearLayer.onClick = [this] { view.proc.kitAssign (view.kitLane, view.kitLayer, -1, false); refresh(); };
-    p.wave.onChange = [this] (bool finished) { view.proc.kitChanged (view.kitLane); seenVersion = view.proc.kitVersion; if (finished) { view.proc.kitMark(); view.proc.kitPlayLane (view.kitLane); refresh(); } };
+    p.usePool.onClick = [this] { view.rooms.kitAssign (view.kitLane, view.kitLayer, view.kitItem, true); view.rooms.kitPlayLane (view.kitLane); refresh(); };
+    p.clearLayer.onClick = [this] { view.rooms.kitAssign (view.kitLane, view.kitLayer, -1, false); refresh(); };
+    p.wave.onChange = [this] (bool finished) { view.rooms.kitChanged (view.kitLane); seenVersion = view.rooms.kitVersion; if (finished) { view.rooms.kitMark(); view.rooms.kitPlayLane (view.kitLane); refresh(); } };
     p.stars.setTooltip ("Your rating of this sound. Batchcut and NeoBeat learn from it which sounds to offer first.");
-    p.stars.onRate = [this, layer] (float s) { view.proc.kitRate (layer().item, s); refresh(); };
+    p.stars.onRate = [this, layer] (float s) { view.rooms.kitRate (layer().item, s); refresh(); };
     startTimerHz (30);
 }
 
-KitRoom::~KitRoom() { stopTimer(); }
+bc::KitRoom::~KitRoom() { stopTimer(); }
 
-void KitRoom::visibilityChanged() { if (! isVisible()) { view.proc.kitPlayer.playing.store (false); parts->play.setToggleState (false, juce::dontSendNotification); } }
+void bc::KitRoom::visibilityChanged() { if (! isVisible()) { view.rooms.kitPlayer.playing.store (false); parts->play.setToggleState (false, juce::dontSendNotification); } }
 
-void KitRoom::refresh()
+void bc::KitRoom::refresh()
 {
-    auto& p = *parts; auto& proc = view.proc; auto& kit = proc.kit;
+    auto& p = *parts; auto& proc = view.rooms; auto& kit = proc.kit;
     view.kitLane = juce::jlimit (0, bc::kLanes - 1, view.kitLane); view.kitLayer = juce::jlimit (0, bc::kLayers - 1, view.kitLayer);
     if (kit.item (view.kitItem) == nullptr) view.kitItem = -1;
     if (p.presetIndex != kit.pattern || p.preset == nullptr) { p.preset = std::make_unique<nb::Preset> (nb::patternPreset (kit.pattern)); p.presetIndex = kit.pattern; }
@@ -507,19 +508,19 @@ void KitRoom::refresh()
     repaint();
 }
 
-void KitRoom::timerCallback()
+void bc::KitRoom::timerCallback()
 {
     if (! isVisible()) return;
-    auto& proc = view.proc;
+    auto& proc = view.rooms;
     const int st = proc.kitPlayer.step.load();
     if (st != seenStep) { seenStep = st; parts->lanes.step = st; parts->lanes.repaint(); }
     const bool busy = proc.session.status().busy;
     if (proc.kitVersion != seenVersion || busy != wasBusy) { wasBusy = busy; refresh(); }
 }
 
-bool KitRoom::key (const juce::KeyPress& key)
+bool bc::KitRoom::key (const juce::KeyPress& key)
 {
-    auto& proc = view.proc;
+    auto& proc = view.rooms;
     const auto c = key.getKeyCode();
     const auto letter = c < 256 ? juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) c) : 0;
     const auto mods = key.getModifiers();
@@ -535,9 +536,9 @@ bool KitRoom::key (const juce::KeyPress& key)
     return false;
 }
 
-void KitRoom::paint (juce::Graphics& g)
+void bc::KitRoom::paint (juce::Graphics& g)
 {
-    auto& p = *parts; const auto& kit = view.proc.kit;
+    auto& p = *parts; const auto& kit = view.rooms.kit;
     for (auto r : { p.poolPlate, p.kitPlate, p.lanePlate }) paintPlate (g, r.toFloat(), 12.0f);
     paintLabel (g, "Pool", { p.poolPlate.getX() + 14, p.poolPlate.getY() + 8, 120, 16 }, juce::Justification::centredLeft, 9.5f);
     paintLabel (g, juce::String ((int) kit.pool.size()) + (kit.pool.size() == 1 ? " sound" : " sounds"), { p.poolPlate.getRight() - 134, p.poolPlate.getY() + 8, 120, 16 }, juce::Justification::centredRight, 8.0f, C::dim());
@@ -563,7 +564,7 @@ void KitRoom::paint (juce::Graphics& g)
                       { p.lanePlate.getX() + 14, p.clearLayer.getBottom() + 52, p.lanePlate.getWidth() - 28, 60 }, juce::Justification::topLeft, 4);
 }
 
-void KitRoom::resized()
+void bc::KitRoom::resized()
 {
     auto& p = *parts;
     p.poolPlate = { 12, 8, 316, 720 }; p.kitPlate = { 338, 8, 616, 720 }; p.lanePlate = { 964, 8, 304, 720 };

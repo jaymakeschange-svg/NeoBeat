@@ -3,15 +3,15 @@
 #pragma once
 
 #include "Processor.h"
+#include "../neobeat/shared/rooms/RoomView.h"
 #include "Ui.h"
 #include "../neobeat/shared/FoldersUi.h"
 
 // What the editor shows and works on, shared by all its parts, and the actions they take.
-struct View
+struct View : public bc::RoomView
 {
-    explicit View (BcProcessor& p) : proc (p) {}
+    explicit View (BcProcessor& p) : bc::RoomView (p), proc (p) {}
     BcProcessor& proc;
-    std::shared_ptr<const bc::Doc> doc;   // the open part
     double t0 = 0.0, t1 = 1.0;            // the visible stretch (s, in the part)
     double cursor = 0.0;                  // where PLAY starts
     int64_t selOnset = -1;                // the selected event, by its start (indexes change with every detection)
@@ -22,14 +22,7 @@ struct View
     int selVersion = 0;                   // changes with the selection (for its overlay)
     bool loop = false;
     juce::String hover;
-    std::function<void()> repaintAll;     // something on screen changed
-    std::function<void()> refreshPanels;  // the panels show something that changed
     std::function<void()> hoverChanged;   // the readout under the display changed
-    int room = 0;                         // 0 the cut room, 1 the kit room, 2 LOOPS, 3 KEYS
-    int kitLane = 0, kitLayer = 0, kitItem = -1;   // what is selected in the kit room
-    int loopLayer = 0, loopHit = -1;      // what is selected in LOOPS
-    int keysZone = -1;                    // what is selected in KEYS
-    std::function<void()> roomChanged;
 
     double length() const noexcept { return doc && doc->audio ? (double) doc->audio->size() / doc->audio->sr : 0.0; }
     double sr() const noexcept { return doc && doc->audio ? doc->audio->sr : 48000.0; }
@@ -321,74 +314,7 @@ private:
     juce::Rectangle<int> lcd;
 };
 
-// ---------------------------------------------------------------- the kit room (KitRoom.cpp)
-// A NeoBeat kit out of the one-shots: the pool on the left, the 16 lanes in the middle (auditioned inside
-// one of NeoBeat's 128 patterns), the selected lane's layers on the right.
-class KitRoom final : public juce::Component, private juce::Timer
-{
-public:
-    explicit KitRoom (View& v);
-    ~KitRoom() override;
-    void paint (juce::Graphics&) override;
-    void resized() override;
-    void visibilityChanged() override;
-    void refresh();
-    bool key (const juce::KeyPress&);
-private:
-    void timerCallback() override;
-    struct Parts;
-    View& view;
-    std::unique_ptr<Parts> parts;
-    int seenVersion = -1, seenStep = -2;
-    bool wasBusy = false;
-};
-
-// ---------------------------------------------------------------- LOOPS (LoopsRoom.cpp)
-// The light sample sequencer: where the sounds come from on the left, the layers of chops in the middle,
-// the selected layer and chop on the right.
-class LoopsRoom final : public juce::Component, private juce::Timer
-{
-public:
-    explicit LoopsRoom (View& v);
-    ~LoopsRoom() override;
-    void paint (juce::Graphics&) override;
-    void resized() override;
-    void visibilityChanged() override;
-    void refresh();
-    bool key (const juce::KeyPress&);
-    juce::Component& grid();                // for the tests
-private:
-    void timerCallback() override;
-    struct Parts;
-    View& view;
-    std::unique_ptr<Parts> parts;
-    int seenVersion = -1, seenPool = -1;
-    double seenBeat = -2.0;
-};
-
-// ---------------------------------------------------------------- KEYS (KeysRoom.cpp)
-// Sounds made into an instrument: where they come from on the left, the keyboard map and the keys to play in
-// the middle, how it plays on the right.
-class KeysRoom final : public juce::Component, private juce::Timer
-{
-public:
-    explicit KeysRoom (View& v);
-    ~KeysRoom() override;
-    void paint (juce::Graphics&) override;
-    void resized() override;
-    void refresh();
-    bool key (const juce::KeyPress&);
-    bool keyState (bool isKeyDown);                 // the computer keyboard as keys (A to K: C3 to C4)
-    void letGo();                                   // every key up
-    juce::Component& map();                 // for the tests
-private:
-    void timerCallback() override;
-    struct Parts;
-    View& view;
-    std::unique_ptr<Parts> parts;
-    int seenVersion = -1, seenPool = -1;
-};
-
+// ---------------------------------------------------------------- the kit room (bc::KitRoom.cpp)
 // ---------------------------------------------------------------- the editor
 
 class BcEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::ChangeListener, private juce::Timer
@@ -410,9 +336,9 @@ public:
     // for the tests: the parts by name
     View& getView() noexcept { return view; }
     Inspector& getInspector() noexcept { return content.inspector; }
-    KitRoom& getKitRoom() noexcept { return content.kitRoom; }
-    LoopsRoom& getLoopsRoom() noexcept { return content.loopsRoom; }
-    KeysRoom& getKeysRoom() noexcept { return content.keysRoom; }
+    bc::KitRoom& getKitRoom() noexcept { return content.kitRoom; }
+    bc::LoopsRoom& getLoopsRoom() noexcept { return content.loopsRoom; }
+    bc::KeysRoom& getKeysRoom() noexcept { return content.keysRoom; }
     FileList& getFiles() noexcept { return content.files; }
     void showRoom (int room) { view.room = room; if (view.roomChanged) view.roomChanged(); }
     SpecView& getSpec() noexcept { return content.spec; }
@@ -434,7 +360,7 @@ private:
         juce::String toolHint() const;
         View& view;
         void showRoom();
-        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; KitRoom kitRoom; LoopsRoom loopsRoom; KeysRoom keysRoom;
+        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; bc::KitRoom kitRoom; bc::LoopsRoom loopsRoom; bc::KeysRoom keysRoom;
         bcui::Segmented tools { { "Box", "Brush", "Lasso", "Wand" } };
         juce::ComboBox layerBox;
         bcui::Pill erase { "Erase" }, down { "-6 dB" }, up { "+6 dB" }, toLayer { "To layer" }, undo { "Undo" }, redo { "Redo" };

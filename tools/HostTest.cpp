@@ -675,9 +675,25 @@ int main (int argc, char** argv)
             njq::Kit asKit; njq::load (insFile, asKit, err);
             int lanes = 0; for (const auto& ln : asKit.lanes) lanes += ln.set ? 1 : 0;
             CHECK (asKit.kind == "instrument" && lanes == 0, "to NeoBeat's reader it is no kit (kind \"%s\", no lanes)", asKit.kind.toRawUTF8());
-            njq::InstrumentFile notOne; juce::String e2;
-            const bool refused = ! njq::loadInstrument (dir.getChildFile ("Yard loop.njq"), notOne, e2);
-            CHECK (refused && e2.contains ("not an instrument"), "a sequence is refused as an instrument: \"%s\"", e2.toRawUTF8());
+            // A .NJQ that holds sounds now opens as an instrument with those sounds laid out on the
+            // keys, one to a key from C1 up, rather than being turned away for being the wrong kind
+            // of file. A sequence's chops are still sounds, and a set of sounds on the keys is an
+            // instrument. What is still refused is a file with nothing in it to play.
+            njq::InstrumentFile asRack; juce::String e2;
+            const bool opened = njq::loadInstrument (dir.getChildFile ("Yard loop.njq"), asRack, e2);
+            int lowest = 128, highest = -1;
+            for (const auto& z : asRack.zones) { lowest = std::min (lowest, z.lowKey); highest = std::max (highest, z.highKey); }
+            CHECK (opened && ! asRack.zones.empty(),
+                   "a sequence opens as a rack: %d sounds over keys %d..%d%s",
+                   (int) asRack.zones.size(), lowest, highest, e2.isEmpty() ? "" : (" " + e2).toRawUTF8());
+
+            njq::Kit empty; empty.kind = "kit"; empty.name = "nothing";
+            const auto emptyFile = dir.getChildFile ("Nothing.njq");
+            juce::String e3;
+            njq::save (emptyFile, empty, e3);
+            njq::InstrumentFile notOne; juce::String e4;
+            const bool refused = ! njq::loadInstrument (emptyFile, notOne, e4);
+            CHECK (refused && e4.contains ("no sounds"), "one with nothing in it is still refused: \"%s\"", e4.toRawUTF8());
         }
         const auto before = proc->keys;
         proc->keys.zones.clear(); proc->keysChanged();
