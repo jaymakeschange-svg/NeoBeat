@@ -170,7 +170,13 @@ CutRoom::CutRoom (bc::RoomView& v) : view (v)
     {
         auto& p = *parts;
         p.chooser = std::make_unique<juce::FileChooser> ("Recordings to cut", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
-        p.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectMultipleItems,
+        // canSelectFiles is not optional. Without it - and without canSelectDirectories - JUCE's
+        // browser has nothing it is allowed to show, so the list comes up empty in a folder full
+        // of wavs and the button looks broken. It was missing here and nowhere else: every other
+        // chooser in the plugin came from Batchcut and had it.
+        p.chooser->launchAsync (juce::FileBrowserComponent::openMode
+                                  | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::canSelectMultipleItems,
                                 [this] (const juce::FileChooser& fc)
         {
             juce::StringArray paths;
