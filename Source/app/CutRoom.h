@@ -11,7 +11,12 @@
 
 class CutRoom final : public juce::Component,
                       private juce::Timer,
-                      private juce::FileDragAndDropTarget
+                      // PUBLIC, and it has to be: JUCE finds a drop target with
+                      // dynamic_cast<FileDragAndDropTarget*> on the Component, and a cast to a
+                      // private base yields null. Inherited privately, the three methods below
+                      // compile, link, and are never once called - which is exactly how this
+                      // shipped with no drag and drop at all.
+                      public juce::FileDragAndDropTarget
 {
 public:
     explicit CutRoom (bc::RoomView& v);

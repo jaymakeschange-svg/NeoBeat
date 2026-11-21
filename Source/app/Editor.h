@@ -15,6 +15,9 @@
 
 class MjqEditor final : public juce::AudioProcessorEditor,
                         public bc::RoomView,
+                        // public, for the same reason as CutRoom: JUCE finds a drop target by
+                        // dynamic_cast, and a private base is invisible to it
+                        public juce::FileDragAndDropTarget,
                         private juce::Timer,
                         private juce::ChangeListener
 {
@@ -27,6 +30,13 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     bool keyStateChanged (bool isKeyDown) override;
     void refresh();
+
+    // Files land anywhere in the window, not only on the one list that happens to be showing.
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int, int) override;
+    void fileDragEnter (const juce::StringArray&, int, int) override { dropping = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dropping = false; repaint(); }
+    void paintOverChildren (juce::Graphics&) override;
 
     // 0 CUT, 1 LOOPS, 2 KEYS, 3 MAP, 4 MOD, 5 RANDOM, 6 STEREOROOM
     void showRoom (int which);
@@ -41,6 +51,7 @@ private:
     struct Parts;
     std::unique_ptr<Parts> parts;
     mjqui::Look look;
+    bool dropping = false;
     juce::TooltipWindow tips { this, 600 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MjqEditor)

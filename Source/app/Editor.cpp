@@ -210,6 +210,90 @@ bool MjqEditor::keyPressed (const juce::KeyPress& k)
     return false;
 }
 
+static_assert (std::is_convertible<MjqEditor*, juce::FileDragAndDropTarget*>::value,
+               "MjqEditor must inherit FileDragAndDropTarget publicly or JUCE cannot see it");
+
+bool MjqEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (const auto& f : files)
+    {
+        const juce::File file (f);
+        if (file.isDirectory() || MjqProcessor::isAudioFile (file)) return true;
+        // the things MidiJaQ opens whole, so dropping one of those works too
+        const auto ext = file.getFileExtension().toLowerCase();
+        if (ext == ".njq" || ext == ".njqi" || ext == ".njqloop") return true;
+    }
+    return false;
+}
+
+void MjqEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    dropping = false;
+    repaint();
+
+    // A preset dropped on its own goes straight in, whichever room is showing: that is what
+    // dropping one means, and there is nothing else it could mean.
+    if (files.size() == 1)
+    {
+        const juce::File one (files[0]);
+        const auto ext = one.getFileExtension().toLowerCase();
+        juce::String error;
+        if (ext == ".njqloop")
+        {
+            if (proc.loopsOpenPreset (one, error)) { proc.lastMessage = "Opened " + one.getFileName(); showRoom (1); }
+            else                                    proc.lastMessage = error;
+            refresh();
+            return;
+        }
+        if (ext == ".njqi")
+        {
+            if (proc.keysOpenNjq (one, error)) { proc.lastMessage = "Opened " + one.getFileName(); showRoom (2); }
+            else                                proc.lastMessage = error;
+            refresh();
+            return;
+        }
+    }
+
+    // Audio, and where it should land. In CUT the drop is the raw file list - that is the room's
+    // whole job. Everywhere else the sounds go into the pool, ready to be rolled into a loop or
+    // built into an instrument, which is what you came to those rooms to do.
+    if (room == 0)
+    {
+        const int n = proc.addPaths (files);
+        proc.lastMessage = n > 0 ? "Added " + juce::String (n) + (n == 1 ? " file" : " files")
+                                 : "Nothing new to add (no audio files, or already in the list)";
+        refresh();
+        return;
+    }
+
+    int added = 0;
+    juce::StringArray seen;
+    for (const auto& f : files)
+    {
+        const juce::File file (f);
+        const juce::File dir = file.isDirectory() ? file : file.getParentDirectory();
+        if (seen.contains (dir.getFullPathName())) continue;
+        seen.add (dir.getFullPathName());
+        added += proc.kitAddFolder (dir);
+    }
+    proc.lastMessage = added > 0 ? "Added " + juce::String (added) + (added == 1 ? " sound" : " sounds") + " to the pool"
+                                 : "Nothing new to add (no audio files, or already in the pool)";
+    refresh();
+}
+
+void MjqEditor::paintOverChildren (juce::Graphics& g)
+{
+    if (! dropping) return;
+    g.setColour (nsui::C::teal().withAlpha (0.16f));
+    g.fillRect (getLocalBounds());
+    g.setColour (nsui::C::teal());
+    g.drawRect (getLocalBounds(), 3);
+    g.setFont (nsui::font (18.0f * (float) getWidth() / 1280.0f, true));
+    g.setColour (nsui::C::text());
+    g.drawText (room == 0 ? "DROP AUDIO FILES OR FOLDERS" : "DROP SOUNDS, FOLDERS OR A PRESET",
+                getLocalBounds(), juce::Justification::centred);
+}
+
 bool MjqEditor::keyStateChanged (bool isKeyDown)
 {
     return room == 2 ? parts->keys.keyState (isKeyDown) : false;

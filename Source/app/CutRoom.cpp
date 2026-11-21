@@ -296,6 +296,12 @@ bool CutRoom::key (const juce::KeyPress& k)
     return false;
 }
 
+// The guard against that mistake returning, here and in every other drop target: this is the same
+// conversion JUCE's dynamic_cast needs, so if the inheritance is ever made private again the build
+// stops instead of the feature.
+static_assert (std::is_convertible<CutRoom*, juce::FileDragAndDropTarget*>::value,
+               "CutRoom must inherit FileDragAndDropTarget publicly or JUCE cannot see it");
+
 bool CutRoom::isInterestedInFileDrag (const juce::StringArray&) { return true; }
 
 void CutRoom::filesDropped (const juce::StringArray& files, int, int)
