@@ -1,5 +1,7 @@
 # The Neosystem — state of the project, 21 November 2026
 
+**Neosystem: an experimental new jack swing sonic research project.**
+
 A complete handover for whoever continues this work, human or AI. It assumes C++ and JUCE
 knowledge and nothing about the project.
 
@@ -10,9 +12,8 @@ and it is easy to walk into.
 
 ## 1. What the Neosystem is
 
-Joshua Marshall (Marbelite) — musician, photographer, writer and audio researcher, based in Milan
-— is building a family of JUCE 8 plugins for making experimental electronic **new jack swing**.
-The family is called the **Neosystem**: the company name, if there were a company.
+**Neosystem is an experimental new jack swing sonic research project** — a family of JUCE 8
+plugins built to make the music the research is about.
 
 The guiding idea behind the sound: *sounds that defy physics yet are modelled after physical
 things* — imagine a universe where SOPHIE and Aphex Twin timbres are the default presets of a
@@ -30,7 +31,7 @@ rubbery, latex percussion.
            JaqRack              the rack host, under those
 ```
 
-**The ecosystem rule, in his words:** *"features one has, from the interface to the workflow,
+**The ecosystem rule, as stated:** *"features one has, from the interface to the workflow,
 should be interconnected to the other. If Batchcut has drag and drop, so does NeoBeat. If NeoBeat
 has right-click send-to, so does MidiJaQ."* Features propagate **without being asked**. This is the
 architecture, not a preference.
@@ -57,8 +58,8 @@ architecture, not a preference.
 
 ### Workflow
 
-Batchcut before Ableton is even open. NeoBeat and MidiJaQ are where he goes to play, edit and add
-effects to those presets.
+Batchcut before Ableton is even open. NeoBeat and MidiJaQ are where the presets get played, edited
+and effected.
 
 ---
 
@@ -76,7 +77,7 @@ effects to those presets.
 | Techno and house presets | **not done** |
 | Presets moved across to MidiJaQ | **not done** |
 
-Six tests pass including a host test with 700 random actions. **He uses this daily.** Ask before
+Six tests pass including a host test with 700 random actions. **In daily use.** Ask before
 changing anything in it.
 
 ### MidiJaQ — rebuilt 20–21 Nov, this is where the work went
@@ -159,7 +160,8 @@ In order.
 /home/claude/batchcut-wt    batchcut-3.0    build: /home/claude/bcbuild
 ```
 
-All plugins live in one repo, `jaymakeschange-svg/NeoBeat`, as **orphan branches** — one tree per
+All plugins live in one GitHub repo (`<owner>/NeoBeat` — the clone URL is in each worktree's
+`git remote -v`), as **orphan branches** — one tree per
 plugin, no shared history. **Never push to `main`.**
 
 ### Shared code — copied, not submoduled
@@ -274,8 +276,8 @@ task**, with permission.
 
 "Fourteen tests pass" and "pluginval passed at strictness 10" were reported as evidence the plugin
 worked. Both true. Both **worthless for these bugs — no test in that suite can see UI wiring.**
-The parts were verified and the whole was inferred, and the user found four broken features in
-software he had been told was ready.
+The parts were verified and the whole was inferred, and four broken features were found in
+software that had been reported as ready.
 
 **Never report green tests as evidence a feature works. Run the plugin and click the thing.** It
 takes two minutes and found all of this.
@@ -283,8 +285,7 @@ takes two minutes and found all of this.
 ### Smaller errors worth inheriting
 
 - `test_chops` reported a travelling chop as "+103 dB" — not a loudness or a position, but a
-  channel ratio floored at `1e-9`, so its magnitude was set by the epsilon. **The user caught
-  this.** It now recovers pan position with `atan2` over the two channels, bounded −1..+1, which
+  channel ratio floored at `1e-9`, so its magnitude was set by the epsilon. **This was caught in review, not by the suite.** It now recovers pan position with `atan2` over the two channels, bounded −1..+1, which
   can also test that a sway is symmetric.
 - Tests have passed **vacuously on empty lists** more than once. Guard every loop-based assertion
   with a non-empty check.
@@ -341,15 +342,15 @@ Useful when writing the techno/house and new-jack-swing presets (§8).
   at 58, and those are models too large for one GPU. A 30B on a desk is below that again. It will
   write and edit single files well and **lose the thread on cross-file work** — which is exactly
   what this project is made of (three trees, byte-identical shared headers).
-- The bigger practical win: run the agent **on his own machine**, where the loop collapses from a
+- The bigger practical win: run the agent **on the development machine itself**, where the loop collapses from a
   38-minute CI build to seconds.
 
 ---
 
 ## 7. Skins — planned, not started
 
-No skinning system exists yet. His stated direction, to be implemented once the builds are
-functional (he explicitly deferred it for efficiency):
+No skinning system exists yet. The stated direction, to be implemented once the builds are
+functional (deferred deliberately, for efficiency):
 
 - **Y2K chrome / green-silver skinned desktop** — the NeoBeat reference
 - **Pearlescent circuit board** with silver traces and rhinestones
@@ -389,11 +390,10 @@ hard-coded colours. Batchcut can share NeoBeat's skin.
 ### Known gaps, stated honestly
 
 - **Loose pool sounds are not saved.** `kitToXml` writes only what a lane uses — deliberate in
-  Batchcut, possibly wrong for MidiJaQ where the pool is the MAP's working set. **User has not
-  decided.**
+  Batchcut, possibly wrong for MidiJaQ where the pool is the MAP's working set. **Not yet decided.**
 - **`BassMono` covers the Stereoroom's output only**, not the whole mix. Applied globally it
   changed how every existing preset pans (a hard-left voice went from >12 dB to 9.2 dB), so it was
-  scoped. **User's call.**
+  scoped. **Owner's call.**
 - **The MAP has had no musical use** beyond tests.
 - **Right-click sends, the Orb, the randomiser, and most of LOOPS/KEYS are unverified by hand.**
 - **Open question never answered:** should MidiJaQ export MIDI files? (Batchcut writes MIDI;
@@ -402,20 +402,20 @@ hard-coded colours. Batchcut can share NeoBeat's skin.
 
 ---
 
-## 9. Working with him
+## 9. Working practices
 
-- **He provides the ideas; you assist and code.** Do not redesign his concepts.
+- **The ideas come from the project owner; you assist and code.** Do not redesign the concepts.
 - **Ask before changing any existing feature of an existing plugin.** Batchcut especially.
 - **Ask before long builds. Commit and push only when asked**, to the plugin's own branch, never
   `main`.
-- Do not keep records of files on his computer unless the task needs it.
+- Do not keep records of files on the owner's computer unless the task needs it.
 - **Propagate features across the family without being told** (§1).
 - Constraints: no DRM circumvention, no reproducing proprietary code. Iftah's **Sting** and **Art
   DSP Canvas** are studied **by behaviour only** — their code and visual design stay out. The Wave
   emulator is AGPL: reimplement principles, never copy. Don't read AAS licence files or type
   serials.
-- He works under limited credits and his time is expensive. **Batch verification; do not spend a
-  round trip per bug. Be blunt about what you have not tested.**
+- Work is done under constrained time and budget. **Batch verification; do not spend a round trip
+  per bug. Be blunt about what you have not tested.**
 
 ---
 
