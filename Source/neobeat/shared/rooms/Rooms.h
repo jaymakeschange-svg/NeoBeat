@@ -82,6 +82,13 @@ struct Rooms
     juce::File exportDir() const;
     juce::File midiDir() const;
 
+    // Gives the loader the four things it needs to touch audio: how to probe a file, how to read
+    // part of one, how to write a wav, how to make a folder. The Session is deliberately
+    // format-agnostic, so without these every read fails - which is exactly what MidiJaQ did,
+    // because it never set them. Shared, so no plugin has to remember to.
+    // The caller still sets session.onChange (it needs its own notifier) and calls session.start().
+    void wireSession();
+
     static bool writeWav (const juce::File& f, const std::vector<float>& l, const std::vector<float>& r,
                           double sr, int bits, std::string& err);
 

@@ -12,11 +12,12 @@
 #include "../core/Player.h"
 #include "../core/Session.h"
 
-class MjqProcessor final : public juce::AudioProcessor, public bc::Rooms, public juce::ChangeBroadcaster
+class MjqProcessor final : public juce::AudioProcessor, public bc::Rooms, public juce::ChangeBroadcaster,
+                           private juce::AsyncUpdater
 {
 public:
     MjqProcessor();
-    ~MjqProcessor() override = default;
+    ~MjqProcessor() override;
 
     // ---- the line, and the snapshot the audio thread reads
     mjq::Line line;                                  // the selected line, on the message thread
@@ -35,6 +36,11 @@ public:
     // ---- MAP: one grid, two kinds of mark
     mjq::MapPattern map;
     void roomsNotify() override { sendChangeMessage(); }
+
+    // The loader reads and analyses files on a worker thread and leaves the results in a queue;
+    // this is what takes them off it, on the message thread. Without it a file sits in the list
+    // saying "Reading files" for ever and never reaches the pool, which is what MidiJaQ did.
+    void handleAsyncUpdate() override;
     void mapChanged();                           // the marks changed: the player takes a new copy
     void mapWrite();                             // a phrase in the key, from whatever is loaded
 

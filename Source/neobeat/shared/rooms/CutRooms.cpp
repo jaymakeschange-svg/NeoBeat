@@ -3,6 +3,48 @@
 // MidiJaQ needs the same, because a room with no sounds in it is not much of a room.
 
 #include "Rooms.h"
+#include <limits>
+
+void bc::Rooms::wireSession()
+{
+    session.settings.outDir = exportDir().getFullPathName().toStdString();
+
+    session.prober = [this] (const std::string& path, bc::FileInfo& info, std::string& err)
+    {
+        const juce::File f (juce::String::fromUTF8 (path.c_str()));
+        if (! f.existsAsFile()) { err = "the file is missing"; return false; }
+        std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (f));
+        if (r == nullptr) { err = "not an audio file this can read"; return false; }
+        if (r->sampleRate < 1000.0 || r->lengthInSamples <= 0) { err = "the file is empty"; return false; }
+        info.sr = r->sampleRate; info.length = r->lengthInSamples; info.channels = (int) r->numChannels;
+        return true;
+    };
+    session.loader = [this] (const std::string& path, int64_t start, int64_t len, bc::Audio& out, std::string& err)
+    {
+        const juce::File f (juce::String::fromUTF8 (path.c_str()));
+        std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (f));
+        if (r == nullptr) { err = f.existsAsFile() ? "could not read the file" : "the file is missing"; return false; }
+        len = std::max<int64_t> (0, std::min<int64_t> (len, (int64_t) r->lengthInSamples - start));
+        if (len <= 0 || len > (int64_t) std::numeric_limits<int>::max()) { err = "nothing to read"; return false; }
+        const bool stereo = r->numChannels > 1;
+        juce::AudioBuffer<float> buf (stereo ? 2 : 1, (int) len);
+        if (! r->read (&buf, 0, (int) len, start, true, stereo)) { err = "could not read the file"; return false; }
+        out.sr = r->sampleRate;
+        out.l.assign (buf.getReadPointer (0), buf.getReadPointer (0) + len);
+        if (stereo) out.r.assign (buf.getReadPointer (1), buf.getReadPointer (1) + len); else out.r.clear();
+        for (auto* v : { &out.l, &out.r }) for (auto& x : *v) if (! std::isfinite (x)) x = 0.0f;
+        return true;
+    };
+    session.writer = [] (const std::string& path, const std::vector<float>& l, const std::vector<float>& r,
+                         double sr, int bits, std::string& err)
+    {
+        return writeWav (juce::File (juce::String::fromUTF8 (path.c_str())), l, r, sr, bits, err);
+    };
+    session.makeDir = [] (const std::string& dir)
+    {
+        return juce::File (juce::String::fromUTF8 (dir.c_str())).createDirectory().wasOk();
+    };
+}
 
 bool bc::Rooms::isAudioFile (const juce::File& f)
 {

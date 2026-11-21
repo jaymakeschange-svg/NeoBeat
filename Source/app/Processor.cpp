@@ -31,6 +31,30 @@ MjqProcessor::MjqProcessor()
     line = song.current().tracks[0].line;
     rebuildSession (true);
     message = "JAQ writes a line; DIALECT moves its notes, TRAFFIC how many play.";
+
+    // Reading and analysing audio happens on a worker thread, which has to be started, and which
+    // tells us when it has something so we can collect it on the message thread. MidiJaQ did
+    // neither: no worker ran, so every file queued behind "Reading files" for ever and nothing
+    // ever reached the pool. Both lines are in Batchcut's processor; neither was here.
+    wireSession();                                       // how the loader reads and writes audio
+    session.onChange = [this] { triggerAsyncUpdate(); };  // it tells us when it has something
+    session.start();                                     // and the worker that does the reading
+}
+
+MjqProcessor::~MjqProcessor()
+{
+    session.onChange = nullptr;
+    cancelPendingUpdate();
+    session.stop();              // join the worker before the session it reads goes away
+}
+
+void MjqProcessor::handleAsyncUpdate()
+{
+    const auto before = session.doc();
+    session.applyResults();      // files that finished reading become openable
+    kitTakeGathered();           // and sounds that were gathered land in the pool
+    if (session.doc() != before) stateChanged();
+    sendChangeMessage();
 }
 
 void MjqProcessor::rebuildSession (bool full)
