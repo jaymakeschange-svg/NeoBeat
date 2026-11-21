@@ -1,264 +1,431 @@
-# MidiJaQ handoff
+# The Neosystem — state of the project, 21 November 2026
 
-Written 21 November 2026 for whoever picks this up next. It assumes you know C++ and JUCE and
-nothing about this project.
+A complete handover for whoever continues this work, human or AI. It assumes C++ and JUCE
+knowledge and nothing about the project.
 
-Read the "Mistakes" section before you write any code. Every bug in this plugin on 20–21 November
-came from the same cause, and it is a cause you can walk straight into.
+**Read §5 (Mistakes) before writing any code.** Every bug found on 20–21 November had one cause,
+and it is easy to walk into.
 
 ---
 
-## 1. What this is
+## 1. What the Neosystem is
 
-Joshua Marshall (Marbelite) is building the **Neosystem**, three JUCE 8 plugins that share code:
+Joshua Marshall (Marbelite) — musician, photographer, writer and audio researcher, based in Milan
+— is building a family of JUCE 8 plugins for making experimental electronic **new jack swing**.
+The family is called the **Neosystem**: the company name, if there were a company.
 
-| Plugin | What it is | Branch |
-|---|---|---|
-| **Batchcut** | The preset editor. Finds events in recordings, cuts one-shots, builds kits/loops/instruments. Used *before* opening a DAW. | `batchcut-3.0` |
-| **NeoBeat** | Drum sequencing, plays Batchcut's presets | `neobeat-3.0` |
-| **MidiJaQ** | Melodic sampling sequencer, plays Batchcut's presets | `midijaq` |
+The guiding idea behind the sound: *sounds that defy physics yet are modelled after physical
+things* — imagine a universe where SOPHIE and Aphex Twin timbres are the default presets of a
+physical modelling synth. The research is in manipulating models to add impossible depth, space,
+body and buoyancy. Native kits should sound like synthesised city and industrial noise: metallic,
+rubbery, latex percussion.
 
-Plus **JaqRack**, a host for all three, not started.
+### The hierarchy
 
-All three live in one GitHub repo, `jaymakeschange-svg/NeoBeat`, as **orphan branches** — one tree
-per plugin, no shared history. Never push to `main`.
+```
+            Batchcut            the preset editor — used before opening a DAW
+           /        \
+     NeoBeat        MidiJaQ     equal, under it: drums / melodic
+           \        /
+           JaqRack              the rack host, under those
+```
 
 **The ecosystem rule, in his words:** *"features one has, from the interface to the workflow,
 should be interconnected to the other. If Batchcut has drag and drop, so does NeoBeat. If NeoBeat
-has right-click send-to, so does MidiJaQ."* You are expected to propagate features without being
-asked. This is not a nice-to-have; it is the architecture.
+has right-click send-to, so does MidiJaQ."* Features propagate **without being asked**. This is the
+architecture, not a preference.
+
+### The plugins
+
+| Plugin | Role | Branch |
+|---|---|---|
+| **Batchcut** | Detects events in recordings, cuts one-shots, builds kits, loops and instruments. The preset editor for the whole family. | `batchcut-3.0` |
+| **NeoBeat** | Drum sequencing. Hybrid synth workstation. Plays Batchcut's presets. | `neobeat-3.0` |
+| **MidiJaQ** | Melodic sampling sequencer. Plays Batchcut's presets. | `midijaq` |
+| **JaqRack** | Rack host — all three as lighter modules playing in unison. | not started |
+| **Bounce Delay** | Standalone FX (also inside NeoBeat) | needs updating |
+| **Friction Stretch** | Standalone FX (also inside NeoBeat) | needs updating |
+
+### File formats
+
+| Extension | What it is | Written by | Read by |
+|---|---|---|---|
+| `.NJQ` | Sequence / kit | Batchcut, NeoBeat | NeoBeat, MidiJaQ |
+| `.NJQi` | Keys / instrument | Batchcut | MidiJaQ only |
+| `.njqloop` | Loop preset (**new, 21 Nov**) — round-trips exactly, audio embedded as FLAC | MidiJaQ | MidiJaQ |
+| `.JRQ` | Rack patch | JaqRack | JaqRack |
+
+### Workflow
+
+Batchcut before Ableton is even open. NeoBeat and MidiJaQ are where he goes to play, edit and add
+effects to those presets.
 
 ---
 
-## 2. Where the code is
+## 2. Build status
 
-Worktrees on the build machine:
+### Batchcut — working, in use, do not break
 
-```
-/home/claude/midijaq-wt     midijaq branch      /home/claude/mjbuild   (ninja)
-/home/claude/batchcut-wt    batchcut-3.0        /home/claude/bcbuild   (ninja)
-```
-
-### Shared code, byte-identical across trees
-
-This is the most important structural fact. These files are **copied, not submoduled**, and must
-stay byte-identical:
-
-```
-Source/neobeat/shared/           (in Batchcut and MidiJaQ)
-Source/shared/                   (the same files in NeoBeat)
-```
-
-Key pieces:
-
-| File | What it holds |
+| Feature | Status |
 |---|---|
-| `rooms/Rooms.h` | `bc::Rooms` — base class with the KIT/LOOPS/KEYS/CUT models, players, ~55 actions. Both processors inherit it. |
+| Event detection, one-shot cutting | done |
+| CUT / KIT / LOOPS / KEYS rooms | done |
+| Drag and drop (window-wide) | done |
+| `.NJQ` / `.NJQi` export, MIDI export, clear-all | done |
+| Undo/redo | done |
+| Techno and house presets | **not done** |
+| Presets moved across to MidiJaQ | **not done** |
+
+Six tests pass including a host test with 700 random actions. **He uses this daily.** Ask before
+changing anything in it.
+
+### MidiJaQ — rebuilt 20–21 Nov, this is where the work went
+
+| Feature | Status |
+|---|---|
+| Seven rooms: CUT, LOOPS, KEYS, MAP, MOD, RANDOM, STEREOROOM | done |
+| CUT/LOOPS/KEYS inherited from Batchcut (shared code) | done |
+| Audio import (ADD, FOLDER, detection, cut to pool, classification) | **fixed 21 Nov** — was broken four ways |
+| Drag and drop, window-wide | **fixed 21 Nov** — never worked |
+| MAP drives playback (row = scale degree, loop mark = chop) | done, `test_map` |
+| Per-chop placement in the Stereoroom audio path | done, `test_chops` |
+| Depth as a real room (`nsr::RoomVerb`) | done, `test_depth` |
+| Plugin state saves the rooms, map and stage | done, `test_state` — **saved nothing before 20 Nov** |
+| Preset bars in KEYS and LOOPS (arrows, hover audition) | done |
+| `.njqloop` round-trip preset format | done |
+| On-screen keyboard plays | **fixed 21 Nov** — was silent |
+| Right-click "send to" from NeoBeat | advertised in MOD, **never verified** |
+| Any preset content shipped | **none** — the preset bar reads an empty folder |
+| Orb, modulation, randomiser rooms | built, **lightly tested** |
+
+Fourteen tests pass. The Windows build is green.
+
+### NeoBeat — untouched this session
+
+| Feature | Status |
+|---|---|
+| Sequencer, Matrixxxer, Layermax, effects | from earlier work |
+| Stereoroom engine present in its shared tree | yes, **UI not built** |
+| Stereoroom UI | **not done** |
+| Drag and drop | **unaudited** — may have the same bugs as MidiJaQ did |
+| Preset bar | **not done** |
+| Orb | deferred |
+| Bounce Delay smoothing | **not done** |
+| Techno and house presets | **not done** |
+
+### JaqRack — not started
+
+---
+
+## 3. What was done on 20–21 November
+
+In order.
+
+1. **The Stereoroom engine** (`nsr::` in `StereoRoom.h`): `Place`, `Stage`, `Travel`
+   (Still/Sway/Swing/Circle/Drift), equal-power pan referred to the middle (×√2, so switching the
+   room on changes nothing and moving doesn't change loudness), mid/side width, mono lock by
+   measured content rather than by name.
+2. **Per-chop placement wired into the audio path.** A loop voice carries which chop it is and the
+   placement that chop was given, with its own filter state. "Ear to ear" is successive hits
+   landing in different places. `test_chops`.
+3. **`nsr::RoomVerb`** — the room behind the depth axis. Four delay lines of coprime length mixed
+   by a Hadamard matrix (orthogonal, so decay is set by loop gain rather than luck), one-pole
+   damper per loop, stereo send so a chop's room arrives from the chop's side. Asked for a 1.5 s
+   RT60, measured −60.4 dB at 1.5 s. A far chop returns **19 dB more room than a near one, level
+   for level** — the cue a volume knob cannot fake. `test_depth`.
+4. **The MAP plays.** A row is a degree of the key, so a mark cannot be out of key; a loop mark
+   fires one chop. One grid, both sources, each mark carrying its own. `test_map`.
+5. **The inherited rooms were rendered at all.** LOOPS and KEYS had models and players but
+   `processBlock` never rendered either — they drew correctly and made no sound.
+6. **Plugin state.** Pool, loop layers, keys instrument, map marks and stage nodes now survive
+   save and reload. Before this, building a loop and saving your Ableton set lost everything.
+   `test_state`.
+7. **Preset bars** in KEYS and LOOPS: arrows load as you step, the list loads on hover and
+   restores the room if you move away without choosing.
+8. **`.njqloop`** — LOOPS could only export a one-way NeoBeat kit, so no preset could come back.
+9. **Drag and drop fixed**, window-wide, routed per room.
+10. **Audio import fixed** — four separate faults, see §5.
+11. **`bc::Rooms::wireSession()`** — the loader's four callbacks moved into shared code.
+12. **A headless GUI harness** (§4) — how every UI bug was actually found.
+
+---
+
+## 4. The code
+
+### Worktrees
+
+```
+/home/claude/midijaq-wt     midijaq         build: /home/claude/mjbuild
+/home/claude/batchcut-wt    batchcut-3.0    build: /home/claude/bcbuild
+```
+
+All plugins live in one repo, `jaymakeschange-svg/NeoBeat`, as **orphan branches** — one tree per
+plugin, no shared history. **Never push to `main`.**
+
+### Shared code — copied, not submoduled
+
+```
+Source/neobeat/shared/      (Batchcut, MidiJaQ)
+Source/shared/              (the same files in NeoBeat)
+```
+
+| File | Holds |
+|---|---|
+| `rooms/Rooms.h` | `bc::Rooms` — the KIT/LOOPS/KEYS/CUT models, players, ~55 actions, `wireSession()`. Both processors inherit it. |
 | `rooms/RoomView.h` | `bc::RoomView` — the minimal view a room UI needs |
-| `rooms/CutRooms.cpp` | Files side: `addPaths`, `isAudioFile`, `wireSession()` |
-| `rooms/KitRooms.cpp` `LoopsRooms.cpp` `KeysRooms.cpp` | Each room's model logic and XML round-trip |
+| `rooms/CutRooms.cpp` | Files side: `addPaths`, `isAudioFile`, `wireSession` |
+| `rooms/{Kit,Loops,Keys}Rooms.cpp` | Model logic and XML round-trips (audio embedded as FLAC) |
 | `rooms/*RoomUi.cpp` | The three shared room interfaces |
-| `rooms/Session.h` | The async file loader — see §4, this is where today's bugs were |
-| `rooms/PresetBar.h/.cpp` | The preset bar (arrows, hover audition) |
+| `rooms/Session.h` | The async file loader — where the import bugs were |
+| `rooms/PresetBar.{h,cpp}` | Preset bar with hover audition |
 | `StereoRoom.h` | `nsr::` — placement, travel, `RoomVerb`, `BassMono` |
 
-**After editing any shared file:** copy it to the other trees, rebuild each, run each one's tests,
-and verify with `cmp -s`. There is no tooling that does this for you. It is manual and easy to
-forget.
+**After editing any shared file:** copy to the other trees, rebuild each, run each one's tests,
+confirm with `cmp -s`. No tooling does this for you.
 
-### MidiJaQ-only code
+### MidiJaQ-only
 
 ```
-Source/app/Processor.{h,cpp}   MjqProcessor : AudioProcessor, bc::Rooms, ChangeBroadcaster, AsyncUpdater
-Source/app/Editor.{h,cpp}      MjqEditor — seven rooms, 1280x800
-Source/app/CutRoom.{h,cpp}     ** every bug of 20-21 Nov was in this file **
-Source/app/MapRoom.{h,cpp}     the grid: each mark carries its own source
-Source/app/ModRoom.{h,cpp}     the Orb, modulation sources and routes
-Source/app/RandomRoom.{h,cpp}  global randomiser with HOLD
+Source/app/Processor.{h,cpp}    MjqProcessor : AudioProcessor, bc::Rooms, ChangeBroadcaster, AsyncUpdater
+Source/app/Editor.{h,cpp}       seven rooms, 1280x800
+Source/app/CutRoom.{h,cpp}      ** every bug of 20-21 Nov was here **
+Source/app/MapRoom.{h,cpp}      the grid
+Source/app/ModRoom.{h,cpp}      the Orb, sources, routes
+Source/app/RandomRoom.{h,cpp}   global randomiser with HOLD
 Source/app/StereoRoomUi.{h,cpp} per-chop nodes on a perspective stage
-Source/core/Map.h              mjq::Mark, MapPattern, noteOfRow()
+Source/core/Map.h               mjq::Mark, MapPattern, noteOfRow()
 ```
 
 Rooms are numbered 0–6: CUT, LOOPS, KEYS, MAP, MOD, RANDOM, STEREOROOM.
 
----
+**Naming trap:** `MjqProcessor`'s own session is called `song`, because a member named `session`
+would silently shadow `bc::Rooms::session`.
 
-## 3. How to build and test
+### Build and test
 
 ```bash
-cd /home/claude/mjbuild && ninja                    # everything
-cd /home/claude/mjbuild && ninja MidiJaQ_Standalone  # just the app (fast)
+cd /home/claude/mjbuild && ninja                     # everything
+cd /home/claude/mjbuild && ninja MidiJaQ_Standalone  # just the app, fast
 ```
 
-Fourteen tests, all currently passing:
+Fourteen tests: `test_jaq test_clock test_session test_orb test_room test_random test_evolving
+test_inst test_audio test_chops test_map test_depth test_state test_endtoend`.
 
-```
-test_jaq test_clock test_session test_orb test_room test_random test_evolving
-test_inst test_audio test_chops test_map test_depth test_state test_endtoend
-```
+`test_endtoend` needs patches:
+`/home/claude/bcbuild/BatchcutMakePatches_artefacts/Release/BatchcutMakePatches patches`.
 
-`test_endtoend` needs patches: generate with
-`/home/claude/bcbuild/BatchcutMakePatches_artefacts/Release/BatchcutMakePatches patches`,
-then `./test_endtoend_artefacts/Release/test_endtoend patches`.
+Windows builds run on GitHub Actions on push to the plugin's branch (~38 min). It is slow because
+eight test targets each recompile the whole app — collapsing them into an OBJECT library is easy
+and worthwhile.
 
-Windows builds run on GitHub Actions on push to `midijaq` (~38 min; it is slow because eight test
-targets each recompile the whole app — collapsing them into an OBJECT library is low-hanging
-fruit). Artifacts are on the run page; the user downloads them himself.
+### Running the GUI headlessly — do this
 
-### Running the plugin headlessly — do this, it matters
-
-The most valuable thing set up this session. You can run the actual GUI and look at it:
+The most valuable thing set up this session, and how every UI bug was found:
 
 ```bash
 Xvfb :99 -screen 0 1400x900x24 &
-cd /tmp/testaudio && DISPLAY=:99 /home/claude/mjbuild/MidiJaQ_artefacts/Release/Standalone/MidiJaQ &
-DISPLAY=:99 import -window root /tmp/shot.png     # then Read the png
-python3 /tmp/click.py 124,149                      # click at x,y (python-xlib, XTEST)
+cd /tmp/testaudio && DISPLAY=:99 .../Standalone/MidiJaQ &
+DISPLAY=:99 import -window root /tmp/shot.png    # then read the png
+python3 /tmp/click.py 124,149                     # click x,y via python-xlib XTEST
 ```
 
-`/tmp/click.py` takes `x,y` pairs. Typing via XTEST did not work reliably; navigate choosers by
-launching the app with its cwd set to the folder you want.
+Typing via XTEST was unreliable; navigate file choosers by launching the app with its working
+directory set to the folder you want.
 
-Test audio: generate files with several sharp transients separated by silence. Single decaying
-sine blips produce "0 sounds" because the event detector correctly finds no onsets — that is not
-a bug, it is bad test data.
+**Test audio must have sharp transients separated by silence.** Single decaying sine blips give
+"0 sounds" because the detector correctly finds no onsets — bad test data, not a bug.
 
 ---
 
-## 4. Mistakes I made — read this part
+## 5. Mistakes — read this
 
 ### The one cause
 
-**Every bug found on 20–21 November was in `Source/app/CutRoom.cpp`, the one file I wrote fresh
+**Every bug found on 20–21 November was in `Source/app/CutRoom.cpp`, the one file written fresh
 instead of sharing Batchcut's working code.** Not one was in a shared file.
 
-The user's instruction was that MidiJaQ *inherits* CUT, LOOPS and KEYS from Batchcut. I did that
-for the models and three room UIs. But Batchcut's CUT room logic lives partly in **its Editor and
-Processor**, not in a room file — so when I built MidiJaQ's CUT room I rewrote that part. Four
-separate bugs came out of that rewrite, and the plugin shipped to the user unable to import audio
-at all.
+MidiJaQ was supposed to *inherit* CUT, LOOPS and KEYS. That was done for the models and three room
+UIs. But Batchcut's CUT-room logic lives partly in **its Editor and Processor**, not in a room
+file — so building MidiJaQ's CUT room meant rewriting that part, and the rewrite produced five
+bugs that shipped to the user in a plugin that could not import audio at all.
 
-### The four bugs
+### The bugs
 
 1. **Drag and drop never worked.** `CutRoom` inherited `juce::FileDragAndDropTarget` **privately**.
-   JUCE finds drop targets with `dynamic_cast<FileDragAndDropTarget*>`, and a cast to a non-public
-   base yields null. The handlers compiled, linked and were never called. Guarded now with a
-   `static_assert` on the conversion, in both `CutRoom.cpp` and `Editor.cpp`.
+   JUCE finds drop targets with `dynamic_cast<FileDragAndDropTarget*>`; a cast to a non-public base
+   yields null. The handlers compiled, linked, and were never called. Now guarded by
+   `static_assert` on the conversion in both `CutRoom.cpp` and `Editor.cpp`.
+2. **The chooser listed nothing.** `launchAsync` called with `openMode | canSelectMultipleItems` —
+   **`canSelectFiles` missing**. Without it (or `canSelectDirectories`) JUCE's browser may show
+   nothing, so ADD opened onto an empty list in a folder full of wavs.
+3. **No worker thread.** `session.start()` never called — every file queued behind "Reading files"
+   for ever.
+4. **The loader could not read audio.** `bc::Session` is deliberately format-agnostic and takes
+   `prober`, `loader`, `writer`, `makeDir` callbacks. MidiJaQ set none, so every read reported
+   "failed". `applyResults()` was never called either, so finished work would have stayed queued.
+5. **The KEYS on-screen keyboard was never read** in `processBlock` — the room's own keys were
+   silent.
 
-2. **The file chooser listed nothing.** `launchAsync` was called with
-   `openMode | canSelectMultipleItems` — **`canSelectFiles` missing**. Without it (or
-   `canSelectDirectories`) JUCE's browser has nothing it is permitted to show, so ADD opened onto
-   an empty list in a folder full of wavs.
+Fixed structurally: the four callbacks now live in **`bc::Rooms::wireSession()`** in the shared
+tree. Batchcut still has its own copy in its processor — **consolidating that is a good first
+task**, with permission.
 
-3. **No worker thread.** `session.start()` was never called, so every file queued behind
-   "Reading files" for ever.
+### The deeper mistake
 
-4. **The loader had no idea how to read audio.** `bc::Session` is deliberately format-agnostic: it
-   takes `prober`, `loader`, `writer`, `makeDir` callbacks. MidiJaQ set none, so every read
-   reported "failed". It also never called `applyResults()`, so finished work would have stayed in
-   the queue regardless.
+"Fourteen tests pass" and "pluginval passed at strictness 10" were reported as evidence the plugin
+worked. Both true. Both **worthless for these bugs — no test in that suite can see UI wiring.**
+The parts were verified and the whole was inferred, and the user found four broken features in
+software he had been told was ready.
 
-Fixed properly: the four callbacks now live in **`bc::Rooms::wireSession()`** in the shared tree.
-Any plugin inheriting `bc::Rooms` calls `wireSession()`, sets `session.onChange`, calls
-`session.start()`, and gets a working loader. Batchcut still has its own copy in its processor —
-**consolidating that is a good first task** (see §6).
+**Never report green tests as evidence a feature works. Run the plugin and click the thing.** It
+takes two minutes and found all of this.
 
-### The deeper mistake, and what to do instead
+### Smaller errors worth inheriting
 
-I reported "fourteen tests pass" and "pluginval passed at strictness 10" as evidence the plugin
-worked. Both true. Both worthless for these bugs — **not one of those tests can see UI wiring**.
-I verified the parts and inferred the whole, and the user found four broken features in software
-I had told him was ready.
-
-**Do not report green tests as evidence that a feature works.** Run the plugin (§3) and click the
-thing. That is how every one of these was found, and it takes two minutes.
-
-### Smaller errors worth knowing
-
-- `test_chops` reported a travelling chop as "+103 dB", which is not a loudness or a position. It
-  was a channel ratio floored at `1e-9`, so its magnitude was set by the epsilon. The user caught
-  it. It now recovers the pan position with `atan2` over the two channels, bounded −1..+1, which
-  can also check that a sway is symmetric — something the old number could not ask.
-- Tests have passed vacuously on empty lists more than once (comparing nothing to nothing). Guard
-  every loop-based assertion with a non-empty check.
-- A `session` member on `MjqProcessor` would have silently shadowed `bc::Rooms::session`.
-  MidiJaQ's own is named `song`. Watch for this when adding members to either processor.
-- I once concluded "two dependencies" from a grep of guessed symbol names; there were four. Ask
-  the compiler, not grep.
+- `test_chops` reported a travelling chop as "+103 dB" — not a loudness or a position, but a
+  channel ratio floored at `1e-9`, so its magnitude was set by the epsilon. **The user caught
+  this.** It now recovers pan position with `atan2` over the two channels, bounded −1..+1, which
+  can also test that a sway is symmetric.
+- Tests have passed **vacuously on empty lists** more than once. Guard every loop-based assertion
+  with a non-empty check.
+- A grep of guessed symbol names gave "two dependencies" where there were four. Ask the compiler.
+- Private inheritance is correct for `ListBoxModel` (handed to the `ListBox` explicitly) and wrong
+  for anything JUCE finds by `dynamic_cast`.
 
 ---
 
-## 5. What works now (verified by running it)
+## 6. Research
 
-- **CUT**: ADD and FOLDER import; detection finds events; CUT THEM ALL fills the pool; the pool
-  classifies sounds (kicks/rims/stabs/FX); CLEAR ALL; drag and drop anywhere in the window
-- **LOOPS**: sees the pool grouped by file and by kind; ROLL ALL lays chops; preset bar
-- **KEYS**: builds instruments; on-screen keyboard plays; preset bar over `.NJQi`
-- **MAP**: marks play — a row is a scale degree, a loop mark fires a chop (`test_map`)
-- **STEREOROOM**: per-chop placement in the audio path (`test_chops`), with a real room behind the
-  depth axis (`test_depth`, `nsr::RoomVerb` — 4-line Hadamard FDN, RT60 measured at −60.4 dB when
-  set to 1.5 s)
-- **State**: pool, loops, instrument, map marks and stage nodes all survive save/reload
-  (`test_state`). Before 20 Nov none of this was written at all.
+Two full reports are in `docs/research/` in this branch.
+
+### Stereo placement and 3D mix visualisation
+
+Everything the Stereoroom needs can be written from permissive parts, and should be. For 4–16
+elements to ordinary stereo the whole placement engine is: a pair of time-varying gains per
+element, a side-channel high-pass for mono-locked ones, a small inter-channel delay for those that
+can take it, and **one shared reverb send that is O(1) in element count**.
+
+The two techniques that look like the obvious answer are both wrong here on documented grounds:
+**HRTF binaural** cues are destroyed by loudspeaker crosstalk and need a sweet spot of about ±4°;
+**ambisonics** adds an encode/decode round-trip and a normalisation convention to get wrong, for
+capability this product doesn't use.
+
+This is implemented. `nsr::RoomVerb` is the shared send; `BassMono` is the side-channel high-pass.
+
+### New jack swing parts and grooves
+
+The style has **no documented numeric specification**, but the machine that made it does, and that
+asymmetry is how to write the style with entirely different sounds:
+
+- The **Akai/Linn swing percentage** is the share of each eighth-note pair given to the *first*
+  sixteenth, 50% (straight) to 75% (3:1), and **it only ever delays the even-numbered sixteenths**
+  (Akai MPC3000 manual, p.63).
+- There is **no documented tempo range** for the style anywhere in the literature. The report
+  supplies none, deliberately.
+- One quantitative study of a neighbouring repertoire (30 sampled drum breaks): median swing
+  **1.2:1 ≈ 54.5%**, uncorrelated with tempo, snare late on beat 2 but **not** beat 4.
+
+Useful when writing the techno/house and new-jack-swing presets (§8).
+
+### Local AI, for continuing without credits
+
+- The deciding variable is **VRAM**, not the model. Exceeding it by ~2 GB drops you from ~50 tok/s
+  to ~5.
+- **24 GB card or 32 GB+ Mac → Qwen3-Coder 30B-A3B** (~19 GB in Ollama, 256K context, Apache 2.0,
+  trained for the Cline/Aider tool-call format).
+- **12 GB → 13B/14B coder models only**; 30B does not fit usefully, and a 4K context is close to
+  useless on a codebase this size.
+- Harness: Ollama or LM Studio serving, **Aider** (terminal, closest to this workflow) or **Cline**
+  (VS Code) driving.
+- **Honest expectation:** the best open weights score ~46 on Artificial Analysis against Opus 5.5
+  at 58, and those are models too large for one GPU. A 30B on a desk is below that again. It will
+  write and edit single files well and **lose the thread on cross-file work** — which is exactly
+  what this project is made of (three trees, byte-identical shared headers).
+- The bigger practical win: run the agent **on his own machine**, where the loop collapses from a
+  38-minute CI build to seconds.
 
 ---
 
-## 6. Next steps
+## 7. Skins — planned, not started
 
-In the order I would do them.
+No skinning system exists yet. His stated direction, to be implemented once the builds are
+functional (he explicitly deferred it for efficiency):
 
-1. **Verify the Windows build the user actually downloads.** Run the standalone, import audio,
-   roll a loop, play it. Do not trust the test suite for this.
-2. **Consolidate Batchcut onto `wireSession()`** and move Batchcut's CUT room drop handling into
-   the shared tree. This is the fix that stops the bug class. *Ask the user before changing
-   Batchcut* — he has a standing rule about that, and Batchcut currently works.
-3. **Propagate to NeoBeat** (`neobeat-3.0`): drag and drop, the preset bar, the Stereoroom UI (the
-   engine is already in its shared tree). Audit it for the same four bugs — it may well have them.
-4. **Right-click "send to"** — NeoBeat has it, MidiJaQ should. MidiJaQ's MOD room already
-   advertises it ("right-click anything in any room to send…"); **I never verified it works.**
-5. **Presets.** MidiJaQ ships with none, and the preset bar reads an empty folder. The user asked
-   for Batchcut's existing presets to be moved to MidiJaQ, plus new techno and house ones for
-   Batchcut and NeoBeat, all grounded in new jack swing.
-6. **Bounce Delay** needs updating (user's request, details not captured — ask him).
-7. **JaqRack** — the host, not started.
-8. **CI speed**: eight test targets each recompile the whole app. An OBJECT library would cut the
-   38-minute build substantially.
+- **Y2K chrome / green-silver skinned desktop** — the NeoBeat reference
+- **Pearlescent circuit board** with silver traces and rhinestones
+- **MOTU-style brushed hardware**
+- **Sculpted organic relief art**
+- General taste: deep contours, interesting palette, darker tones, organic, mechanic, expressive.
+  Some references flat, others 3D. Reference board: `https://pin.it/4W8acWDLM`
+- **Everything should be a skin** — i.e. a swappable theme layer, not hard-coded colours.
 
-### Known gaps, honestly
-
-- **Loose pool sounds are not saved.** `kitToXml` writes only what a lane uses. Deliberate in
-  Batchcut (keeps projects small); possibly wrong for MidiJaQ, where the pool is the MAP's working
-  set. The user has been told and has not decided.
-- **`BassMono` covers the Stereoroom's output only**, not the whole mix. Applying it globally
-  changed how every existing preset pans (a hard-left voice went from >12 dB to 9.2) so I scoped
-  it. The user's call.
-- **The MAP is wired to playback but has had no musical use** beyond tests.
-- **Right-click sends, and anything in LOOPS/KEYS beyond what §5 lists, are unverified.**
+Current state: `nsui::setSkin (nsui::skins::chromePearl())` exists in MidiJaQ and there is an
+`nsui::C::` colour layer, so the hook is there. A real skin system means auditing every room for
+hard-coded colours. Batchcut can share NeoBeat's skin.
 
 ---
 
-## 7. Working with the user
+## 8. What is left, in order
 
-- He provides the ideas; you assist and code. Do not redesign his concepts.
-- **Ask before changing any existing feature of an existing plugin.** Batchcut especially — it
-  works and he depends on it.
+1. **Verify the Windows build the user downloads.** Run it, import audio, roll a loop, play it.
+   Do not trust the suite.
+2. **Audit NeoBeat for the same five bugs.** It is the only tree not checked, and it was built the
+   same way.
+3. **Consolidate Batchcut onto `wireSession()`** and move Batchcut's CUT-room drop handling into
+   the shared tree. This is the fix that ends the bug class. **Ask first** — Batchcut works.
+4. **Propagate to NeoBeat:** drag and drop, preset bar, Stereoroom UI (engine already in its tree).
+5. **Right-click "send to"** — NeoBeat has it, MidiJaQ advertises it in MOD; **never verified**.
+6. **Presets.** MidiJaQ ships with none. Move Batchcut's across, then write new techno and house
+   patterns for Batchcut and NeoBeat — all grounded in new jack swing (§6 has the swing arithmetic).
+7. **Bounce Delay and Friction Stretch** — both need updating and building as standalones.
+8. **JaqRack** — the rack host. Each plugin inserted as a lighter module, multiple instances in a
+   rack, like Propellerheads ReBirth RB-338. The NeoBeat module keeps only a basic drum sequencer
+   (loads `.NJQ`, basic edits); its effects live in the rack instead, like hardware split into
+   budget rack units with external effects. JaqRack has an **FX Matrixxxer** controlling everything
+   in it. Patches save as `.JRQ`.
+9. **Skins** (§7).
+10. **CI speed** — the OBJECT library change.
+
+### Known gaps, stated honestly
+
+- **Loose pool sounds are not saved.** `kitToXml` writes only what a lane uses — deliberate in
+  Batchcut, possibly wrong for MidiJaQ where the pool is the MAP's working set. **User has not
+  decided.**
+- **`BassMono` covers the Stereoroom's output only**, not the whole mix. Applied globally it
+  changed how every existing preset pans (a hard-left voice went from >12 dB to 9.2 dB), so it was
+  scoped. **User's call.**
+- **The MAP has had no musical use** beyond tests.
+- **Right-click sends, the Orb, the randomiser, and most of LOOPS/KEYS are unverified by hand.**
+- **Open question never answered:** should MidiJaQ export MIDI files? (Batchcut writes MIDI;
+  NeoBeat exports MIDI sequences; neither sends live MIDI — a Max for Live device will do that
+  later.)
+
+---
+
+## 9. Working with him
+
+- **He provides the ideas; you assist and code.** Do not redesign his concepts.
+- **Ask before changing any existing feature of an existing plugin.** Batchcut especially.
 - **Ask before long builds. Commit and push only when asked**, to the plugin's own branch, never
   `main`.
 - Do not keep records of files on his computer unless the task needs it.
-- Standing constraints: no DRM circumvention, no reproducing proprietary code. Iftah's Sting and
-  Art DSP Canvas are studied by **behaviour only** — their code and visual design stay out. The
-  Wave emulator is AGPL: reimplement principles, never copy.
-- He is working under limited credits and his time is expensive. Batch your verification; do not
-  spend a round trip per bug. Be blunt about what you have not tested.
+- **Propagate features across the family without being told** (§1).
+- Constraints: no DRM circumvention, no reproducing proprietary code. Iftah's **Sting** and **Art
+  DSP Canvas** are studied **by behaviour only** — their code and visual design stay out. The Wave
+  emulator is AGPL: reimplement principles, never copy. Don't read AAS licence files or type
+  serials.
+- He works under limited credits and his time is expensive. **Batch verification; do not spend a
+  round trip per bug. Be blunt about what you have not tested.**
 
 ---
 
-## 8. Git state at handoff
+## 10. Git state at handoff
 
-Branch `midijaq`, latest commit **"Audio import, properly: the loader was never set up at all"**.
-All fourteen tests pass. Windows build triggered on push.
+`midijaq` — latest commit "Handoff: where the code is, what broke, what is next". Fourteen tests
+pass, Windows build green.
 
-`batchcut-3.0` is pushed and green, but `Rooms.h` and `CutRooms.cpp` were copied into
-`/home/claude/batchcut-wt` **after** its last commit and are **uncommitted and unverified there**.
-Rebuild Batchcut and run its six tests (including the host test's 700 random actions) before
-committing that tree.
+`batchcut-3.0` — pushed and green, **but** `Rooms.h` and `CutRooms.cpp` were copied into
+`/home/claude/batchcut-wt` after its last commit and are **uncommitted and unverified there**.
+Rebuild Batchcut and run its six tests (host test included) before committing that tree.
+
+`neobeat-3.0` — untouched this session.
