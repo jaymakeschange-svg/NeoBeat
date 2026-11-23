@@ -280,3 +280,128 @@ whether it is better treated as an external tool.
 - The documentation is the author's, and describes intent. Measuring the output would be the next
   step for anything where the exact algorithm matters.
 - Nothing above reproduces Chassis's code, and every proposal in §3 is an original design.
+
+---
+
+# Addendum, same day: chassisFX, and Synplant
+
+## 6. chassisFX is the same plugin, declared twice
+
+Resources are byte-identical to Chassis — the same 264,557-byte `default-patch.json`, the same
+module presets, the same fonts. The binaries differ by 1,536 bytes. The only meaningful difference
+is in `moduleinfo.json`:
+
+| | chassis | chassisFX |
+|---|---|---|
+| Category | `Instrument`, `Synth` | `Fx` |
+| Class Flags | 2 | 0 |
+| CID suffix | `…4C75784343686173` | `…4C75784343684678` |
+
+One build, two VST3 manifests. The host sees an instrument or an effect depending on which bundle
+it loads, and the engine underneath is identical — which makes sense for a modular rack, where
+"instrument" versus "effect" is only a question of whether anything is patched into the input.
+
+**Worth copying: the CIDs are ASCII, not random GUIDs.** `4C757843` is `LuxC`, `43686173` is
+`Chas`, `43684678` is `ChFx`. The plugin identity is readable in the hex. For JaqRack, where every
+module will need a stable unique CID that must never change across versions, deriving them from a
+fixed ASCII tag is far less error-prone than generating GUIDs and hoping nobody regenerates one.
+
+## 7. Synplant — and Genopatch is not what the marketing says
+
+Synplant.vst3 is 11.5 MB. Its entire UI and much of its logic are **JavaScript embedded in the
+binary**, driving a vector-graphics DSL. Both are readable.
+
+### 7.1 The genome
+
+A patch is a `genome`: a flat, named dictionary of genes normalised to 0–1, each scaled into a
+parameter range at use. The gene names are in the clear — `a_freq`, `a_mod`, `a_noise`, `b_freq`,
+`b_mod`, `b_noise`, `adj_bass`, `adj_treb`, `adj_clip`, `adj_pan`, and more. Two operator groups
+(`a_`, `b_`) plus a set of global adjustments.
+
+Helpers visible alongside them: `scale(gene, 0, 1, lo, hi)` to map a gene into its range, and
+`converge(gene, atonality)` to squeeze genes toward tonality by a single amount.
+
+The tree UI is this: `dna.root` is the planted seed, `dna.grown` the chosen branch, and
+`spawnPatch(patch, i).genome` generates each surrounding branch by mutating the seed. "Plant
+chosen seed", "Clone selected branch", "New random seed" are the three operations.
+
+### 7.2 Genopatch is gradient descent, not a neural network
+
+Internal codename **Papageno**. The binary contains **no ONNX Runtime, no libtorch, no
+TensorFlow, no TFLite, no ggml** — none of the markers any embedded inference engine leaves. What
+it does contain is `gradient` (21), `descent` (8) and `genome` (34).
+
+The UI confirms the shape of it:
+
+- `papagenoUI.detectedPitch` — pitch is detected first
+- `papagenoUI.waveform.selectionStart` / `selectionEnd` — you fit against a *span* you choose
+- `papagenoUI.solution.error` — **each solution reports its own error**
+- `papagenoUI.solution.isSeeded` / `solution.seedName` — solutions can start from a *named seed*
+- several solutions are produced and clicked between
+
+So mechanically: **take a target sample, detect its pitch, choose a span, then run gradient
+descent over the normalised gene vector to minimise an audio-similarity error — several times,
+from different seeds — and present the candidates ranked by their error.**
+
+That is an optimisation problem, not a trained model. Which means **it is implementable here.**
+No training set, no weights to ship, no inference runtime, no 38 MB binary. The hard parts are
+choosing an error function that correlates with perceived similarity (a multi-resolution spectral
+distance is the standard answer) and getting gradients — and with a genome of a few dozen
+parameters, finite differences are affordable if the synth renders fast.
+
+### 7.3 Theming: 304 tokens and a vector DSL
+
+Synplant has **304 named theme tokens** (`@MAIN_BACKGROUND_COLOR`, `@PAPAGENO_WAVEFORM_FILL_COLOR`,
+`@ALERT_FRAME_COLOR`…) and draws its entire interface from a vector DSL — `PATH` (69), `TEXT`,
+`ELLIPSE`, `RECT`, `fill` (115), `wipe`, `mask`, with gradients specified inline:
+
+```
+fill gradient:[ radial 30,30,25 stops:0.4,@MAIN_BACKGROUND_COLOR,1.0,#00000000 ]; RECT 0,0,60,60
+```
+
+No bitmaps. Every colour is a token; every shape is drawn. **This is the architecture that makes
+"everything should be a skin" true**, and it is a shipping proof that it works at this scale.
+
+## 8. Revised proposals
+
+These replace nothing in §3; they are additional, and two of them outrank most of it.
+
+**8.1 — A Genopatch equivalent, in Batchcut. (High value, genuinely achievable.)**
+Batchcut already cuts one-shots and already knows NeoBeat's and MidiJaQ's parameter sets. Add:
+point it at a one-shot, and have it fit a synth patch that sounds like it — gradient descent over
+a normalised gene vector against a multi-resolution spectral error, several restarts from
+different seeds, candidates ranked by error and auditionable.
+
+This is the single most valuable thing in either plugin, it fits Batchcut's existing role as the
+preset editor exactly, and §7.2 shows it needs no machine learning at all. Start with a small gene
+set (one modal or FM voice) and widen it once the error function is behaving.
+
+**8.2 — The seed-and-branches model for the RANDOM room.**
+Synplant's whole interface is one idea: a seed genome in the middle, mutated branches around it,
+audition any, clone the one you like, re-plant it as the new seed. That is a far better
+randomisation interface than a dice button — it makes randomness *navigable* rather than a
+re-roll. MidiJaQ's RANDOM room already has HOLD slots, which is halfway there. Combined with
+grille's seed-repeat probability (§2.4), it would be a complete and unusual system.
+
+**8.3 — Build the skin layer as tokens plus vector drawing.**
+§7.3. Named colour tokens, every widget drawn rather than blitted, gradients declared inline. The
+`nsui::C::` layer is already token-shaped; what is missing is making every room draw from it with
+no hard-coded colours, and a theme object with per-room override and saved presets (§2.7). Do this
+before any individual skin, or each skin will mean touching every room.
+
+**8.4 — One build, two manifests, for the FX plugins.**
+§6. Bounce Delay and Friction Stretch are wanted both standalone and inside NeoBeat. The same
+trick applies: one engine, two VST3 manifests, differing only in category and CID.
+
+## 9. What this means for Petri
+
+Petri is 38 MB against Synplant's 11.5 MB, with no external resources at all. Lux Cache have now
+shown, in Chassis, that they will embed a whole third-party engine when it suits them — so the
+extra ~26 MB could be model weights, or could be another embedded engine entirely.
+
+**That remains unknown and is not guessed at here.** The binary would settle it in minutes once it
+stages: an inference runtime leaves unmistakable strings, and their absence — as in Synplant —
+would mean Petri is also doing something classical and implementable rather than running a network.
+
+Given that Synplant's "revolutionary" feature turned out to be gradient descent, it is worth
+staying curious rather than assuming Petri must be beyond reach.
