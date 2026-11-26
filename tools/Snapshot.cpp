@@ -56,6 +56,17 @@ int main (int argc, char** argv)
     const auto dir = juce::File (argc > 1 ? juce::String (argv[1]) : juce::String ("."));
     dir.createDirectory();
 
+    // Optional second argument: a .nsk to dress the plugin in before anything is drawn. Applied
+    // here rather than after the editor exists, so every component is built already wearing it.
+    if (argc > 2)
+    {
+        juce::String err;
+        if (nsui::applyPack (juce::File (juce::String (argv[2])), err))
+            std::printf ("  skin: %s\n", nsui::skin().name.toRawUTF8());
+        else
+            std::printf ("  skin failed to load: %s\n", err.toRawUTF8());
+    }
+
     auto proc = std::make_unique<MjqProcessor>();
     proc->setPlayConfigDetails (0, 2, 48000.0, 512);
     proc->prepareToPlay (48000.0, 512);

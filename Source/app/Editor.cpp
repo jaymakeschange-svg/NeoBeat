@@ -59,7 +59,7 @@ MjqEditor::MjqEditor (MjqProcessor& p)
     : juce::AudioProcessorEditor (&p), bc::RoomView (p), proc (p)
 {
     setLookAndFeel (&look);
-    nsui::setSkin (nsui::skins::chromePearl());
+    nsui::setSkin (nsui::lookFor (nsui::skins::chromePearl()));
 
     parts = std::make_unique<Parts> (*this);
     auto& q = *parts;
