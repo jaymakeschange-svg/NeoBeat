@@ -134,6 +134,11 @@ target_include_directories (test_skin PRIVATE Source)
 target_compile_definitions (test_skin PRIVATE ${MIDIJAQ_DEFINITIONS})
 target_link_libraries (test_skin PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
 
+# SpectralDelay.h needs nothing but the standard library, so this one is a plain executable and
+# builds in a couple of seconds rather than dragging JUCE in behind it.
+add_executable (test_spectral tools/test_spectral.cpp)
+target_include_directories (test_spectral PRIVATE Source/neobeat/shared)
+
 
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)

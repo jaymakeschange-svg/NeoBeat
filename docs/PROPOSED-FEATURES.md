@@ -192,3 +192,15 @@ on VCV Rack (GPLv3). See the generative-engines doc §6.
 | Preset bars with hover audition | Batchcut, MidiJaQ |
 | `.njqloop` round-trip loop preset | shared |
 | Audio import and drag-and-drop fixes | MidiJaQ |
+
+## Learner: the 16-band dense-noise layer — requested 26 Nov, not started
+
+MaterialLab's resonator form carried the modes across from the learner but not the 16-band dense
+noise layer that sits under them. Struck bodies are not only modes: the strike itself is broadband,
+and real material has a noise floor with its own spectral shape that the mode bank cannot produce.
+Without it a struck object is cleaner than anything physical, which is audible as plastic.
+
+Wanted: the learner's 16-band noise restored, so generated sounds are accurate rather than only
+tonally correct. Shares its band layout with `nsr::SpectralDelay`, which already splits 16 log
+spaced bands and is now in the shared tree — the split is the same piece of maths and should not
+be written twice.
