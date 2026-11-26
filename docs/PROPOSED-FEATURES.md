@@ -47,8 +47,27 @@ instead of generating a new one, optionally varied. A few slots gives recurring 
 approaches pure texture. This is also what keeps a long take from drifting into uniform noise,
 which matters when the output is being recorded rather than listened to once.
 
-**Still to settle:** how it is performed (a latching toggle, a held control, or per-bar
-probability), and whether capture happens in the plugin or in the DAW.
+**Per-hit parameter chaos.** The mode also randomises each sound's own parameters, fast: pitch up
+and down, drive, "hollowed" (a narrowing — comb, bandpass or formant; exact mapping still to pick).
+This is what separates the mode from an ordinary stutter effect, where repeats are identical and
+therefore mechanical. Each repeat in a burst gets its own parameter offsets.
+
+**The revert requirement makes this non-destructive by necessity.** Chaos exists while the control
+is held and stops the instant it is released, returning to whatever was playing. That means the
+parameter randomisation **must be an overlay applied at playback — per-hit offsets layered over the
+stored values, never written back to them.** Written back, releasing the control would leave every
+sound in the kit scrambled. Worth stating because it is cheap to get right at design time and
+expensive afterwards.
+
+**Performance:** several modes, of which the primary is **held** — chaos while the control is on,
+instant return to the original pattern when off. A latch and a per-bar probability are variants of
+the same engine.
+
+**Capture:** in Ableton. No WAV export needed from the plugin.
+
+**Consequence for the figure buffer:** a stored figure should store its parameter moves alongside
+its lanes and positions. A motif recurring with different pitch and drive each time is not
+recognisable as the same motif.
 
 ---
 
