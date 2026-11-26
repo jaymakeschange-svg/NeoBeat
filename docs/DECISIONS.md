@@ -47,6 +47,44 @@ published description. The per-band interaural offset is from the SOPHIE researc
 | **Reason given** | Chimecho's initial settings make the delay very long and loud, and reeling them in for the short bubbly effect is almost impossible — the controls are confusing and there is no global delay length option |
 | **Shape** | Start/Finish keep their job (the shape across the spectrum); Length scales the whole bank, 1× to 80×. Defaults 1.6–14 ms |
 
+### BANDS — the defaults, set by listening
+
+| | |
+|---|---|
+| **Decided** | Feedback 0.80 / 0.90, Wet 1.0, Dry 0.4, Length 0 |
+| **By** | The user, choosing render `11-ringing-wet-forward` from a set of four |
+| **Settled by** | Listening. The first defaults were inaudible and no numeric check had caught it |
+
+**The failure the harness found.** The first defaults — feedback 0.25/0.45, wet 0.45 — produced
+nothing a person could hear. The user reported dry, the short default and the interaural split as
+identical. They were not identical: the render measured 2.76 dB of difference from the dry
+reference. But the *kind* of difference was wrong.
+
+Two measurements explain it. Sixteen bands spread over 1.6–14 ms is a 12 ms total spread, which
+sits inside the window where the ear fuses arrivals into one event. And at feedback 0.25–0.45,
+band 8 damped out in four repeats — 33 ms, still inside the transient. So the bank was acting as a
+comb filter: the same drum, differently coloured. Measurable, inaudible.
+
+**Short delays only work as an effect if the bands ring.** The same band at 0.85 feedback rings for
+189 ms instead of 33 — a 5 ms delay at high feedback is a tuned resonator, and that is where the
+bubble comes from. The fix was feedback, not longer delays.
+
+**Wet is not a taste control on this effect.** Measured against the dry reference:
+
+| Setting | Distance from dry |
+|---|---|
+| feedback 0.80/0.90, wet 0.45 | **−3.3 dB** — the bank rings, the dry buries it |
+| same, wet 0.9 | **+2.7 dB** — crosses over |
+| same, wet 1.0, dry 0.4 | **+4.2 dB** — chosen |
+| feedback 0.88/0.93, spread 0.8–26 ms, dry 0.5 | +6.4 dB, but peaks at 1.10 — clips |
+
+That sign change is the finding. Below it you are equalising the drums; above it you are hearing
+the bank. A polite 0.45 wet is what made the first set inaudible, so the default sits well clear of
+the line rather than near it.
+
+**Length stays at 0.** Every approved render was at the short end, and that was the original
+instruction: open extremely short, reach echoes by turning one knob.
+
 ### BANDS in NeoBeat — per-pad send, not a master send
 
 | | |
