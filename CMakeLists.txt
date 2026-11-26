@@ -142,6 +142,22 @@ target_include_directories (test_spectral PRIVATE Source/neobeat/shared)
 add_executable (test_bands tools/test_bands.cpp)
 target_include_directories (test_bands PRIVATE Source/neobeat/shared)
 
+# The BANDS room, rendered to PNG. Deliberately built WITHOUT MIDIJAQ_APP_SOURCES: the room takes
+# a BandsState and a callback and nothing else, and linking it against the plugin would hide the
+# day a dependency on the plugin crept in. If this target stops building, the room has stopped
+# being hostable by anything but MidiJaQ.
+if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
+    juce_add_console_app (bands_shot PRODUCT_NAME "bands_shot")
+    target_sources (bands_shot PRIVATE
+        tools/bands_shot.cpp
+        Source/neobeat/shared/rooms/BandsRoomUi.cpp)
+    target_include_directories (bands_shot PRIVATE Source)
+    target_compile_definitions (bands_shot PRIVATE ${MIDIJAQ_DEFINITIONS})
+    target_link_libraries (bands_shot PRIVATE
+        juce::juce_gui_basics
+        juce::juce_recommended_config_flags)
+endif()
+
 
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)

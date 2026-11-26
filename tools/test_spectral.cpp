@@ -362,6 +362,90 @@ int main()
         ok (lr > 1.0e-3, "a band's two channels still differ, so its placement has something to place");
     }
 
+    // ---------------------------------------------------------------- the plan the interface reads
+    //
+    // A readout that works the numbers out for itself is a readout that can disagree with what you
+    // hear. These check that bandPlan reports what the engine does, not something close to it.
+    {
+        heading ("the band plan matches the engine");
+
+        nsr::SpectralDelayParams p;
+        p.startHz = 100.0f; p.finishHz = 8000.0f;
+        p.startTimeMs = 40.0f; p.finishTimeMs = 240.0f;
+
+        nsr::SpectralDelay d;
+        d.prepare (SR);
+        d.setParams (p);
+
+        float worstHz = 0.0f;
+        for (int b = 0; b < nsr::SpectralDelay::kBands; ++b)
+        {
+            const auto pl = nsr::bandPlan (p, b, nsr::SpectralDelay::kBands, SR);
+            worstHz = std::max (worstHz, std::abs (pl.hz - d.bandHz (b)));
+        }
+        ok (worstHz < 0.01f, "every band's centre frequency agrees with the engine's");
+
+        // the delay the plan reports is the delay the band actually has. An impulse in, and the
+        // peak of band b's output should land where bandPlan said it would.
+        const int which = 9;
+        const auto plan = nsr::bandPlan (p, which, nsr::SpectralDelay::kBands, SR);
+        const int N = 48000;
+        Buf in (N);
+        in.l[0] = in.r[0] = 1.0f;
+
+        // Read the band straight out of the split, where no mixing or dry path can move the peak.
+        // Its own level is still applied there, so leave the levels alone: setting them to zero
+        // gives an all-silent buffer whose peak is sample zero, which looks exactly like a band
+        // that did not delay at all.
+        nsr::SpectralDelay one;
+        one.prepare (SR, N);
+        one.setParams (p);
+        one.processSplit (in.l.data(), in.r.data(), N);
+
+        const float* bo = one.bandOut (which, 0);
+        int peak = 0;
+        float peakV = 0.0f;
+        for (int i = 1; i < N; ++i)
+            if (std::abs (bo[i]) > peakV) { peakV = std::abs (bo[i]); peak = i; }
+
+        const float heardMs = (float) peak / SR * 1000.0f;
+
+        // The plan reports the centre time; the engine sweeps around it by lfoMs, so the first
+        // arrival can land anywhere in that window. Allow the sweep the plan itself declares,
+        // plus a cycle or so for the bandpass's own ring. Band 9 of the default bank carries 3 ms
+        // of sweep on a 160 ms delay, and measured 157 - the bottom of the wobble, not an error.
+        const float slack = plan.lfoMs + 1000.0f / plan.hz * 1.5f + 1.0f;
+        ok (std::abs (heardMs - plan.timeMs) < slack,
+            "band " + std::to_string (which) + " arrives at the time the plan reports ("
+            + std::to_string ((int) heardMs) + " ms heard vs " + std::to_string ((int) plan.timeMs)
+            + " ms planned)");
+
+        // the trim is the part no interface could guess: raising the neighbour feed pulls every
+        // band's own feedback down, and the plan has to say so.
+        nsr::SpectralDelayParams hot;
+        hot.startFeedback = hot.finishFeedback = 0.9f;
+        hot.sideFeedback = 0.0f;
+        const float untrimmed = nsr::bandPlan (hot, 4, nsr::SpectralDelay::kBands, SR).feedback;
+        hot.sideFeedback = 0.6f;
+        const float trimmed = nsr::bandPlan (hot, 4, nsr::SpectralDelay::kBands, SR).feedback;
+        ok (std::abs (untrimmed - 0.9f) < 1.0e-5f && trimmed < untrimmed - 0.1f,
+            "the plan reports feedback after the pair trim, not the raw setting");
+
+        // and the interaural figure is the clamped one, so the readout cannot promise a split the
+        // engine will not produce
+        nsr::SpectralDelayParams tiny;
+        tiny.startInterMs = tiny.finishInterMs = 0.05f;
+        const float clamped = nsr::bandPlan (tiny, 0, nsr::SpectralDelay::kBands, SR).interMs;
+        tiny.startInterMs = tiny.finishInterMs = 40.0f;
+        const float capped = nsr::bandPlan (tiny, 0, nsr::SpectralDelay::kBands, SR).interMs;
+        tiny.startInterMs = tiny.finishInterMs = 0.0f;
+        const float off = nsr::bandPlan (tiny, 0, nsr::SpectralDelay::kBands, SR).interMs;
+        ok (std::abs (clamped - nsr::kInterMinMs) < 1.0e-5f
+            && std::abs (capped - nsr::kInterMaxMs) < 1.0e-5f
+            && off == 0.0f,
+            "the plan reports the clamped interaural split, and zero when it is off");
+    }
+
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
