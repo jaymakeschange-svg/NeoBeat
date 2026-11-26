@@ -1,3 +1,11 @@
+
+// Built to the published control list of Chimecho, a 16-band spectral delay by ConcreteFX:
+// Start/Finish Freq, Q, Start/Finish Len, Start/Finish feedback, Start/Finish volume,
+// Start/Finish LFO Speed and Width, Pan Width/Speed (a pan LFO), Side Delay (a band offset) and
+// Side Feedback, and Dry. No decompilation and no proprietary code: the control list specifies
+// the algorithm. See docs/research/transferable-mechanisms.md, section "Chimecho".
+//
+// The interaural split is from the SOPHIE research in the same document, not from Chimecho.
 #pragma once
 
 // Sixteen bands, each with its own delay, and a few ways for them to talk to each other.
