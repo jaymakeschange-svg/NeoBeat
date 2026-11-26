@@ -14,10 +14,10 @@ of being written, and was read in preference to the newer document. See REFERENC
 
 ## New this session
 
-### IDM Jack — **all plugins, standardized** — *specced*
+### IDM Jack — **NeoBeat and MidiJaQ, later JaqRack. Not Batchcut** — *specced*
 
-As of 26 Nov this replaces the randomiser outright, and lives in the shared tree so every plugin
-inherits one implementation. See `DECISIONS.md`.
+A room, with seven settings approved 26 Nov. Shared engine. See `DECISIONS.md` for the full
+structure and for the global randomiser it sits alongside.
 
 A glitch mode that stays rhythmic. Reference points: Autechre, Aphex Twin.
 
@@ -71,7 +71,8 @@ confirming before it is built.
 | Tiling percussion engine | proposed | from the Chassis `frappe` study — modes from a geometry, the drawing *is* the instrument |
 | Two listening points per voice | proposed | width from the body rather than applied to it |
 | 5×5 pattern grid, x/y reading point | proposed | 25 patterns as a continuous space, bilinear over per-step velocities |
-| ~~Seed-repeat probability for the randomiser~~ | **dropped** | the randomiser is dropped entirely; IDM Jack replaces it — see DECISIONS.md |
+| **Global randomiser (B)** | specced | one press, every parameter once, for auditioning; reaches each kit sound and the lane effects too — see DECISIONS.md |
+| **IDM Jack (C)** | specced | a room: continuous seizures, seven settings approved 26 Nov — see DECISIONS.md |
 
 ## MidiJaQ
 
