@@ -128,12 +128,17 @@ private:
     nsui::Segmented segTravel { travelNames() };
     nsui::Gem gemLocked { "Locked" };
 
+    // Chimecho's pan LFO, the one control of its set that the Stereoroom did not already cover
+    // with two knobs rather than sixteen
+    nsui::Knob kPanWidth { "Pan", 0.0f, 1.0f, 0.0f };
+    nsui::Knob kPanSpeed { "Speed", 0.25f, 16.0f, 4.0f, true };
+
     // the fan, which is the only way anyone will actually set sixteen places
     nsui::Knob kFan { "Spread", 0.0f, 1.0f, 1.0f };
     nsui::Pill pillFan { "FAN" };
-    nsui::Pill pillAlternate { "ALTERNATE", true };
+    nsui::Pill pillAlternate { "ALT", true };
     nsui::Segmented segTravelAll { travelNames() };
-    nsui::Gem gemPlaced { "Placed" };
+    nsui::Gem gemPlaced { "On" };
 
     juce::Rectangle<int> leftPlate, mainPlate, rightPlate;
 

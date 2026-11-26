@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <array>
 
 static int failures = 0;
 static void ok (bool c, const std::string& w)
@@ -272,6 +273,55 @@ int main()
         for (int b = 1; b < bc::BandsState::kBands; ++b)
             if (st.place[(size_t) b].bars != st.place[0].bars) spread = true;
         ok (spread, "setting one travel for all of them still staggers their periods");
+    }
+
+    // ------------------------------------------------------------------ Chimecho's Pan Width/Speed
+    //
+    // Two knobs over sixteen Places. The thing worth checking is not that it pans - that is one
+    // assignment - but that it leaves the locked bands alone and does not move the bank as a block.
+    {
+        heading ("the pan LFO");
+
+        bc::BandsState st;                       // the default fan locks the bottom bands
+        int lockedBefore = 0;
+        for (int b = 0; b < bc::BandsState::kBands; ++b)
+            if (st.place[(size_t) b].locked) ++lockedBefore;
+        ok (lockedBefore > 0, "the default fan locks something, so there is a case to test");
+
+        // "Left alone" means unchanged, not zeroed: the fan writes a depth to every band, locked
+        // ones included, and a locked band simply never acts on it (Place::moves() is false). So
+        // the check is against a snapshot, not against zero.
+        std::array<nsr::Place, bc::BandsState::kBands> before;
+        for (int b = 0; b < bc::BandsState::kBands; ++b) before[(size_t) b] = st.place[(size_t) b];
+
+        st.panLfo (0.8f, 2.0f);
+
+        bool lockedStill = true, movingSwept = true;
+        for (int b = 0; b < bc::BandsState::kBands; ++b)
+        {
+            const auto& pl = st.place[(size_t) b];
+            if (before[(size_t) b].locked && pl != before[(size_t) b]) lockedStill = false;
+            if (! pl.locked && (pl.travel != nsr::Travel::Sway || std::abs (pl.depth - 0.8f) > 1.0e-5f)) movingSwept = false;
+        }
+        ok (lockedStill, "a locked band comes through untouched: no sweep is written onto the low end");
+        ok (movingSwept, "every band that can move takes the width it was given");
+
+        // staggered, so the bank opens out rather than wandering as one object
+        float lo = 2.0f, hi = -1.0f;
+        for (int b = 0; b < bc::BandsState::kBands; ++b)
+        {
+            const auto& pl = st.place[(size_t) b];
+            if (pl.locked) continue;
+            lo = std::min (lo, pl.phase); hi = std::max (hi, pl.phase);
+        }
+        ok (hi - lo > 0.5f, "their phases are spread across the lap, not shared");
+
+        // and width zero puts them back to still, rather than sweeping by nothing
+        st.panLfo (0.0f, 2.0f);
+        bool allStill = true;
+        for (int b = 0; b < bc::BandsState::kBands; ++b)
+            if (! st.place[(size_t) b].locked && st.place[(size_t) b].travel != nsr::Travel::Still) allStill = false;
+        ok (allStill, "width zero returns them to still");
     }
 
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAILED", failures);

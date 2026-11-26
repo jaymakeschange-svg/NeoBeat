@@ -187,6 +187,21 @@ bc::BandsRoom::BandsRoom (BandsState& s, std::function<void()> ch, std::function
     addAndMakeVisible (gemLocked);
 
     // The fan, which is the only way anyone is going to set sixteen places.
+    // Chimecho's Pan Width / Speed. Two knobs over the sixteen Places, in the scheme the rest of
+    // the room already uses. Anything more specific is still available per band on the right.
+    kPanWidth.setTooltip ("Pan LFO width: how far each band sweeps. The bands are phase-staggered, "
+                          "so they cross each other rather than moving as one block. Locked bands "
+                          "stay put. Setting this writes the sixteen Places, which you can then "
+                          "edit one at a time.");
+    kPanSpeed.setTooltip ("Bars for one sweep.");
+    kPanSpeed.toText = [] (float v) { return juce::String (v, v < 1.0f ? 2 : 1) + " bar"; };
+    for (auto* k : { &kPanWidth, &kPanSpeed })
+    {
+        k->onChange = [this] (float) { state.panLfo (kPanWidth.getValue(), kPanSpeed.getValue()); if (changed) changed(); repaint(); };
+        k->onCommit = [this] { state.panLfo (kPanWidth.getValue(), kPanSpeed.getValue()); if (changed) changed(); pullParams(); repaint(); };
+        addAndMakeVisible (*k);
+    }
+
     kFan.setTooltip ("How far the fan opens. The spread is weighted toward the top, and the bottom "
                      "bands stay locked: low frequencies carry almost no direction and fold the "
                      "moment anything sums to mono. Press FAN to apply it.");
@@ -366,11 +381,13 @@ void bc::BandsRoom::resized()
         const auto st = stageArea().getSmallestIntegerContainer();
         int y = st.getBottom() + 8;
         const int x = mainPlate.getX() + 12;
-        kFan.setBounds (x, y - 10, 72, 60);
-        pillFan.setBounds (x + 78, y + 6, 54, 26);
-        pillAlternate.setBounds (x + 136, y + 6, 92, 26);
-        segTravelAll.setBounds (x + 236, y + 6, 290, 26);
-        gemPlaced.setBounds (x + 534, y + 7, 90, 24);
+        kFan.setBounds (x, y - 10, 66, 60);
+        pillFan.setBounds (x + 70, y + 6, 46, 26);
+        pillAlternate.setBounds (x + 120, y + 6, 50, 26);
+        kPanWidth.setBounds (x + 176, y - 10, 66, 60);
+        kPanSpeed.setBounds (x + 242, y - 10, 66, 60);
+        segTravelAll.setBounds (x + 314, y + 6, 240, 26);
+        gemPlaced.setBounds (x + 560, y + 7, 66, 24);
     }
 
     // right: interiority, cross-band, mix, then the selected band
