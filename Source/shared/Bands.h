@@ -1,3 +1,7 @@
+
+// The BANDS room engine. Spec: docs/research/transferable-mechanisms.md, "Shared — the
+// convergence room". Chimecho's Start/Finish control scheme over sixteen bands, each band a
+// Stereoroom node with its own Travel, plus a per-band interaural offset.
 #pragma once
 
 // BANDS: the spectral delay, standing in the room.
