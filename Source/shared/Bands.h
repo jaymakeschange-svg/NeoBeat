@@ -75,6 +75,29 @@ struct BandsState
     // Give every band the same movement, keeping the spread each already has. Phases are left
     // alone so they do not all swing together, which is the difference between a room breathing
     // and a chorus.
+    // Chimecho's Pan Width / Speed: a pan LFO over the whole bank, from two knobs.
+    //
+    // The sixteen Places can already do this one at a time, and richer - any Travel, any depth,
+    // any period. But "two knobs drive sixteen of everything" is the control scheme the whole
+    // plugin is built on, and leaving the pan out of it meant the one motion Chimecho gives you
+    // for free took sixteen decisions here. The phases are staggered so the bands sweep across
+    // each other rather than moving as one block, which is the difference between a stereo image
+    // that opens up and a mix that wanders.
+    //
+    // Locked bands are left alone: a swept low end is what `locked` exists to prevent.
+    void panLfo (float width, float bars)
+    {
+        for (int b = 0; b < kBands; ++b)
+        {
+            auto& pl = place[(size_t) b];
+            if (pl.locked) continue;
+            pl.travel = width > 0.001f ? nsr::Travel::Sway : nsr::Travel::Still;
+            pl.depth  = std::min (1.0f, std::max (0.0f, width));
+            pl.bars   = std::max (0.25f, bars);
+            pl.phase  = (float) b / (float) kBands;
+        }
+    }
+
     void travelAll (nsr::Travel t, int bars = 4)
     {
         for (int b = 0; b < kBands; ++b)
