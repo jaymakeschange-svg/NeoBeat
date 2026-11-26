@@ -60,16 +60,16 @@ bc::BandsRoom::BandsRoom (BandsState& s, std::function<void()> ch, std::function
     const Spec specs[] = {
         { "Range",    20.0f, 18000.0f,   90.0f, 9000.0f, true,
           "Where the sixteen bands sit. Log spaced between these two, because that is how we hear." },
-        { "Time",      1.0f,  2000.0f,   45.0f,  320.0f, true,
-          "Delay per band. Short at the bottom and long at the top spreads a sound forward in time as it climbs." },
-        { "Feedback",  0.0f,    0.95f,   0.30f,   0.58f, false,
+        { "Time",      0.3f,   200.0f,   1.6f,    14.0f, true,
+          "The shape of the delay across the spectrum, before LENGTH scales it. Short at the bottom and long at the top spreads a sound forward in time as it climbs." },
+        { "Feedback",  0.0f,    0.95f,   0.25f,   0.45f, false,
           "How much each band feeds itself. Trimmed automatically when the neighbour feed is up, so the loop stays under one." },
         { "Level",     0.0f,     1.0f,   1.0f,    0.55f, false,
           "How loud each band's repeats are." },
         { "Sweep",     0.0f,     8.0f,   0.07f,    0.9f, true,
           "Rate of the delay-time wobble, per band." },
-        { "Wobble",    0.0f,    30.0f,   0.0f,     5.0f, false,
-          "Depth of that wobble, in milliseconds. A few milliseconds at the top is what stops the repeats sounding stapled in place." },
+        { "Wobble",    0.0f,    30.0f,   0.0f,     1.2f, false,
+          "Depth of that wobble, before LENGTH scales it with the delay. It can never exceed the delay it modulates, however the two are set." },
     };
 
     for (const auto& sp : specs)
@@ -100,6 +100,25 @@ bc::BandsRoom::BandsRoom (BandsState& s, std::function<void()> ch, std::function
             addAndMakeVisible (*k);
         }
     }
+
+    // The master. Reads out as the span it actually produces rather than as a number from nought
+    // to one, because the question anyone asks of this knob is "how long is the delay now".
+    kLength.main = true;
+    kLength.toText = [this] (float v)
+    {
+        auto p = state.dsp;
+        p.length = v;
+        const auto lo = nsr::bandPlan (p, 0, kBands);
+        const auto hi = nsr::bandPlan (p, kBands - 1, kBands);
+        return msText (lo.timeMs) + " - " + msText (hi.timeMs);
+    };
+    kLength.setTooltip ("Scales every band's delay at once, 1x to "
+                        + juce::String ((int) nsr::kLengthRatio) + "x. Start and Finish set the "
+                        "shape across the spectrum; this sets how long the whole thing is. It opens "
+                        "at the short end, where the bank reads as a bubble rather than as echoes.");
+    kLength.onChange = [this] (float) { pushParams(); };
+    kLength.onCommit = [this] { pushParams(); };
+    addAndMakeVisible (kLength);
 
     // The interaural split and its drift. One idea, so they sit together.
     kInterStart.toText = kInterFinish.toText = [] (float v)
@@ -250,6 +269,7 @@ void bc::BandsRoom::pushParams()
     d.finishLfoHz    = pairs[4].finish->getValue();
     d.startLfoMs     = pairs[5].start->getValue();
     d.finishLfoMs    = pairs[5].finish->getValue();
+    d.length         = kLength.getValue();
 
     d.q            = kQ.getValue();
     d.sideOffset   = (int) std::lround (kSideOffset.getValue());
@@ -280,6 +300,7 @@ void bc::BandsRoom::pullParams()
     pairs[3].start->setValue (d.startLevel);     pairs[3].finish->setValue (d.finishLevel);
     pairs[4].start->setValue (d.startLfoHz);     pairs[4].finish->setValue (d.finishLfoHz);
     pairs[5].start->setValue (d.startLfoMs);     pairs[5].finish->setValue (d.finishLfoMs);
+    kLength.setValue (d.length);
 
     kQ.setValue (d.q);
     kSideOffset.setValue ((float) d.sideOffset);
@@ -326,16 +347,17 @@ void bc::BandsRoom::resized()
     mainPlate  = { 322, 8, 652, 720 };
     rightPlate = { 984, 8, 284, 720 };
 
-    // left: six pairs, name above, two knobs below
+    // left: the master length, then six pairs, name above and two knobs below
     {
         const int x = leftPlate.getX() + 10;
         const int w = (leftPlate.getWidth() - 20) / 2;
-        int y = 36;
+        kLength.setBounds (x, 50, w * 2, 86);
+        int y = 146;
         for (auto& p : pairs)
         {
-            p.start->setBounds (x, y + 14, w, 84);
-            p.finish->setBounds (x + w, y + 14, w, 84);
-            y += 100;
+            p.start->setBounds (x, y + 13, w, 76);
+            p.finish->setBounds (x + w, y + 13, w, 76);
+            y += 94;
         }
     }
 
@@ -409,16 +431,22 @@ void bc::BandsRoom::paint (juce::Graphics& g)
     g.drawText ("BANDS", mainPlate.getX() + 12, 16, 200, 14, juce::Justification::centredLeft);
     g.drawText ("INTERIORITY", rightPlate.getX() + 10, 16, 200, 14, juce::Justification::centredLeft);
 
-    // pair names down the left
+    // the master, then the pair names down the left
     {
-        int y = 36;
+        const int x = leftPlate.getX() + 12;
+        const int half = (leftPlate.getWidth() - 20) / 2;
+        paintLabel (g, "LENGTH", { x, 36, 200, 12 }, juce::Justification::centredLeft, 9.0f, C::teal());
+
+        // Two column headers, once, rather than a start/finish pair under every row: at this row
+        // pitch the labels under one pair land on the next pair's name.
+        paintLabel (g, "START", { x, 132, 60, 12 }, juce::Justification::centredLeft, 8.0f, C::dim());
+        paintLabel (g, "FINISH", { x + half, 132, 60, 12 }, juce::Justification::centredLeft, 8.0f, C::dim());
+
+        int y = 146;
         for (auto& p : pairs)
         {
-            paintLabel (g, p.name.toUpperCase(), { leftPlate.getX() + 12, y, 200, 12 });
-            ++y;
-            paintLabel (g, "start", { leftPlate.getX() + 12, y + 84, 60, 12 });
-            paintLabel (g, "finish", { leftPlate.getX() + 12 + (leftPlate.getWidth() - 20) / 2, y + 84, 60, 12 });
-            y += 99;
+            paintLabel (g, p.name.toUpperCase(), { x, y, 200, 12 });
+            y += 94;
         }
     }
 

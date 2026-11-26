@@ -446,6 +446,56 @@ int main()
             "the plan reports the clamped interaural split, and zero when it is off");
     }
 
+    // ------------------------------------------------------------------- the global length control
+    //
+    // Chimecho's failing: it opens long, and getting back to the short bubbly end means dragging
+    // two unlabelled sliders together. Length is one knob over the whole bank, and these check it
+    // does not break anything on the way down.
+    {
+        heading ("length scales the bank");
+
+        nsr::SpectralDelayParams p;     // defaults: the short end
+        const auto lo0 = nsr::bandPlan (p, 0, nsr::SpectralDelay::kBands, SR);
+        const auto hi0 = nsr::bandPlan (p, nsr::SpectralDelay::kBands - 1, nsr::SpectralDelay::kBands, SR);
+        ok (hi0.timeMs < 20.0f,
+            "it opens short: the longest band is " + std::to_string ((int) hi0.timeMs)
+            + " ms, inside the bubble rather than out at echoes");
+
+        p.length = 1.0f;
+        const auto lo1 = nsr::bandPlan (p, 0, nsr::SpectralDelay::kBands, SR);
+        const auto hi1 = nsr::bandPlan (p, nsr::SpectralDelay::kBands - 1, nsr::SpectralDelay::kBands, SR);
+        ok (std::abs (lo1.timeMs / lo0.timeMs - nsr::kLengthRatio) < 0.5f
+            && hi1.timeMs > 500.0f,
+            "full length scales the whole bank by " + std::to_string ((int) nsr::kLengthRatio)
+            + "x, to " + std::to_string ((int) lo1.timeMs) + " - " + std::to_string ((int) hi1.timeMs) + " ms");
+
+        // the shape survives the move: the ratio between the ends is what Start and Finish set,
+        // and Length must not alter it
+        ok (std::abs ((hi1.timeMs / lo1.timeMs) - (hi0.timeMs / lo0.timeMs)) < 0.05f,
+            "the shape across the spectrum is unchanged by length");
+
+        // and the sweep can never swallow the delay it modulates. This is the one that bites at
+        // the short end: a wobble set for long delays, left alone while length comes down, would
+        // pin the read pointer against its floor.
+        nsr::SpectralDelayParams deep;
+        deep.startLfoMs = deep.finishLfoMs = 50.0f;     // absurd on purpose
+        deep.length = 0.0f;
+        bool everSwamped = false;
+        for (int b = 0; b < nsr::SpectralDelay::kBands; ++b)
+        {
+            const auto pl = nsr::bandPlan (deep, b, nsr::SpectralDelay::kBands, SR);
+            if (pl.lfoMs > pl.timeMs * 0.5f) everSwamped = true;
+        }
+        ok (! everSwamped, "a 50 ms wobble on a 2 ms delay is held under the delay, not past it");
+
+        // the line is finite, so the plan must not promise more than it
+        nsr::SpectralDelayParams huge;
+        huge.startTimeMs = huge.finishTimeMs = 200.0f;
+        huge.length = 1.0f;
+        ok (nsr::bandPlan (huge, 8, nsr::SpectralDelay::kBands, SR).timeMs <= nsr::kMaxDelayMs,
+            "the reported delay never exceeds the line the engine allocates");
+    }
+
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
