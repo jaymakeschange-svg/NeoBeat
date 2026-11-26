@@ -20,6 +20,7 @@
 #include "../dsp/MaterialSpace.h"
 #include "ModSystem.h"
 #include "Rt.h"
+#include "../shared/Ceiling.h"
 #include <atomic>
 
 namespace nb
@@ -718,13 +719,14 @@ public:
     int activeVoices() const noexcept { int c = 0; for (auto& v : voices) c += v.isActive() ? 1 : 0; return c; }
 
     // Soft safety knee above -1 dBFS: normal levels pass untouched.
-    static float safety (float x) noexcept
-    {
-        constexpr float knee = 0.891f, room = 1.0f - knee;
-        const float a = std::fabs (x);
-        if (a <= knee) return x;
-        return std::copysign (knee + room * std::tanh ((a - knee) / room), x);
-    }
+    //
+    // The curve lives in shared/Ceiling.h as nsr::safetyKnee, so every program in the family bends
+    // the same way rather than each carrying its own copy. The arithmetic is unchanged, so a mix
+    // that passed through the version that used to be written out here passes identically.
+    //
+    // Note that Metal.h has a function of the same name doing a different job - it bends toward
+    // 1.8, not 1.0 - and is deliberately left alone.
+    static float safety (float x) noexcept { return nsr::safetyKnee (x); }
 
     std::array<PadSettings, kPads> pads {};
     std::array<std::atomic<uint32_t>, kPads> hitCounter {};
