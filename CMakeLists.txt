@@ -139,6 +139,9 @@ target_link_libraries (test_skin PRIVATE juce::juce_audio_utils juce::juce_recom
 add_executable (test_spectral tools/test_spectral.cpp)
 target_include_directories (test_spectral PRIVATE Source/neobeat/shared)
 
+add_executable (test_bands tools/test_bands.cpp)
+target_include_directories (test_bands PRIVATE Source/neobeat/shared)
+
 
 # Linux only: the plugin driven as a host would drive it, and pictures of its window.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
