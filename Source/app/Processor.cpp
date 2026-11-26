@@ -132,6 +132,16 @@ void BcProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         preview.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, hostRate, gain);
         kitPlayer.level.store (gain);
         kitPlayer.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
+
+        // MATERIAL: the learned body, struck from the room. Only while that room is showing, so
+        // it costs nothing anywhere else.
+        if (materialLive.load() && material.valid())
+        {
+            const float hit = materialPending.exchange (0.0f);
+            if (hit > 0.0f) materialVoice.strike (hit);
+            if (materialVoice.isRinging())
+                materialVoice.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
+        }
         // the keys go to LOOPS or to KEYS, whichever of the two was shown last
         const bool toKeys = midiTarget.load() == 3;
         std::array<bc::KeysNote, 512> kn; int numKn = 0;
@@ -352,4 +362,137 @@ void BcProcessor::playRange (int64_t from, int64_t to, bool loop)
     if (! d || ! d->audio || ! d->an) return;
     preview.play (d->audio, d->an, d->layers, from, to, loop);
     playDoc = d.get(); playOffset = 0; playingEvent = false;
+}
+
+namespace
+{
+// A rendered sound, ready for the pool: analysed the same way an imported file is, so everything
+// downstream treats it identically.
+std::shared_ptr<bc::PoolItem> poolItemFrom (std::vector<float> l, std::vector<float> r, double sr,
+                                            const juce::String& name, const juce::String& source)
+{
+    auto it = std::make_shared<bc::PoolItem>();
+    it->l = std::move (l); it->r = std::move (r); it->sr = sr;
+    it->name = name.toStdString(); it->source = source.toStdString();
+    bc::analyseItem (*it, nbkstore::learner());
+    return it;
+}
+}
+
+// ------------------------------------------------------------------ MaterialLab
+// The learner fits a physical model to a recording and writes it out as a material file. These
+// three turn that file into sound: open one, strike it, or send a pool sound through it.
+//
+// Everything made here lands in the pool as an ordinary sound, which is the point - cutting,
+// classifying, kit building and .NJQ export all work on it without knowing where it came from.
+
+bool BcProcessor::materialOpen (const juce::File& file, juce::String& error)
+{
+    nsr::Material m;
+    if (! m.load (file, error)) return false;
+    material = std::move (m);
+    materialVoice.prepare (getSampleRate() > 0.0 ? getSampleRate() : 48000.0, 256);
+    materialVoice.setMaterial (material);
+    lastMessage = "Opened " + material.name + " - " + juce::String (material.numModes) + " modes, rings "
+                + juce::String (material.ringSeconds(), 2) + " s";
+    roomsNotify();
+    return true;
+}
+
+int BcProcessor::materialRender (int hits, juce::String& error)
+{
+    if (! material.valid()) { error = "Open a material first."; return 0; }
+
+    const double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+    const int n = (int) (std::min (6.0f, material.ringSeconds() + 0.1f) * sr);
+    int made = 0;
+
+    for (int h = 0; h < hits; ++h)
+    {
+        // Each hit is a different hit. The strike lands at a different velocity and the pickups
+        // move a little, so no two are the same waveform - which is the whole reason to render
+        // from a model rather than copy a sample.
+        nsr::MaterialVoice v;
+        v.prepare (sr, 256);
+        nsr::Pickups pk;
+        pk.width = 0.25f + 0.25f * (float) h / (float) std::max (1, hits - 1);
+        v.setMaterial (material, pk);
+        v.strike (0.55f + 0.45f * (float) ((h * 7) % 11) / 10.0f);
+
+        std::vector<float> l ((size_t) n, 0.0f), r ((size_t) n, 0.0f);
+        v.process (l.data(), r.data(), n);
+
+        float peak = 0.0f;
+        for (int i = 0; i < n; ++i) peak = std::max (peak, std::max (std::fabs (l[(size_t) i]), std::fabs (r[(size_t) i])));
+        if (peak < 1.0e-5f) continue;
+        const float g = 0.89f / peak;
+        for (int i = 0; i < n; ++i) { l[(size_t) i] *= g; r[(size_t) i] *= g; }
+
+        const auto nm = material.name + " " + juce::String (h + 1);
+        kit.pool.push_back (poolItemFrom (std::move (l), std::move (r), sr, nm, "material:" + material.name));
+        ++made;
+    }
+
+    if (made == 0) { error = "Nothing came out - the material may be silent."; return 0; }
+    kitChanged();
+    stateChanged();
+    lastMessage = "Rendered " + juce::String (made) + (made == 1 ? " hit" : " hits") + " into the pool";
+    roomsNotify();
+    return made;
+}
+
+bool BcProcessor::materialThrough (int poolIndex, float mix, juce::String& error)
+{
+    if (! material.valid()) { error = "Open a material first."; return false; }
+    if (! juce::isPositiveAndBelow (poolIndex, (int) kit.pool.size()))
+    { error = "Pick a sound from the pool to send through it."; return false; }
+
+    const auto src = kit.pool[(size_t) poolIndex];
+    if (src == nullptr || src->l.empty()) { error = "That sound is empty."; return false; }
+
+    const double sr = src->sr > 1000.0 ? src->sr : (getSampleRate() > 0.0 ? getSampleRate() : 48000.0);
+    // long enough for the body to ring on past the end of the sound
+    const int tail = (int) (std::min (4.0f, material.ringSeconds()) * sr);
+    const int n = (int) src->l.size() + tail;
+
+    std::vector<float> in ((size_t) n, 0.0f);
+    for (size_t i = 0; i < src->l.size(); ++i)
+        in[i] = src->r.empty() ? src->l[i] : 0.5f * (src->l[i] + src->r[i]);
+
+    nsr::MaterialVoice v;
+    v.prepare (sr, 256);
+    v.setMaterial (material);
+
+    std::vector<float> l ((size_t) n, 0.0f), r ((size_t) n, 0.0f);
+    v.process (l.data(), r.data(), n, in.data(), 1.0f);
+
+    // Resonators have a lot of gain at their peaks, so match the wet to the dry before mixing;
+    // otherwise "mix" would really be a volume control.
+    auto rmsOf = [] (const std::vector<float>& x) {
+        double s = 0.0; for (float y : x) s += (double) y * y;
+        return std::sqrt (s / std::max<size_t> (1, x.size()));
+    };
+    const double dry = rmsOf (in), wet = rmsOf (l);
+    const float match = wet > 1.0e-9 ? (float) (dry / wet) : 1.0f;
+
+    const float m = juce::jlimit (0.0f, 1.0f, mix);
+    for (int i = 0; i < n; ++i)
+    {
+        const float d = in[(size_t) i];
+        l[(size_t) i] = d * (1.0f - m) + l[(size_t) i] * match * m;
+        r[(size_t) i] = d * (1.0f - m) + r[(size_t) i] * match * m;
+    }
+
+    float peak = 0.0f;
+    for (int i = 0; i < n; ++i) peak = std::max (peak, std::max (std::fabs (l[(size_t) i]), std::fabs (r[(size_t) i])));
+    if (peak < 1.0e-6f) { error = "Nothing came out of it."; return false; }
+    if (peak > 0.89f) { const float g = 0.89f / peak; for (int i = 0; i < n; ++i) { l[(size_t) i] *= g; r[(size_t) i] *= g; } }
+
+    const auto nm = juce::String (src->name) + " through " + material.name;
+    kit.pool.push_back (poolItemFrom (std::move (l), std::move (r), sr, nm, "material:" + material.name));
+    kitChanged();
+    stateChanged();
+    lastMessage = "Added " + nm;
+    roomsNotify();
+    return true;
 }

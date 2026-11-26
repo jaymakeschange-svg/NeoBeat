@@ -8,6 +8,7 @@
 #include "neobeat/shared/rooms/Player.h"
 #include "neobeat/shared/rooms/Session.h"
 #include "neobeat/shared/rooms/Rooms.h"
+#include "neobeat/shared/Material.h"
 #include "neobeat/shared/rooms/Kit.h"
 #include "neobeat/shared/rooms/Loops.h"
 #include "neobeat/shared/rooms/Keys.h"
@@ -104,6 +105,17 @@ private:
 class BcProcessor final : public juce::AudioProcessor, public bc::Rooms, public juce::ChangeBroadcaster, private juce::AsyncUpdater, private juce::Timer
 {
 public:
+    // MaterialLab: a learned object, played. `material` is the learner's fitted model; the voice
+    // is that model as a bank of resonators, so it can be struck or have sound run through it.
+    nsr::Material material;
+    nsr::MaterialVoice materialVoice;
+    std::atomic<bool> materialLive { false };     // true while the MATERIAL room is showing
+    std::atomic<float> materialPending { 0.0f };  // a strike waiting for the audio thread
+
+    bool materialOpen (const juce::File& file, juce::String& error);
+    bool materialThrough (int poolIndex, float mix, juce::String& error);
+    int  materialRender (int hits, juce::String& error);
+
     BcProcessor();
     ~BcProcessor() override;
 

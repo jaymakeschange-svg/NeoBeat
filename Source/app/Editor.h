@@ -4,6 +4,7 @@
 
 #include "Processor.h"
 #include "../neobeat/shared/rooms/RoomView.h"
+#include "MaterialRoom.h"
 #include "Ui.h"
 #include "../neobeat/shared/FoldersUi.h"
 
@@ -308,7 +309,7 @@ public:
     void refresh();
 private:
     View& view;
-    bcui::Segmented rooms { { "Cut", "Kit", "Loops", "Keys" } };
+    bcui::Segmented rooms { { "Cut", "Kit", "Loops", "Keys", "Material" } };
     bcui::Pill play { "Play" }, rec { "Record" }, exp { "Export" }, expAll { "Export all" };
     bcui::Gem loop { "Loop" };
     juce::Rectangle<int> lcd;
@@ -360,7 +361,7 @@ private:
         juce::String toolHint() const;
         View& view;
         void showRoom();
-        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; bc::KitRoom kitRoom; bc::LoopsRoom loopsRoom; bc::KeysRoom keysRoom;
+        Header header; FileList files; SpecView spec; EventLane lane; Ruler ruler; Overview overview; Inspector inspector; bc::KitRoom kitRoom; bc::LoopsRoom loopsRoom; bc::KeysRoom keysRoom; MaterialRoom materialRoom;
         bcui::Segmented tools { { "Box", "Brush", "Lasso", "Wand" } };
         juce::ComboBox layerBox;
         bcui::Pill erase { "Erase" }, down { "-6 dB" }, up { "+6 dB" }, toLayer { "To layer" }, undo { "Undo" }, redo { "Redo" };

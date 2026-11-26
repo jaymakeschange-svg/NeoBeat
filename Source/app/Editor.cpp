@@ -369,11 +369,13 @@ void View::play()
 // ---------------------------------------------------------------- the content (1280 x 800)
 
 BcEditor::Content::Content (View& v)
-    : view (v), header (v), files (v), spec (v), lane (v), ruler (v), overview (v), inspector (v), kitRoom (v), loopsRoom (v), keysRoom (v)
+    : view (v), header (v), files (v), spec (v), lane (v), ruler (v), overview (v), inspector (v), kitRoom (v), loopsRoom (v), keysRoom (v),
+      materialRoom (v.proc, [this] { refreshToolbar(); repaint(); })
 {
     addChildComponent (kitRoom);
     addChildComponent (loopsRoom);
     addChildComponent (keysRoom);
+    addChildComponent (materialRoom);
     view.roomChanged = [this] { showRoom(); };
     for (juce::Component* c : std::initializer_list<juce::Component*> { &header, &files, &spec, &lane, &ruler, &overview, &inspector, &tools, &layerBox,
                                                                           &erase, &down, &up, &toLayer, &undo, &redo, &partPrev, &partNext, &zoomOut, &zoomIn, &zoomFit })
@@ -442,7 +444,7 @@ void BcEditor::Content::showRoom()
         c->setVisible (cut);
     if (! cut) view.proc.stopPlayback();
     if (! kit) view.proc.kitPlayer.playing.store (false);
-    const bool keys = view.room == 3;
+    const bool keys = view.room == 3, mat = view.room == 4;
     if (! loops) view.proc.loopPlayer.playing.store (false);
     if (! keys) keysRoom.letGo();
     if (loops) view.proc.midiTarget.store (2);
@@ -450,6 +452,9 @@ void BcEditor::Content::showRoom()
     kitRoom.setVisible (kit);
     loopsRoom.setVisible (loops);
     keysRoom.setVisible (keys);
+    materialRoom.setVisible (mat);
+    if (mat) materialRoom.refresh();
+    view.proc.materialLive.store (mat);
     if (kit) kitRoom.refresh();
     if (loops) loopsRoom.refresh();
     if (keys) keysRoom.refresh();
@@ -521,6 +526,7 @@ void BcEditor::Content::resized()
     kitRoom.setBounds (0, 64, 1280, 736);
     loopsRoom.setBounds (0, 64, 1280, 736);
     keysRoom.setBounds (0, 64, 1280, 736);
+    materialRoom.setBounds (0, 64, 1280, 736);
 }
 
 // ---------------------------------------------------------------- the editor

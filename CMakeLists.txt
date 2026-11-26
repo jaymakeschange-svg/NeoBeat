@@ -39,6 +39,7 @@ juce_add_plugin (Batchcut
     VST3_CATEGORIES Fx Analyzer Tools)
 
 set (BATCHCUT_APP_SOURCES
+    Source/app/MaterialRoom.cpp
     Source/app/Processor.cpp
     Source/app/Editor.cpp
     Source/app/Display.cpp
@@ -83,6 +84,14 @@ endforeach()
 # The shared groundwork: the .NJQ manifest, categories and the assigned folders. This one needs JUCE itself
 # (zips, XML, files), unlike the tests above, so it is a console app rather than a bare executable. It runs
 # everywhere the plugin builds, and writes nothing outside its own temporary folder.
+# MaterialLab: the learner's material files played as resonant bodies. Needs JUCE for JSON and
+# files, so it is a console app like test_shared.
+juce_add_console_app (test_material PRODUCT_NAME "test_material")
+target_sources (test_material PRIVATE tools/test_material.cpp)
+target_include_directories (test_material PRIVATE Source)
+target_compile_definitions (test_material PRIVATE ${BATCHCUT_DEFINITIONS} JUCE_STANDALONE_APPLICATION=1)
+target_link_libraries (test_material PRIVATE juce::juce_audio_formats juce::juce_recommended_config_flags)
+
 juce_add_console_app (test_shared PRODUCT_NAME "test_shared")
 target_sources (test_shared PRIVATE tools/test_shared.cpp)
 target_include_directories (test_shared PRIVATE Source)
