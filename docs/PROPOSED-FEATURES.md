@@ -70,6 +70,64 @@ the same engine.
 its lanes and positions. A motif recurring with different pitch and drive each time is not
 recognisable as the same motif.
 
+### Interiority — a deliberate anti-externalisation processor — *proposed, both plugins*
+
+From practice-led research into SOPHIE's sound design (c. 2020): the metallic sounds carry a very
+slight delay between left and right, a couple of milliseconds, **continuously modulated by LFOs**.
+The result is not a sound placed somewhere around the listener but one that seems to be *inside*
+them - spatiality with effectively zero distance.
+
+**Why that works, in numbers.** The largest inter-aural time difference a real head can produce is
+about **690 microseconds** - the transit time around the skull. A 2 ms inter-channel delay is some
+three times larger than any physically possible ITD, so there is no direction it can be mapped to.
+It also sits above the summing-localisation region (below ~1 ms, where a delay reads as a
+direction) and below the echo threshold (~30-40 ms, where it separates into a discrete repeat).
+What remains is a fused image with no location. With no matching level difference, no pinna cue
+and no room reflections to support externalisation, the percept defaults to intracranial - the
+documented "inside-the-head locatedness" that untreated headphone audio produces. Modulating the
+delay means localisation never gets the stable window it needs to settle.
+
+**A second consequence of the same process.** Modulating a delay line resamples it, so one channel
+gets a micro pitch shift the other does not. That is a continuously varying detuning between
+channels - a comb filter whose notches are moving. On harmonically dense metallic material this
+does much of the timbral work. The spatial effect and the metallic sheen come out of one mechanism.
+
+**This is the inverse of what the Stereoroom currently does.** Equal-power pan, mid/side width and
+the RoomVerb depth are all externalising cues; they put a sound outside the listener. Nothing in
+the Neosystem currently pushes the other way.
+
+**Proposed:** a per-node inter-channel delay in the 0.5-5 ms range, LFO-modulated in rate and
+depth, available alongside the existing placement rather than replacing it. Pairs naturally with
+the MATERIAL engine, since metallic modal sounds are exactly the material the moving comb acts on.
+
+**Related but distinct:** stereo phaser with cross-channel feedback reaches a similar destination
+by a different road - allpass phase shift and inter-channel phase incoherence rather than an
+impossible ITD. Separately buildable; they do not sound the same. Worth having both.
+
+### Detector-driven placement — *proposed, both plugins*
+
+From studying the Sound Particles panners. All of them are one engine with a different **detector**
+driving it, and the panning target is a trajectory between two points with two traversal
+behaviours:
+
+- **Energy Panner** - amplitude drives position, with compressor-shaped controls: threshold, ratio,
+  attack, release. Sidechain input available.
+- **Brightness Panner** - the same engine driven by spectral brightness via a variable filter, by
+  detected note pitch over an adjustable range, or by MIDI.
+- **BeatPanner** - the same engine driven by a rhythmic sequencer.
+
+**Pan mode** moves start-to-end and returns to the start when the trigger falls away. **Sliding
+mode** is progressive: a loud or sustained signal advances the position along the trajectory, and
+when it goes quiet the sound *stays where it is* until the next trigger advances it further.
+
+**Sliding is the idea worth taking.** Position accumulates rather than resetting, so a sequence of
+short events produces long-form movement across a passage. That is a different musical behaviour
+from an LFO and from the Stereoroom's current Travel paths, both of which are periodic.
+
+**Proposed:** a node's position along its existing path can be driven by a detector - its own
+amplitude, its brightness, or the beat - with compressor-shaped controls and a choice of return or
+accumulate.
+
 ---
 
 ## NeoBeat
@@ -78,6 +136,8 @@ recognisable as the same motif.
 |---|---|---|
 | IDM Jack | specced | see above - sound design / capture, not composition |
 | Stereoroom UI | proposed | engine already in its shared tree; UI not built |
+| Interiority (anti-externalisation) | proposed | see above |
+| Detector-driven placement | proposed | see above |
 | Drag and drop | **unaudited** | may carry the same four bugs MidiJaQ had — see HANDOFF §5 |
 | Preset bar (arrows, hover audition) | proposed | shared component exists, built for Batchcut/MidiJaQ |
 | MATERIAL engine | available | `nsr::Material` now in the shared tree; no UI in NeoBeat yet |
@@ -96,6 +156,8 @@ recognisable as the same motif.
 | IDM Jack | specced | see above - sound design / capture, not composition |
 | Right-click "send node to" | **unverified** | MOD room advertises it; never tested |
 | Shipped presets | missing | preset bars read an empty folder |
+| Interiority (anti-externalisation) | proposed | see above |
+| Detector-driven placement | proposed | see above |
 | Eight heads on one buffer | proposed | LOOPS mode — eight simultaneous windows onto one recording, each a Stereoroom node |
 | Record a take, then point at it | proposed | `recordingsDir()` already exists |
 | MATERIAL engine | available | as above |
