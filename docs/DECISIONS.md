@@ -188,13 +188,31 @@ Twenty-two assertions. Three bugs it caught, all in code written the same hour:
 - **One test error of mine**: a fresh rig starts at seed 1, so 200 "samples" of a reach
   measurement were 200 copies of a single draw.
 
-**Known gap.** `Chaos.h` is in `batchcut-3.0` and `midijaq` only. NeoBeat has no `gen/Rng.h` at
-all, so the header cannot compile there; bringing the RNG across is part of wiring IDM Jack into
-NeoBeat, and the header has deliberately **not** been placed in that tree in the meantime.
+**Closed 27 Nov — the RNG.** `gen/Rng.h` is now in NeoBeat's tree as `Source/shared/Rng.h`, so
+`Chaos.h` and `Ceiling.h` are in all three and each compiles in each.
 
-**Known gap — level.** Seizing feedback upward while the delays are short stacks sixteen
-resonators, and the first render peaked at 1.75. IDM Jack needs either a ceiling on what the
-feedback targets may reach, or limiting on its output. Not yet decided.
+**Closed 27 Nov — level.** Limiting on the output, decided by the user over a feedback ceiling.
+`nsr::Limiter` in `shared/Ceiling.h`: lookahead with a flat peak hold, fast attack, slow release,
+and the knee underneath as a last resort. The moderate render needed 5.2 dB and now lands exactly
+on the ceiling instead of at 1.75.
+
+Three faults on the way, all in the limiter and all mine. The envelope started at **zero**, so
+every render opened by fading up from silence through the release time and the "worst reduction"
+reading was that startup ramp rather than anything the music did. Then the gain was computed from
+the sample arriving rather than the loudest in the lookahead window, so a peak landing late in the
+window had no time left to be reduced. Then the peak hold **decayed during** the window, so the
+gain chased a target rising away from it and never arrived. A hold has to stay flat until the
+delayed output has passed the peak.
+
+**The knee is now shared.** `nsr::safetyKnee` in `shared/Ceiling.h`, lifted from NeoBeat's
+`Engine::safety` with the arithmetic unchanged; `Engine::safety` is a one-line alias. Note that
+`dsp/Metal.h` has a function of the same name doing a different job — it bends toward 1.8, not 1.0
+— and is deliberately **not** merged.
+
+**The panel, 27 Nov.** `shared/rooms/JackRoom.h` and `JackRoomUi.cpp`: ON, ROLL, RESTORE, the
+lattice division, the seven settings, the five axis toggles, and the target list with the
+never-targets struck through. Plain on purpose — enough to play with, so the room it becomes can
+be drawn once it is known what the thing wants.
 
 #### C — IDM Jack. A room. NeoBeat and MidiJaQ, later JaqRack. Not Batchcut.
 

@@ -156,6 +156,14 @@ target_include_directories (bands_render PRIVATE Source/neobeat/shared Source/ne
 # day a dependency on the plugin crept in. If this target stops building, the room has stopped
 # being hostable by anything but MidiJaQ.
 if (UNIX AND NOT APPLE AND MIDIJAQ_LINUX_TOOLS)
+    juce_add_console_app (jack_shot PRODUCT_NAME "jack_shot")
+    target_sources (jack_shot PRIVATE
+        tools/jack_shot.cpp
+        Source/neobeat/shared/rooms/JackRoomUi.cpp)
+    target_include_directories (jack_shot PRIVATE Source Source/neobeat)
+    target_compile_definitions (jack_shot PRIVATE ${MIDIJAQ_DEFINITIONS})
+    target_link_libraries (jack_shot PRIVATE juce::juce_gui_basics juce::juce_recommended_config_flags)
+
     juce_add_console_app (bands_shot PRODUCT_NAME "bands_shot")
     target_sources (bands_shot PRIVATE
         tools/bands_shot.cpp

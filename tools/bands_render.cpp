@@ -14,6 +14,7 @@
 
 #include "rooms/Bands.h"
 #include "Chaos.h"
+#include "Ceiling.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -329,6 +330,12 @@ int main (int argc, char* argv[])
             eng.prepare (kSR, kBlock);
             eng.setSendBus (sl.data(), sr2.data());
 
+            // Jack can push the bank well over: seizing feedback upward at short delays stacks
+            // sixteen resonators. The limiter rides the gain so the seizure keeps its character.
+            nsr::Limiter lim;
+            lim.prepare (kSR, 3.0f, 120.0f);
+            lim.setCeiling (0.95f);
+
             const double bps = 96.0 / 60.0 / kSR;
             j.engage (0.0);
             int events = 0;
@@ -341,11 +348,13 @@ int main (int argc, char* argv[])
                 std::fill (sl.begin(), sl.end(), 0.0f); std::fill (sr2.begin(), sr2.end(), 0.0f);
                 eng.process (outL.data() + done, outR.data() + done,
                              l.data() + done, r.data() + done, m, at);
+                lim.process (outL.data() + done, outR.data() + done, m);
             }
             const float pk = peakOf (outL, outR);
             writeWav (std::string (dir) + "/" + name + ".wav", outL, outR);
-            std::printf ("  %-26s peak %.2f   %d seizures%s\n", (std::string (name) + ".wav").c_str(),
-                         pk, events, pk > 0.99f ? "   <- clipping" : "");
+            std::printf ("  %-26s peak %.2f   %d seizures   limiter took %.1f dB%s\n",
+                         (std::string (name) + ".wav").c_str(), pk, events,
+                         -lim.worstReductionDb(), pk > 0.99f ? "   <- STILL clipping" : "");
         };
 
         nsr::ChaosParams cp;
