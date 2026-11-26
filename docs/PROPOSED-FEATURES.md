@@ -12,37 +12,43 @@ Last updated 26 November 2026.
 
 ## New this session
 
-### IDM Jack — both plugins — *specced, with two open questions*
+### IDM Jack — both plugins — *specced*
 
 A glitch mode that stays rhythmic. Reference points: Autechre, Aphex Twin.
 
-**The premise, as stated:** most IDM-style glitch comes from generative drum synthesis, which is
-uncontrolled and tends to fall back on four-on-the-floor. IDM Jack differs by constraining the
-chaos to a lattice.
+**Purpose, as stated:** generative chaos with motifs, to be recorded in session and used in
+production. This is a **sound-design and capture tool, not a composition tool** — the goal is not
+that any given bar is "good", but that long takes yield material worth keeping. That changes what
+matters: variety over minutes, and recurring figures, rather than per-bar musicality.
 
-**The lattice is the whole mechanism.** Glitch events snap to a **16th-triplet swung grid** — six
-per beat, twenty-four per bar, with swing displacement applied within triplet groupings. The grid
-is **invisible**: not drawn, not editable, not something the user places events on. Events can
-only land on it, which is why the result reads as rhythmic rather than broken. Randomness decides
-*whether* and *how much*, never *where*.
+**The lattice is the core mechanism.** Glitch events snap to a **16th-triplet swung grid** — six
+per beat, twenty-four per bar, swing displacement applied within triplet groupings. The grid is
+**invisible**: not drawn, not editable, not something events are placed on by hand. Events can
+only land on it, so randomness decides *whether* and *how much*, never *where*. That constraint is
+what keeps the result rhythmic rather than broken.
+
+**Resolved:**
+- **Overlay or replace — both, as a toggle.** Either keep the written pattern and glitch over it,
+  or clear it and run on kit sounds alone.
+- **Source — everything in the kit.** Any lane is fair game; a burst picks from the whole kit.
 
 **Behaviour:**
-- Some probability per lattice position that a glitch fires; one amount controls density
-- When it fires, a drum part is **repeated rapidly** — N retriggers subdividing the lattice
-- **FX are driven by the same process**: the same seed and the same lattice, so an effect jump
-  lands on the same instant as the retrigger rather than smearing across it
+- A density amount sets the chance a burst fires at each lattice position
+- A burst **retriggers rapidly**, subdividing the lattice
+- **FX run off the same seed and the same grid**, so a parameter jump lands on the same instant as
+  a retrigger rather than smearing across it
+- One seed per window, with a probability the next window reuses it — bar-level coherence, and a
+  passage that can be kept
 
-**Seeding.** One seed per window, with a probability that the next window reuses it (the
-`turing` idea from the Chassis study, §2.4 of the teardown). This is what makes a bar of chaos
-internally coherent and repeatable instead of noise — and it means a passage can be kept.
+**Motifs need a memory, not just a seed.** Per-position randomness produces texture, not motifs.
+Proposed mechanism: a **figure buffer**. When a burst fires, store what it was — which lanes, which
+lattice positions, how many retriggers. With some probability a later burst replays a stored figure
+instead of generating a new one, optionally varied. A few slots gives recurring shapes; many
+approaches pure texture. This is also what keeps a long take from drifting into uniform noise,
+which matters when the output is being recorded rather than listened to once.
 
-**Open question 1 — overlay or replace?** Does IDM Jack glitch *on top of* the written pattern,
-leaving the original hits intact, or does it take over and re-place them? Overlay is additive and
-safer; replace is more extreme. Different features, not different settings.
-
-**Open question 2 — what does it repeat?** The lane that most recently played, a lane chosen in
-advance, or whatever is sounding at that instant? "Rapidly repeats drum parts" suggests grabbing
-what is playing, but that needs confirming.
+**Still to settle:** how it is performed (a latching toggle, a held control, or per-bar
+probability), and whether capture happens in the plugin or in the DAW.
 
 ---
 
@@ -50,7 +56,7 @@ what is playing, but that needs confirming.
 
 | Feature | Status | Note |
 |---|---|---|
-| IDM Jack | specced | see above |
+| IDM Jack | specced | see above - sound design / capture, not composition |
 | Stereoroom UI | proposed | engine already in its shared tree; UI not built |
 | Drag and drop | **unaudited** | may carry the same four bugs MidiJaQ had — see HANDOFF §5 |
 | Preset bar (arrows, hover audition) | proposed | shared component exists, built for Batchcut/MidiJaQ |
@@ -67,7 +73,7 @@ what is playing, but that needs confirming.
 
 | Feature | Status | Note |
 |---|---|---|
-| IDM Jack | specced | see above |
+| IDM Jack | specced | see above - sound design / capture, not composition |
 | Right-click "send node to" | **unverified** | MOD room advertises it; never tested |
 | Shipped presets | missing | preset bars read an empty folder |
 | Eight heads on one buffer | proposed | LOOPS mode — eight simultaneous windows onto one recording, each a Stereoroom node |
