@@ -6,7 +6,8 @@ shared tree; Batchcut appears only where a change touches it.
 Status key: **proposed** (not specced), **specced** (design settled, not built), **building**,
 **done**, **open question** (needs a decision before it can be specced).
 
-Last updated 26 November 2026.
+Last updated 26 November 2026. Four decisions settled this session: MIDI export (baked),
+loose pool sounds (save), BassMono (whole mix), and the IDM Jack spec.
 
 ---
 
@@ -98,7 +99,7 @@ recognisable as the same motif.
 | Eight heads on one buffer | proposed | LOOPS mode — eight simultaneous windows onto one recording, each a Stereoroom node |
 | Record a take, then point at it | proposed | `recordingsDir()` already exists |
 | MATERIAL engine | available | as above |
-| MIDI file export | **open question** | never answered: should MidiJaQ write MIDI files? |
+| MIDI file export | specced | yes. **Baked timing** - swing written into the note positions, so it keeps its feel when dropped into Ableton. Straight-grid export not built unless asked for later |
 
 ## Shared / both
 
@@ -106,8 +107,8 @@ recognisable as the same motif.
 |---|---|---|
 | Groove bus | proposed | one swing map read by both plugins — timing plane separate from timbre plane |
 | Theme layer (tokens + vector drawing) | proposed | 304-token precedent in Synplant; build the layer before any individual skin |
-| Loose pool sounds in saved state | **open question** | `kitToXml` writes only what a lane uses; may be wrong for MidiJaQ |
-| BassMono scope | **open question** | currently Stereoroom output only; globally it changed every preset's panning |
+| Loose pool sounds in saved state | specced | yes, save them. Costs project size in proportion to unplaced samples, FLAC-compressed - a few MB for a 48-sound pool. Changes `kitToXml`, which currently writes only what a lane uses, so it affects Batchcut too |
+| BassMono scope | specced | **whole mix**. Measured consequence: a hard-left voice goes from >12 dB channel separation to 9.2 dB because its low end is centred. That is correct for a mix safety net, so `test_audio`'s expectation gets updated rather than treated as a regression. Presets made before the change will sit slightly differently after it |
 
 ## JaqRack
 
