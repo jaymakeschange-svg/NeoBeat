@@ -167,6 +167,35 @@ the effects on the lanes. Not in Batchcut, which already has its own.
 `rollRandom`, `toggleRandomTarget`) are to be **deleted**, not rebuilt on. The deletion happens as
 part of building B, so MidiJaQ does not sit with a dead slot in its room list in the meantime.
 
+#### Built 27 Nov — `nsr::Chaos`, the shared spine
+
+`Source/neobeat/shared/Chaos.h`. One engine, two entry points: `rollOnce()` is the global
+randomiser, `engage()`/`release()` is IDM Jack. What it may touch is a registered list of live
+parameters — each with a range, a reach and a never-flag — which is the only way one engine can
+seize "every imaginable parameter" in programs whose parameters have nothing in common.
+
+Twenty-two assertions. Three bugs it caught, all in code written the same hour:
+
+- **The randomiser stuck at the rails.** `rollOnce` moved each parameter *relative* to where it
+  already sat, so after one press a value was at 0 or 1 and the next press clamped it to the same
+  place about half the time — pressing again stopped changing anything, which defeats auditioning.
+  The randomiser is a **destination** and IDM Jack is a **disturbance**; they need different
+  functions, and the comment saying so was already in the file while both used the same one.
+- **Repeat probability did nothing.** The window seed was mixed with the *absolute* lattice step,
+  so two windows sharing a seed still produced different figures. Mixed with the step's position
+  *within* the window it works: 100% recurrence at 1.0 against 0% at 0. That knob is the whole
+  difference between motifs and noise.
+- **One test error of mine**: a fresh rig starts at seed 1, so 200 "samples" of a reach
+  measurement were 200 copies of a single draw.
+
+**Known gap.** `Chaos.h` is in `batchcut-3.0` and `midijaq` only. NeoBeat has no `gen/Rng.h` at
+all, so the header cannot compile there; bringing the RNG across is part of wiring IDM Jack into
+NeoBeat, and the header has deliberately **not** been placed in that tree in the meantime.
+
+**Known gap — level.** Seizing feedback upward while the delays are short stacks sixteen
+resonators, and the first render peaked at 1.75. IDM Jack needs either a ceiling on what the
+feedback targets may reach, or limiting on its output. Not yet decided.
+
 #### C — IDM Jack. A room. NeoBeat and MidiJaQ, later JaqRack. Not Batchcut.
 
 Switch it on and it takes over: continuous, uncontrollable seizures of every parameter and feature
