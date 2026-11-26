@@ -102,21 +102,43 @@ inside out and has to be undone by hand; letting the randomiser reach its own ra
 randomises its rate. The struct comment names a third never-category, "the low end", which has no
 entry in the list — **open: should it have one?**
 
-### The randomiser, as specified
+### ~~The randomiser~~ — dropped, replaced by IDM Jack
 
 | | |
 |---|---|
-| **Recorded in** | [`research/neosystem-build-list.md`](research/neosystem-build-list.md), 19 Nov |
-| **The spec, verbatim** | *"one press randomises everything; right-click opens the box: speed, swing, extremity, cycling rhythmically and landing back on the original"* — a shared randomiser that walks a plugin's own parameter list. For NeoBeat and MidiJaQ. |
-| **Built** | Partially, in MidiJaQ only |
+| **Decided** | Drop the randomiser entirely. IDM Jack replaces it, and becomes a standardized effect across the ecosystem |
+| **By** | The user, 26 Nov 21:29 |
+| **Reason given** | The MidiJaQ version was laggy and "wasn't really controlling much" |
+| **Supersedes** | ~~The randomiser spec of 19 Nov: *"one press randomises everything; right-click opens the box: speed, swing, extremity, cycling rhythmically and landing back on the original"*~~ |
 
-What exists in MidiJaQ: the one-press roll, and the box (a per-target reach and an on/off, which
-covers *extremity*). What exists nowhere: **speed**, **swing**, **cycling rhythmically**, and
-**landing back on the original**. Those four are the character of it — not a one-shot roll but a
-rhythmic cycle that returns home — and they are the part still to build.
+**Why the two merge cleanly.** Every element of the dropped randomiser spec has an IDM Jack
+counterpart, which is what made keeping both redundant:
 
-The same document notes the mechanism it should ride on: *"the joystick is recordable, so a move
-is a modulation like any other — which is also how the randomiser gets to cycle it rhythmically."*
+| Randomiser (19 Nov) | IDM Jack |
+|---|---|
+| speed | the lattice rate |
+| swing | the swung 16th-triplet grid |
+| extremity | density — one amount controls how much |
+| cycling rhythmically | events can only land on the lattice |
+| landing back on the original | held control: original restored on release |
+
+IDM Jack already carries a *parameter seizure* axis, which is the randomiser's whole job. So what
+survives is one chaos engine with a shared spine — seed, repeat probability, rate, swing,
+extremity, held — reaching a target list of both kinds: parameter targets (what RANDOM reached)
+and event targets (retrigger, micro-timing, effect seizure).
+
+**Standardized.** IDM Jack lives in the shared tree like the other shared engines, so Batchcut,
+NeoBeat, MidiJaQ and JaqRack inherit one implementation rather than three.
+
+**Not affected, despite the name.** Batchcut's RANDOM, which deals from the pool without repeating
+a sound until all have played, is a pool utility and stays. `ModSrc::Random`, the modulation
+source in NeoBeat and in MidiJaQ's MOD room, is a different thing and stays.
+
+**Open — removal.** MidiJaQ's RANDOM room is still wired in as room 5 of 7
+(`CUT, LOOPS, KEYS, MAP, MOD, RANDOM, STEREOROOM`), 251 lines in `Source/app/RandomRoom.cpp` plus
+`makeRandomTargets`, `rollRandom` and `toggleRandomTarget` in the processor. The decision above was
+taken on the understanding that the current build no longer had it; it does. Whether to remove it
+now or leave it dormant until IDM Jack is built is not yet settled.
 
 ### What NeoBeat has instead
 
@@ -138,6 +160,7 @@ randomiser.
 
 | Question | Asked | Where it blocks |
 |---|---|---|
-| Should RANDOM's never-list include "the low end"? | 26 Nov | The struct comment names it; the list does not |
+| Remove MidiJaQ's RANDOM room now, or leave it dormant until IDM Jack exists? | 26 Nov | It is still wired in as room 5 of 7 |
 | IDM Jack's third axis (micro-timing 1–100 ms) — confirmed? | 26 Nov | It came from research, not from the brief |
+| One room on the interface, or two (RANDOM and JACK as separate front ends over one engine)? | 26 Nov | A UI question; the engine is shared either way |
 | NeoBeat's flat `Source/shared/` vs the other two trees' nested `Source/neobeat/shared/rooms/` | 26 Nov | Byte-identity across trees is impossible by construction; has produced two unbuildable headers so far |

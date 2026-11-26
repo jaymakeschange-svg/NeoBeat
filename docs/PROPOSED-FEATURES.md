@@ -14,7 +14,10 @@ of being written, and was read in preference to the newer document. See REFERENC
 
 ## New this session
 
-### IDM Jack — both plugins — *specced, with two open questions*
+### IDM Jack — **all plugins, standardized** — *specced*
+
+As of 26 Nov this replaces the randomiser outright, and lives in the shared tree so every plugin
+inherits one implementation. See `DECISIONS.md`.
 
 A glitch mode that stays rhythmic. Reference points: Autechre, Aphex Twin.
 
@@ -68,7 +71,7 @@ confirming before it is built.
 | Tiling percussion engine | proposed | from the Chassis `frappe` study — modes from a geometry, the drawing *is* the instrument |
 | Two listening points per voice | proposed | width from the body rather than applied to it |
 | 5×5 pattern grid, x/y reading point | proposed | 25 patterns as a continuous space, bilinear over per-step velocities |
-| Seed-repeat probability for the randomiser | proposed | replaces a plain amount control |
+| ~~Seed-repeat probability for the randomiser~~ | **dropped** | the randomiser is dropped entirely; IDM Jack replaces it — see DECISIONS.md |
 
 ## MidiJaQ
 
