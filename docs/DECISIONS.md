@@ -102,43 +102,54 @@ inside out and has to be undone by hand; letting the randomiser reach its own ra
 randomises its rate. The struct comment names a third never-category, "the low end", which has no
 entry in the list — **open: should it have one?**
 
-### ~~The randomiser~~ — dropped, replaced by IDM Jack
+### Chaos and randomisation — the settled structure
 
-| | |
+Decided 26 Nov, and it **supersedes the entry made earlier the same evening** which recorded the
+randomiser as dropped outright. It was not dropped; the 19 November spec **split**. Its "one press
+randomises everything" half became the global randomiser; its "speed, swing, extremity, cycling
+rhythmically, landing back on the original" half became IDM Jack. What is dropped is MidiJaQ's
+RANDOM room *implementation*, because it was laggy and was not controlling much.
+
+Three separate things:
+
+#### A — Sequence and sample randomisers. Untouched.
+
+Batchcut's RANDOM (deals from the pool without repeating a sound until all have played), KIT's
+Auto-fill / Shuffle / Random, MidiJaQ's per-row seeds and chop order. These pick **content**.
+**No touching.**
+
+#### B — The global randomiser. NeoBeat and MidiJaQ.
+
+One press randomises the parameters of every single thing in the plugin, **once**. It is for
+auditioning: press, listen, press again, until something lands. Modelled on Batchcut's kit
+randomiser. In NeoBeat it reaches further than in MidiJaQ — each kit sound's own parameters, plus
+the effects on the lanes. Not in Batchcut, which already has its own.
+
+**Built clean.** `Source/app/RandomRoom.cpp` and its processor wiring (`makeRandomTargets`,
+`rollRandom`, `toggleRandomTarget`) are to be **deleted**, not rebuilt on. The deletion happens as
+part of building B, so MidiJaQ does not sit with a dead slot in its room list in the meantime.
+
+#### C — IDM Jack. A room. NeoBeat and MidiJaQ, later JaqRack. Not Batchcut.
+
+Switch it on and it takes over: continuous, uncontrollable seizures of every parameter and feature
+in the plugin. The chaotic version of B, with options.
+
+Settings, all approved 26 Nov:
+
+| Setting | What it does |
 |---|---|
-| **Decided** | Drop the randomiser entirely. IDM Jack replaces it, and becomes a standardized effect across the ecosystem |
-| **By** | The user, 26 Nov 21:29 |
-| **Reason given** | The MidiJaQ version was laggy and "wasn't really controlling much" |
-| **Supersedes** | ~~The randomiser spec of 19 Nov: *"one press randomises everything; right-click opens the box: speed, swing, extremity, cycling rhythmically and landing back on the original"*~~ |
+| **Seizure targets** | Which of pitch, parameter, effect, retrigger, micro-timing it may grab — with a never-list for what it must not |
+| **Density** | How often the lattice fires at all |
+| **Extremity** | How far each seizure goes when it fires |
+| **Repeat probability** | Whether the next window re-rolls or repeats — this is what makes motifs rather than noise |
+| **Lattice division** | 16th-triplet is the default; 32nds and straight 16ths are different characters |
+| **Self-randomise** | It rolls its own settings on switch-on, with a depth control so it can be mild or total |
+| **Recovery** | How it lands back on release: hard cut, or decay over a bar |
 
-**Why the two merge cleanly.** Every element of the dropped randomiser spec has an IDM Jack
-counterpart, which is what made keeping both redundant:
-
-| Randomiser (19 Nov) | IDM Jack |
-|---|---|
-| speed | the lattice rate |
-| swing | the swung 16th-triplet grid |
-| extremity | density — one amount controls how much |
-| cycling rhythmically | events can only land on the lattice |
-| landing back on the original | held control: original restored on release |
-
-IDM Jack already carries a *parameter seizure* axis, which is the randomiser's whole job. So what
-survives is one chaos engine with a shared spine — seed, repeat probability, rate, swing,
-extremity, held — reaching a target list of both kinds: parameter targets (what RANDOM reached)
-and event targets (retrigger, micro-timing, effect seizure).
-
-**Standardized.** IDM Jack lives in the shared tree like the other shared engines, so Batchcut,
-NeoBeat, MidiJaQ and JaqRack inherit one implementation rather than three.
-
-**Not affected, despite the name.** Batchcut's RANDOM, which deals from the pool without repeating
-a sound until all have played, is a pool utility and stays. `ModSrc::Random`, the modulation
-source in NeoBeat and in MidiJaQ's MOD room, is a different thing and stays.
-
-**Open — removal.** MidiJaQ's RANDOM room is still wired in as room 5 of 7
-(`CUT, LOOPS, KEYS, MAP, MOD, RANDOM, STEREOROOM`), 251 lines in `Source/app/RandomRoom.cpp` plus
-`makeRandomTargets`, `rollRandom` and `toggleRandomTarget` in the processor. The decision above was
-taken on the understanding that the current build no longer had it; it does. Whether to remove it
-now or leave it dormant until IDM Jack is built is not yet settled.
+Plus the base behaviour already specced: the invisible swung lattice (randomness decides whether
+and how much, never where), held control with the original pattern restored on release and never
+altered, seeded so a pass can be recovered, and three randomisation axes — pitch, parameter and
+micro-timing in the 1–100 ms window.
 
 ### What NeoBeat has instead
 
@@ -160,7 +171,5 @@ randomiser.
 
 | Question | Asked | Where it blocks |
 |---|---|---|
-| Remove MidiJaQ's RANDOM room now, or leave it dormant until IDM Jack exists? | 26 Nov | It is still wired in as room 5 of 7 |
 | IDM Jack's third axis (micro-timing 1–100 ms) — confirmed? | 26 Nov | It came from research, not from the brief |
-| One room on the interface, or two (RANDOM and JACK as separate front ends over one engine)? | 26 Nov | A UI question; the engine is shared either way |
 | NeoBeat's flat `Source/shared/` vs the other two trees' nested `Source/neobeat/shared/rooms/` | 26 Nov | Byte-identity across trees is impossible by construction; has produced two unbuildable headers so far |
