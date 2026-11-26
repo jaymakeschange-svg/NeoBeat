@@ -40,7 +40,27 @@ namespace nsr
 // Out here at namespace scope rather than inside the class because the band plan below needs
 // them too, and two copies of a psychoacoustic bound is how one of them quietly goes stale.
 inline constexpr float kInterMinMs = 0.7f;
-inline constexpr float kInterMaxMs = 12.0f;
+inline constexpr float kInterMaxMs = 10.0f;
+
+// ---------------------------------------------------------------------- the global length control
+//
+// Chimecho has no such control, and that is its one real usability failure: it opens long and loud,
+// and the only way back to the short bubbly end is to drag the Start and Finish length sliders
+// together by hand, in a scheme where neither of them is labelled as a time you can reason about.
+// Here Start and Finish keep their job - the shape of the delay across the spectrum - and this
+// scales the whole bank at once, so the shape survives the move.
+//
+// 1x to 80x, exponential, because time is heard that way. The default sits at the bottom.
+inline constexpr float kLengthRatio = 80.0f;
+
+// The longest line the engine allocates. Out here with the others so bandPlan can clamp to it:
+// at full Length a long Finish time would otherwise report a delay the line cannot hold.
+inline constexpr float kMaxDelayMs = 2000.0f;
+
+inline float lengthScale (float length) noexcept
+{
+    return std::pow (kLengthRatio, std::min (1.0f, std::max (0.0f, length)));
+}
 
 struct SpectralDelayParams
 {
@@ -48,12 +68,17 @@ struct SpectralDelayParams
     float startHz = 90.0f, finishHz = 9000.0f;
     float q = 2.6f;                       // shared bandwidth; low Q leaks between bands on purpose
 
-    // per band, interpolated first to last
-    float startTimeMs = 45.0f,  finishTimeMs = 320.0f;
-    float startFeedback = 0.30f, finishFeedback = 0.58f;
+    // The master time control. Start and Finish below are the shape; this is the scale, and it
+    // opens at the short end on purpose: 1.6 to 14 ms across the bank is the bubbly,
+    // inside-a-bottle register, and anyone who wants echoes can turn one knob to get there.
+    float length = 0.0f;                  // 0..1
+
+    // per band, interpolated first to last. Times are before `length` is applied.
+    float startTimeMs = 1.6f,   finishTimeMs = 14.0f;
+    float startFeedback = 0.25f, finishFeedback = 0.45f;
     float startLevel = 1.0f,     finishLevel = 0.55f;
     float startLfoHz = 0.07f,    finishLfoHz = 0.9f;
-    float startLfoMs = 0.0f,     finishLfoMs = 5.0f;    // depth of the delay-time wobble
+    float startLfoMs = 0.0f,     finishLfoMs = 1.2f;    // depth of the wobble; scales with length
 
     // the neighbour feed. +1 means band 1 takes from band 2, and energy climbs.
     int   sideOffset = 0;                 // -15..15
@@ -64,7 +89,7 @@ struct SpectralDelayParams
     float interLfoHz = 0.23f;             // keeps it from settling
     float interLfoAmt = 0.5f;             // 0..1 of the offset that wobbles
 
-    float dry = 1.0f, wet = 0.8f;
+    float dry = 1.0f, wet = 0.45f;
 };
 
 // ------------------------------------------------------------------ what the params come to, band by band
@@ -101,13 +126,22 @@ inline BandPlan bandPlan (const SpectralDelayParams& p, int band, int bands,
     const float t = bands > 1 ? (float) b / (float) (bands - 1) : 0.0f;
     auto lerp = [t] (float a, float z) noexcept { return a + (z - a) * t; };
 
+    // One scale for the whole bank, applied to the wobble as well as the delay. If the wobble kept
+    // its absolute depth while the delay shrank, turning Length down would leave a 5 ms sweep on a
+    // 1.6 ms delay - the read pointer pinned against its one-sample floor for most of each cycle,
+    // which is not modulation, it is a fault that happens to be periodic.
+    const float scale = lengthScale (p.length);
+
     BandPlan r;
     r.hz       = lo * std::pow (hi / lo, t);
-    r.timeMs   = lerp (p.startTimeMs, p.finishTimeMs);
+    r.timeMs   = std::min (kMaxDelayMs, lerp (p.startTimeMs, p.finishTimeMs) * scale);
     r.feedback = lerp (p.startFeedback, p.finishFeedback) * trim;
     r.level    = lerp (p.startLevel, p.finishLevel);
     r.lfoHz    = lerp (p.startLfoHz, p.finishLfoHz);
-    r.lfoMs    = lerp (p.startLfoMs, p.finishLfoMs);
+    r.lfoMs    = lerp (p.startLfoMs, p.finishLfoMs) * scale;
+
+    // And a sweep can never be deeper than the delay it modulates, whatever the two are set to.
+    r.lfoMs = std::min (r.lfoMs, r.timeMs * 0.45f);
 
     const float im = lerp (p.startInterMs, p.finishInterMs);
     r.interMs = im <= 0.0f ? 0.0f : std::min (kInterMaxMs, std::max (kInterMinMs, im));
