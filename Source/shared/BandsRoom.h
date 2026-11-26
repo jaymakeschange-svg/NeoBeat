@@ -119,8 +119,8 @@ private:
     nsui::Knob kQ { "Q", 0.5f, 12.0f, 2.6f, true };
     nsui::Knob kSideOffset { "Offset", -15.0f, 15.0f, 0.0f };
     nsui::Knob kSideFeedback { "Side", 0.0f, 0.95f, 0.0f };
-    nsui::Knob kDry { "Dry", 0.0f, 1.0f, 1.0f };
-    nsui::Knob kWet { "Wet", 0.0f, 1.0f, 0.8f };
+    nsui::Knob kDry { "Dry", 0.0f, 1.0f, 0.4f };
+    nsui::Knob kWet { "Wet", 0.0f, 1.0f, 1.0f };
 
     // the selected band's place
     nsui::Knob kWidth { "Width", 0.0f, 1.0f, 0.0f };

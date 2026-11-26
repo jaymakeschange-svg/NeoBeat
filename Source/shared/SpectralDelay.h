@@ -79,11 +79,16 @@ struct SpectralDelayParams
     // The master time control. Start and Finish below are the shape; this is the scale, and it
     // opens at the short end on purpose: 1.6 to 14 ms across the bank is the bubbly,
     // inside-a-bottle register, and anyone who wants echoes can turn one knob to get there.
+    //
+    // Short delays only work as an effect if the bands RING - a 12 ms spread is inside the window
+    // where the ear fuses everything into one event, so without feedback high enough to sustain,
+    // the bank colours the transient instead of doing anything to it. Hence the feedback defaults
+    // below, which are high on purpose.
     float length = 0.0f;                  // 0..1
 
     // per band, interpolated first to last. Times are before `length` is applied.
     float startTimeMs = 1.6f,   finishTimeMs = 14.0f;
-    float startFeedback = 0.25f, finishFeedback = 0.45f;
+    float startFeedback = 0.80f, finishFeedback = 0.90f;
     float startLevel = 1.0f,     finishLevel = 0.55f;
     float startLfoHz = 0.07f,    finishLfoHz = 0.9f;
     float startLfoMs = 0.0f,     finishLfoMs = 1.2f;    // depth of the wobble; scales with length
@@ -97,7 +102,12 @@ struct SpectralDelayParams
     float interLfoHz = 0.23f;             // keeps it from settling
     float interLfoAmt = 0.5f;             // 0..1 of the offset that wobbles
 
-    float dry = 1.0f, wet = 0.45f;
+    // Wet is not a taste control on this effect, which is why the first defaults were inaudible.
+    // Measured against a dry reference: at wet 0.45 the bank sits 3 dB BELOW the dry signal and
+    // reads as a comb filter - the same drum, differently coloured. At wet 1.0 with dry pulled to
+    // 0.4 it sits 4 dB above, and you are hearing the bank. The crossover is the difference
+    // between the effect existing and not, so the default sits well clear of it.
+    float dry = 0.4f, wet = 1.0f;
 };
 
 // ------------------------------------------------------------------ what the params come to, band by band
