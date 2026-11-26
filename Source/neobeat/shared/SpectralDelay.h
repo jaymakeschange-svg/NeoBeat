@@ -70,14 +70,18 @@ public:
     static constexpr float kInterMinMs = 0.7f;
     static constexpr float kInterMaxMs = 12.0f;
 
-    void prepare (double sampleRate, int /*maxBlock*/ = 0)
+    void prepare (double sampleRate, int maxBlock = 0)
     {
         sr = (float) std::max (8000.0, sampleRate);
         const int n = (int) (kMaxDelayMs * 0.001f * sr) + 4;
+        const int blk = maxBlock > 0 ? maxBlock : 2048;
         for (int b = 0; b < kBands; ++b)
             for (int c = 0; c < 2; ++c)
             {
                 line[b][c].assign ((size_t) n, 0.0f);
+                // Sized here so the per-band path never allocates on the audio thread. It still
+                // grows if a host hands over a bigger block than it promised, which some do.
+                scratch[b][c].assign ((size_t) blk, 0.0f);
                 write[b][c] = 0;
             }
         reset();
@@ -144,6 +148,33 @@ public:
     const SpectralDelayParams& params() const noexcept { return p; }
     float bandHz (int b) const noexcept { return hz[(size_t) std::max (0, std::min (kBands - 1, b))]; }
 
+    // Render the bands without mixing them down, so a caller can do something with each one.
+    //
+    // This is the reason the engine does not own a Stereoroom of its own. Placement already lives
+    // in StereoRoom.h and rooms already hold Places and Strips; a second copy inside here would be
+    // a worse one that nothing else could reach. So the engine makes sixteen band signals and the
+    // room decides where each of them stands - which means a band can take any Travel the rest of
+    // the family can, for free, and anything added to the Stereoroom later arrives here too.
+    void processSplit (const float* inL, const float* inR, int n) noexcept
+    {
+        if (inL == nullptr || inR == nullptr || n <= 0) return;
+        if ((int) scratch[0][0].size() < n)
+            for (auto& band : scratch) for (auto& ch : band) ch.assign ((size_t) n, 0.0f);
+
+        for (int i = 0; i < n; ++i)
+            step (inL[i], inR[i], i, true);
+        lastSplit = n;
+    }
+
+    // One band's rendered output, level already applied. Valid until the next call.
+    const float* bandOut (int b, int ch) const noexcept
+    {
+        b = std::max (0, std::min (kBands - 1, b));
+        ch = ch != 0 ? 1 : 0;
+        return scratch[b][ch].empty() ? nullptr : scratch[b][ch].data();
+    }
+    int splitLength() const noexcept { return lastSplit; }
+
     void process (float* l, float* r, int n) noexcept
     {
         if (l == nullptr || r == nullptr) return;
@@ -152,7 +183,20 @@ public:
         {
             const float inL = l[i], inR = r[i];
             float wetL = 0.0f, wetR = 0.0f;
+            step (inL, inR, i, false, &wetL, &wetR);
+            l[i] = inL * p.dry + wetL * p.wet;
+            r[i] = inR * p.dry + wetR * p.wet;
+        }
+    }
 
+private:
+    // One sample of the whole bank. Shared by both entry points so the two can never drift: the
+    // mixed path and the per-band path are the same arithmetic, differing only in where the
+    // sixteen results are put.
+    void step (float inL, float inR, int i, bool toScratch,
+               float* wetL = nullptr, float* wetR = nullptr) noexcept
+    {
+        {
             // Read every band before writing any of them. Reading and writing band by band would
             // let a band hear its neighbour's current sample through the side feed, which is a
             // different and much less stable circuit than the one intended.
@@ -177,8 +221,17 @@ public:
 
                 tap[b][0] = read (b, 0, dL);
                 tap[b][1] = read (b, 1, dR);
-                wetL += tap[b][0] * level[b];
-                wetR += tap[b][1] * level[b];
+
+                if (toScratch)
+                {
+                    scratch[b][0][(size_t) i] = tap[b][0] * level[b];
+                    scratch[b][1][(size_t) i] = tap[b][1] * level[b];
+                }
+                else
+                {
+                    *wetL += tap[b][0] * level[b];
+                    *wetR += tap[b][1] * level[b];
+                }
             }
 
             // Then write. The split happens once, on the dry input, and the delay network that
@@ -211,13 +264,9 @@ public:
                 if (++write[b][0] >= (int) line[b][0].size()) write[b][0] = 0;
                 if (++write[b][1] >= (int) line[b][1].size()) write[b][1] = 0;
             }
-
-            l[i] = inL * p.dry + wetL * p.wet;
-            r[i] = inR * p.dry + wetR * p.wet;
         }
     }
 
-private:
     static float lerp (float a, float b, float t) noexcept { return a + (b - a) * t; }
     static float clampf (float v, float lo, float hi) noexcept { return std::max (lo, std::min (hi, v)); }
     static float flush (float v) noexcept { return std::abs (v) < 1.0e-20f ? 0.0f : v; }
@@ -252,6 +301,8 @@ private:
     float sr = 48000.0f;
 
     std::vector<float> line[kBands][2];
+    std::vector<float> scratch[kBands][2];
+    int lastSplit = 0;
     int write[kBands][2] {};
     float ic1[kBands][2] {}, ic2[kBands][2] {}, tap[kBands][2] {};
 
