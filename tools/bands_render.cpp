@@ -261,6 +261,28 @@ int main (int argc, char* argv[])
     // 08 — placement off, so the placement itself can be A/B'd against 01
     { bc::BandsState s; s.placed = false; render (dir, "08-placement-off", s, l, r); }
 
+    // ---------------------------------------------------------------- the short end, made audible
+    //
+    // The first set of defaults was inaudible, and measurement said why: sixteen bands over
+    // 1.6-14 ms is a 12 ms spread, inside the window where the ear fuses everything into one
+    // event, and at feedback 0.25-0.45 a band damped out in four repeats - 33 ms, which is still
+    // part of the transient. The result was a comb filter: the same drum, differently coloured.
+    //
+    // For the short end to be an effect rather than a colour, the bands have to RING. A 5 ms
+    // delay at 0.85 feedback is a tuned resonator, and that is what the bubble is. Same band,
+    // same delay, 189 ms of ring instead of 33.
+    { bc::BandsState s; s.dsp.startFeedback = 0.80f; s.dsp.finishFeedback = 0.90f;
+      render (dir, "09-short-ringing", s, l, r); }
+    { bc::BandsState s; s.dsp.startFeedback = 0.80f; s.dsp.finishFeedback = 0.90f; s.dsp.wet = 0.9f;
+      render (dir, "10-ringing-wet-up", s, l, r); }
+    { bc::BandsState s; s.dsp.startFeedback = 0.80f; s.dsp.finishFeedback = 0.90f;
+      s.dsp.wet = 1.0f; s.dsp.dry = 0.4f;
+      render (dir, "11-ringing-wet-forward", s, l, r); }
+    { bc::BandsState s; s.dsp.startFeedback = 0.88f; s.dsp.finishFeedback = 0.93f;
+      s.dsp.startTimeMs = 0.8f; s.dsp.finishTimeMs = 26.0f;   // a wider spread as well
+      s.dsp.wet = 1.0f; s.dsp.dry = 0.5f;
+      render (dir, "12-ringing-wide-spread", s, l, r); }
+
     std::printf ("done\n");
     return 0;
 }

@@ -62,7 +62,7 @@ bc::BandsRoom::BandsRoom (BandsState& s, std::function<void()> ch, std::function
           "Where the sixteen bands sit. Log spaced between these two, because that is how we hear." },
         { "Time",      0.3f,   200.0f,   1.6f,    14.0f, true,
           "The shape of the delay across the spectrum, before LENGTH scales it. Short at the bottom and long at the top spreads a sound forward in time as it climbs." },
-        { "Feedback",  0.0f,    0.95f,   0.25f,   0.45f, false,
+        { "Feedback",  0.0f,    0.95f,   0.80f,   0.90f, false,
           "How much each band feeds itself. Trimmed automatically when the neighbour feed is up, so the loop stays under one." },
         { "Level",     0.0f,     1.0f,   1.0f,    0.55f, false,
           "How loud each band's repeats are." },
