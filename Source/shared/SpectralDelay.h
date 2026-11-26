@@ -32,6 +32,16 @@
 namespace nsr
 {
 
+// The window that produces inside-the-head rather than a position or an echo. Below the lower
+// bound the brain finds a real place for it; above the upper it starts to come apart into two
+// arrivals. Clamped rather than trusted to a caller, because getting it wrong does not sound
+// like a bug, it sounds like a worse version of the effect.
+//
+// Out here at namespace scope rather than inside the class because the band plan below needs
+// them too, and two copies of a psychoacoustic bound is how one of them quietly goes stale.
+inline constexpr float kInterMinMs = 0.7f;
+inline constexpr float kInterMaxMs = 12.0f;
+
 struct SpectralDelayParams
 {
     // where the bands sit. Log spaced, because that is how we hear.
@@ -57,18 +67,63 @@ struct SpectralDelayParams
     float dry = 1.0f, wet = 0.8f;
 };
 
+// ------------------------------------------------------------------ what the params come to, band by band
+//
+// An interface showing a spectral delay has to say what each band is actually doing, and the only
+// honest way to do that is to read the numbers the engine runs on. Working them out a second time
+// in the display is how a readout ends up disagreeing with what you hear: the feedback here is
+// trimmed when the neighbour feed is up, by an amount no caller could arrive at on its own, and
+// the interaural split is clamped into the window that produces inside-the-head rather than a
+// position. So the arithmetic lives here once, and setParams below is one of its two callers.
+struct BandPlan
+{
+    float hz = 0.0f;
+    float timeMs = 0.0f;
+    float feedback = 0.0f;        // after the pair trim
+    float level = 0.0f;
+    float lfoHz = 0.0f, lfoMs = 0.0f;
+    float interMs = 0.0f;         // 0 when off; otherwise inside [kInterMinMs, kInterMaxMs]
+};
+
+inline BandPlan bandPlan (const SpectralDelayParams& p, int band, int bands,
+                          float sampleRate = 48000.0f) noexcept
+{
+    const float sr = std::max (8000.0f, sampleRate);
+    const float lo = std::max (20.0f, std::min (p.startHz, p.finishHz));
+    const float hi = std::min (0.45f * sr, std::max (p.startHz, p.finishHz));
+
+    const float fbMax = 0.96f;
+    const float sumHi = std::max (std::abs (p.startFeedback), std::abs (p.finishFeedback))
+                      + std::abs (p.sideFeedback);
+    const float trim = sumHi > fbMax ? fbMax / sumHi : 1.0f;
+
+    const int b = std::max (0, std::min (bands - 1, band));
+    const float t = bands > 1 ? (float) b / (float) (bands - 1) : 0.0f;
+    auto lerp = [t] (float a, float z) noexcept { return a + (z - a) * t; };
+
+    BandPlan r;
+    r.hz       = lo * std::pow (hi / lo, t);
+    r.timeMs   = lerp (p.startTimeMs, p.finishTimeMs);
+    r.feedback = lerp (p.startFeedback, p.finishFeedback) * trim;
+    r.level    = lerp (p.startLevel, p.finishLevel);
+    r.lfoHz    = lerp (p.startLfoHz, p.finishLfoHz);
+    r.lfoMs    = lerp (p.startLfoMs, p.finishLfoMs);
+
+    const float im = lerp (p.startInterMs, p.finishInterMs);
+    r.interMs = im <= 0.0f ? 0.0f : std::min (kInterMaxMs, std::max (kInterMinMs, im));
+    return r;
+}
+
 class SpectralDelay
 {
 public:
     static constexpr int kBands = 16;
     static constexpr float kMaxDelayMs = 2000.0f;
 
-    // The window that produces inside-the-head rather than a position or an echo. Below the lower
-    // bound the brain finds a real place for it; above the upper it starts to come apart into two
-    // arrivals. Clamped here rather than trusted to a caller, because getting it wrong does not
-    // sound like a bug, it sounds like a worse version of the effect.
-    static constexpr float kInterMinMs = 0.7f;
-    static constexpr float kInterMaxMs = 12.0f;
+    // The interaural window, named here as well so a caller that has the class has the bounds.
+    // One definition, up at namespace scope.
+    static constexpr float kInterMinMs = nsr::kInterMinMs;
+    static constexpr float kInterMaxMs = nsr::kInterMaxMs;
 
     void prepare (double sampleRate, int maxBlock = 0)
     {
@@ -106,39 +161,38 @@ public:
     void setParams (const SpectralDelayParams& np)
     {
         p = np;
-        const float lo = std::max (20.0f, std::min (p.startHz, p.finishHz));
-        const float hi = std::min (0.45f * sr, std::max (p.startHz, p.finishHz));
         const float qq = std::max (0.5f, p.q);
-
-        // Total loop gain has to stay under one however the two feedbacks are set. Clamping the
-        // pair together rather than each alone is the difference between a control that gets wild
-        // near the top and one that runs away there.
-        const float fbMax = 0.96f;
-        const float sumHi = std::max (std::abs (p.startFeedback), std::abs (p.finishFeedback))
-                          + std::abs (p.sideFeedback);
-        const float trim = sumHi > fbMax ? fbMax / sumHi : 1.0f;
 
         for (int b = 0; b < kBands; ++b)
         {
-            const float t = kBands > 1 ? (float) b / (float) (kBands - 1) : 0.0f;
+            // Every per-band number comes from bandPlan, so the interface can read the same ones
+            // without a second copy of the arithmetic to fall out of step. The filter
+            // coefficients stay here: a display has no use for them.
+            const auto pl = bandPlan (p, b, kBands, sr);
 
-            hz[b] = lo * std::pow (hi / lo, t);
+            hz[b] = pl.hz;
             const float g = std::tan (3.14159265358979f * std::min (hz[b], 0.45f * sr) / sr);
             k[b] = 1.0f / qq;
             a1[b] = 1.0f / (1.0f + g * (g + k[b]));
             a2[b] = g * a1[b];
             a3[b] = g * a2[b];
 
-            timeS[b]  = lerp (p.startTimeMs, p.finishTimeMs, t) * 0.001f;
-            fb[b]     = lerp (p.startFeedback, p.finishFeedback, t) * trim;
-            level[b]  = lerp (p.startLevel, p.finishLevel, t);
-            lfoInc[b] = lerp (p.startLfoHz, p.finishLfoHz, t) / sr;
-            lfoS[b]   = lerp (p.startLfoMs, p.finishLfoMs, t) * 0.001f;
-
-            const float im = lerp (p.startInterMs, p.finishInterMs, t);
-            interS[b] = im <= 0.0f ? 0.0f
-                                   : std::min (kInterMaxMs, std::max (kInterMinMs, im)) * 0.001f;
+            timeS[b]  = pl.timeMs * 0.001f;
+            fb[b]     = pl.feedback;
+            level[b]  = pl.level;
+            lfoInc[b] = pl.lfoHz / sr;
+            lfoS[b]   = pl.lfoMs * 0.001f;
+            interS[b] = pl.interMs * 0.001f;
         }
+
+        // Total loop gain has to stay under one however the two feedbacks are set. Clamping the
+        // pair together rather than each alone is the difference between a control that gets wild
+        // near the top and one that runs away there. bandPlan applies the same trim to the per-band
+        // feedback above; this is the neighbour feed's share of it.
+        const float fbMax = 0.96f;
+        const float sumHi = std::max (std::abs (p.startFeedback), std::abs (p.finishFeedback))
+                          + std::abs (p.sideFeedback);
+        const float trim = sumHi > fbMax ? fbMax / sumHi : 1.0f;
         sideFb = p.sideFeedback * trim;
         sideOff = std::max (-(kBands - 1), std::min (kBands - 1, p.sideOffset));
         interInc = std::max (0.0f, p.interLfoHz) / sr;
@@ -267,10 +321,12 @@ private:
         }
     }
 
-    static float lerp (float a, float b, float t) noexcept { return a + (b - a) * t; }
     static float clampf (float v, float lo, float hi) noexcept { return std::max (lo, std::min (hi, v)); }
     static float flush (float v) noexcept { return std::abs (v) < 1.0e-20f ? 0.0f : v; }
-    static int wrap (int b) noexcept { return ((b % kBands) + kBands) % kBands; }
+
+    // There is deliberately no wrap() here. The side feed is a line, not a ring: a band past
+    // either end has no neighbour, and energy leaves the bank rather than circulating in it
+    // forever. An earlier version wrapped, and band 15 fed band 0 until the end of time.
 
     // Topology-preserving state variable filter, bandpass output normalised to unity at centre.
     // Unity matters because this runs inside a feedback loop: left at its natural peak gain of Q,

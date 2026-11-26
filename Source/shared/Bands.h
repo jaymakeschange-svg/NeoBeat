@@ -15,8 +15,8 @@
 // The two sixteens are not a coincidence worth relying on, so it is checked: a kit has sixteen
 // lanes, the Stereoroom holds sixteen places, and the bank has sixteen bands.
 
-#include "../SpectralDelay.h"
-#include "../StereoRoom.h"
+#include "SpectralDelay.h"
+#include "StereoRoom.h"
 
 #include <algorithm>
 #include <cmath>
