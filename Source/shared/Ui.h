@@ -13,6 +13,7 @@
 #pragma once
 
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "Skin.h"
 #include <array>
 
 namespace nsui
@@ -63,6 +64,21 @@ struct Skin
     juce::uint32 lcdTop = 0xff0a1611, lcdBottom = 0xff13261e;
     juce::uint32 lcdEdge = 0xb3000000, lcdHilite = 0xb3ffffff;
     juce::uint32 lcdInk = 0xffaaf6d0, lcdInkDim = 0xff5fae8a;
+    // What makes a readout look lit rather than merely dark. The bloom is the phosphor haze an
+    // emissive display throws onto its own glass; the scanlines are the structure you can see in it
+    // when you lean in; the sheen is the room reflected in the cover. Take all three away and you
+    // have a dark rectangle with green text on it, which is what this used to draw.
+    juce::uint32 lcdGlow = 0x00000000;      // transparent: bloom in lcdInk
+    float lcdGlowAmount = 0.30f;            // 0 turns the bloom off
+    float lcdScanlines = 0.055f;            // alpha of the ruling; 0 turns it off
+    juce::uint32 lcdSheen = 0x1affffff;     // the diagonal wipe across the glass
+    int lcdBezel = 3;                       // how many rings the surround is sunk by
+
+    // Bevels. Depth is rings of stroke, not one line: a raised thing is lit along its top and
+    // shaded along its bottom, a sunken one is the other way round, and the roll between them is
+    // what the eye reads as thickness.
+    juce::uint32 bevelLight = 0xd8ffffff, bevelDark = 0xb0000000;
+    int plateBevel = 4, wellBevel = 4;      // rings; 0 falls back to a single edge line
 
     // a gem: the little lamp on a toggle
     juce::uint32 gemOff = 0xff9aa6a0, gemHalo = 0xccbef0ff, gemEdge = 0x8c3c4642, gemShine = 0xf2ffffff;
@@ -143,6 +159,147 @@ inline const Skin& skin() { return skinRef(); }
 inline void setSkin (const Skin& s) { skinRef() = s; }
 inline juce::Colour col (juce::uint32 argb) { return juce::Colour (argb); }
 
+// ------------------------------------------------------------------ loaded packs
+// A .nsk archive is not a second skin system sitting beside this one. It feeds this one: its
+// colors.json becomes the tokens above, so every existing C::text() and C::teal() call picks the
+// skin up with no change at any call site, and its bitmaps are consulted by the few places that
+// can use a bitmap. A pack that carries only colours is therefore a complete, working skin.
+inline nsr::SkinPack& packRef() { static nsr::SkinPack p; return p; }
+inline const nsr::SkinPack& pack() { return packRef(); }
+
+// Fold a pack's colours into a set of tokens. The pack names only what a skinner should be
+// trusted with - the handful of colours that keep data readable - so everything else is derived
+// from those or left as the base preset had it. A pack that also ships a chassis bitmap covers
+// most of the derived surfaces anyway; the derivation is what makes a colours-only pack coherent
+// rather than a dark readout stranded on a light panel.
+inline Skin fromPack (const nsr::SkinPack& p, Skin base)
+{
+    const auto& c = p.colours();
+    if (p.getName().isNotEmpty()) base.name = p.getName();
+
+    base.ink        = c.ink.getARGB();
+    base.inkSoft    = c.ink.withMultipliedBrightness (0.82f).getARGB();
+    base.inkDim     = c.dim.getARGB();
+    base.accent     = c.accent.getARGB();
+    base.accentGlow = c.accent.brighter (0.45f).getARGB();
+    base.lcdInk     = c.accent.getARGB();
+    base.lcdInkDim  = c.accent.withMultipliedBrightness (0.62f).getARGB();
+    base.chassisGroove = c.grid.getARGB();
+
+    // The one surface colour the format carries. Everything that is a surface is pulled toward it,
+    // so a dark pack darkens the whole chassis instead of only its readouts.
+    const auto surf = c.well.withAlpha (1.0f);
+    base.lcdTop        = surf.getARGB();
+    base.lcdBottom     = surf.brighter (0.10f).getARGB();
+    base.wellTop       = surf.brighter (0.06f).getARGB();
+    base.wellBottom    = surf.brighter (0.16f).getARGB();
+    base.chassisTop    = surf.brighter (0.34f).getARGB();
+    base.chassisBottom = surf.brighter (0.18f).getARGB();
+    base.plateTop      = surf.brighter (0.30f).getARGB();
+    base.plateBottom   = surf.brighter (0.14f).getARGB();
+    base.menuBack      = surf.brighter (0.22f).getARGB();
+    base.menuTop       = surf.brighter (0.30f).getARGB();
+    base.menuBottom    = surf.brighter (0.12f).getARGB();
+    base.tooltipBack   = surf.getARGB();
+    base.buttonTop     = surf.brighter (0.40f).getARGB();
+    base.buttonBottom  = surf.brighter (0.12f).getARGB();
+    base.knobCapHi     = surf.brighter (0.46f).getARGB();
+    base.knobCapMid    = surf.brighter (0.30f).getARGB();
+    base.knobCapLow    = surf.brighter (0.14f).getARGB();
+    base.knobCapLo     = surf.brighter (0.04f).getARGB();
+    base.knobPointer   = c.accent.getARGB();
+
+    // Text has to stay off the surface it sits on. A pack whose ink is close to its own well is a
+    // pack somebody mistyped, and silently drawing unreadable labels helps nobody.
+    if (std::abs (c.ink.getPerceivedBrightness() - surf.getPerceivedBrightness()) < 0.25f)
+    {
+        const bool darkSurface = surf.getPerceivedBrightness() < 0.5f;
+        base.ink     = (darkSurface ? juce::Colours::white : juce::Colours::black).getARGB();
+        base.inkSoft = (darkSurface ? juce::Colour (0xffd8e2e8) : juce::Colour (0xff2b3631)).getARGB();
+        base.inkDim  = (darkSurface ? juce::Colour (0xff8ea0ab) : juce::Colour (0xff4b5852)).getARGB();
+    }
+    base.labelShadow = surf.getPerceivedBrightness() < 0.5f ? 0x40000000u : 0x99ffffffu;
+
+    auto spread = [] (const juce::Array<juce::Colour>& src, std::array<juce::uint32, 8>& dest)
+    {
+        if (src.isEmpty()) return;
+        for (size_t i = 0; i < dest.size(); ++i)
+            dest[i] = src[(int) i % src.size()].getARGB();
+    };
+    spread (c.lanes, base.groups);
+    spread (c.meter, base.layers);
+    if (! c.lanes.isEmpty()) base.groupNone = c.dim.getARGB();
+
+    return base;
+}
+
+// Load a .nsk and make it the running look. Returns false and leaves everything as it was if the
+// archive will not open, because a half-applied skin is worse than none.
+inline bool applyPack (const juce::File& nsk, juce::String& error, Skin base = skins::chromePearl())
+{
+    nsr::SkinPack p;
+    if (! p.load (nsk, error)) return false;
+    packRef() = std::move (p);
+    setSkin (fromPack (pack(), base));
+    return true;
+}
+
+inline void clearPack (const Skin& base = skins::chromePearl())
+{
+    packRef().unload();
+    setSkin (base);
+}
+
+// What an editor should hand to setSkin. Each plugin still declares the preset it was designed
+// around - Batchcut and MidiJaQ one, NeoBeat another - and that preset still decides everything a
+// pack does not name. This is the single line that stops an editor's own setSkin call from
+// quietly undoing a pack that was loaded before it was built.
+inline Skin lookFor (const Skin& base) { return pack().isLoaded() ? fromPack (pack(), base) : base; }
+
+// ------------------------------------------------------------------ the wardrobe
+// Switching skins live costs almost nothing here, and that is not luck: every paint helper above
+// reads skin() at the moment it draws rather than caching colours when a component is built. So
+// changing the global and telling the tree to redraw is the whole of it. Any future code that
+// caches a colour in a member breaks this, which is reason enough not to.
+inline nsr::SkinLibrary& library() { static nsr::SkinLibrary lib; return lib; }
+
+// The name of the skin now showing, or empty for the plugin's own look. This is what goes into
+// plugin state - a name outlives a file being moved or a library being rebuilt, an index does not.
+inline juce::String& currentPackName() { static juce::String n; return n; }
+
+inline bool applyNamed (const juce::String& name, juce::String& error, const Skin& base)
+{
+    if (name.isEmpty()) { clearPack (base); currentPackName() = {}; return true; }
+
+    const int i = library().indexOf (name);
+    if (i < 0) { error = "no skin called " + name; return false; }
+    if (! applyPack (library()[i].file, error, base)) return false;
+
+    currentPackName() = library()[i].name;
+    return true;
+}
+
+// Repaint a tree into whatever the look now is. sendLookAndFeelChange reaches every child, which
+// matters because some of them cache fonts and metrics even though none of them cache colours.
+inline void refreshLook (juce::Component& root)
+{
+    root.sendLookAndFeelChange();
+    root.repaint();
+}
+
+// Restore from plugin state. A missing skin is not an error worth stopping for - somebody opened a
+// session on a machine where that skin is not installed, and the right answer is the stock look
+// rather than a dialog.
+inline void restorePackFromState (const juce::String& savedName, const Skin& base)
+{
+    juce::String ignored;
+    if (savedName.isEmpty() || ! applyNamed (savedName, ignored, base))
+    {
+        clearPack (base);
+        currentPackName() = {};
+    }
+}
+
 // ------------------------------------------------------------------ the colours, by role
 namespace C
 {
@@ -167,6 +324,10 @@ inline float textW (const juce::Font& f, const juce::String& t) { return juce::G
 
 inline void paintChassis (juce::Graphics& g, juce::Rectangle<float> r)
 {
+    // A pack that brought its own chassis artwork draws it instead of this. Everything below is
+    // the fallback, and it is what runs for a pack of colours alone or for no pack at all.
+    if (pack().drawChassis (g, r)) return;
+
     const auto& s = skin();
     g.setGradientFill (juce::ColourGradient::vertical (col (s.chassisTop), r.getY(), col (s.chassisBottom), r.getBottom()));
     g.fillRect (r);
@@ -182,39 +343,143 @@ inline void paintChassis (juce::Graphics& g, juce::Rectangle<float> r)
     g.setColour (col (s.chassisGroove));
     for (float x = r.getX(); x < r.getRight(); x += 3.0f) g.drawVerticalLine ((int) x, r.getY(), r.getBottom());
 }
+// ------------------------------------------------------------------ depth
+// A rolled bevel: rings of stroke stepping inward, each a gradient running from the lit edge to
+// the shaded one, each fainter than the last. One line around a shape says where it ends; this
+// says how thick it is, and it is most of the difference between a drawn panel and a moulded one.
+inline void bevelRing (juce::Graphics& g, juce::Rectangle<float> r, float radius,
+                       juce::Colour lit, juce::Colour shade, int rings, bool raised)
+{
+    if (rings <= 0) return;
+    for (int i = 0; i < rings; ++i)
+    {
+        const float inset = 0.5f + (float) i;
+        auto rr = r.reduced (inset);
+        if (rr.getWidth() <= 1.0f || rr.getHeight() <= 1.0f) break;
+        const float fade = 1.0f - (float) i / (float) juce::jmax (1, rings);
+        const auto top = raised ? lit.withMultipliedAlpha (fade) : shade.withMultipliedAlpha (fade);
+        const auto bot = raised ? shade.withMultipliedAlpha (fade * 0.85f)
+                                : lit.withMultipliedAlpha (fade * 0.85f);
+        juce::ColourGradient grad = juce::ColourGradient::vertical (top, rr.getY(), bot, rr.getBottom());
+        grad.addColour (0.5, juce::Colours::transparentBlack);
+        g.setGradientFill (grad);
+        g.drawRoundedRectangle (rr, juce::jmax (0.5f, radius - inset), 1.0f);
+    }
+}
+
 // radius < 0: the skin's own plate corner
 inline void paintPlate (juce::Graphics& g, juce::Rectangle<float> r, float radius = -1.0f)
 {
     const auto& s = skin();
     if (radius < 0.0f) radius = s.plateRadius;
     juce::DropShadow (col (s.plateShadow), s.plateShadowBlur, { 0, s.plateShadowDrop }).drawForRectangle (g, r.toNearestInt());
-    g.setGradientFill (juce::ColourGradient::vertical (col (s.plateTop), r.getY(), col (s.plateBottom), r.getBottom()));
+
+    // Four stops rather than two. A real moulded surface turns over near its top and again near
+    // its bottom, so the band across the middle is flatter than a straight ramp would make it.
+    const auto top = col (s.plateTop), bot = col (s.plateBottom);
+    juce::ColourGradient body = juce::ColourGradient::vertical (top.brighter (0.12f), r.getY(), bot, r.getBottom());
+    body.addColour (0.10, top);
+    body.addColour (0.52, top.interpolatedWith (bot, 0.55f));
+    body.addColour (0.88, bot.brighter (0.04f));
+    g.setGradientFill (body);
     g.fillRoundedRectangle (r, radius);
+
+    bevelRing (g, r, radius, col (s.bevelLight), col (s.bevelDark), s.plateBevel, true);
+
+    // the catch-light along the top, kept short so it reads as a highlight rather than a border
     g.setColour (col (s.plateHilite));
     g.drawLine (r.getX() + radius, r.getY() + 0.8f, r.getRight() - radius, r.getY() + 0.8f, 1.0f);
     g.setColour (col (s.plateEdge));
     g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
 }
+
 inline void paintWell (juce::Graphics& g, juce::Rectangle<float> r, float radius = -1.0f)
 {
     const auto& s = skin();
     if (radius < 0.0f) radius = s.wellRadius;
-    g.setGradientFill (juce::ColourGradient::vertical (col (s.wellTop), r.getY(), col (s.wellBottom), r.getBottom()));
+    const auto top = col (s.wellTop), bot = col (s.wellBottom);
+    juce::ColourGradient body = juce::ColourGradient::vertical (top.darker (0.16f), r.getY(), bot, r.getBottom());
+    body.addColour (0.18, top);
+    body.addColour (0.72, bot.darker (0.03f));
+    g.setGradientFill (body);
     g.fillRoundedRectangle (r, radius);
+
+    // sunk, so the roll runs the other way: shaded at the top, lit along the bottom lip
+    bevelRing (g, r, radius, col (s.bevelLight), col (s.bevelDark), s.wellBevel, false);
+
     g.setColour (col (s.wellEdge));
     g.drawRoundedRectangle (r.reduced (0.5f).translated (0, 0.8f), radius, 1.6f);
     g.setColour (col (s.wellHilite));
     g.drawLine (r.getX() + radius, r.getBottom() - 0.5f, r.getRight() - radius, r.getBottom() - 0.5f, 1.0f);
 }
+
 inline void paintLcd (juce::Graphics& g, juce::Rectangle<float> r, float radius = 8.0f)
 {
     const auto& s = skin();
-    g.setGradientFill (juce::ColourGradient::vertical (col (s.lcdTop), r.getY(), col (s.lcdBottom), r.getBottom()));
+
+    // The surround first: a readout sits in a hole, and the hole has a thickness. It is sunk
+    // inside the rectangle it was given rather than grown outside it - the caller decided this
+    // element's footprint, and a bezel that bled into its neighbours would be the skin quietly
+    // taking over layout, which is the one thing it may not do.
+    if (s.lcdBezel > 0 && r.getWidth() > (float) s.lcdBezel * 3.0f
+                       && r.getHeight() > (float) s.lcdBezel * 3.0f)
+    {
+        juce::ColourGradient frame = juce::ColourGradient::vertical (
+            col (s.bevelDark).withMultipliedAlpha (0.55f), r.getY(),
+            col (s.bevelLight).withMultipliedAlpha (0.40f), r.getBottom());
+        g.setGradientFill (frame);
+        g.fillRoundedRectangle (r, radius);
+        bevelRing (g, r, radius, col (s.bevelLight), col (s.bevelDark), s.lcdBezel, false);
+        r = r.reduced ((float) s.lcdBezel);
+        radius = juce::jmax (1.0f, radius - (float) s.lcdBezel * 0.6f);
+    }
+
+    const auto ink = col (s.lcdInk);
+    const auto glow = col (s.lcdGlow).isTransparent() ? ink : col (s.lcdGlow);
+
+    juce::ColourGradient body = juce::ColourGradient::vertical (col (s.lcdTop), r.getY(), col (s.lcdBottom), r.getBottom());
+    body.addColour (0.34, col (s.lcdTop).interpolatedWith (col (s.lcdBottom), 0.65f));
+    g.setGradientFill (body);
     g.fillRoundedRectangle (r, radius);
-    g.setColour (col (s.lcdEdge));
-    g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.2f);
-    g.setColour (col (s.lcdHilite));
-    g.drawLine (r.getX() + radius, r.getBottom() + 0.5f, r.getRight() - radius, r.getBottom() + 0.5f, 1.0f);
+
+    juce::Graphics::ScopedSaveState keep (g);
+    { juce::Path clip; clip.addRoundedRectangle (r, radius); g.reduceClipRegion (clip); }
+
+    // Phosphor bloom: the haze a lit display throws onto its own glass, brightest in the middle
+    // where the text is and falling away to nothing at the edges.
+    if (s.lcdGlowAmount > 0.0f)
+    {
+        juce::ColourGradient haze (glow.withMultipliedAlpha (s.lcdGlowAmount),
+                                   r.getCentreX(), r.getCentreY(),
+                                   glow.withAlpha (0.0f), r.getCentreX(), r.getBottom(), true);
+        haze.addColour (0.55, glow.withMultipliedAlpha (s.lcdGlowAmount * 0.30f));
+        g.setGradientFill (haze);
+        g.fillRect (r);
+    }
+
+    // The ruling you see when you lean in.
+    if (s.lcdScanlines > 0.0f)
+    {
+        g.setColour (juce::Colours::black.withAlpha (s.lcdScanlines));
+        for (float y = r.getY() + 1.0f; y < r.getBottom(); y += 2.0f)
+            g.fillRect (r.getX(), y, r.getWidth(), 1.0f);
+    }
+
+    // The room, reflected in the cover glass. Diagonal, so it does not read as another gradient.
+    if (! col (s.lcdSheen).isTransparent())
+    {
+        juce::ColourGradient wipe (col (s.lcdSheen), r.getX(), r.getY(),
+                                   col (s.lcdSheen).withAlpha (0.0f),
+                                   r.getX() + r.getWidth() * 0.62f, r.getBottom(), false);
+        g.setGradientFill (wipe);
+        g.fillRect (r.withHeight (r.getHeight() * 0.58f));
+    }
+
+    // an inner shadow under the top lip, so the glass sits below the bezel rather than on it
+    juce::ColourGradient inner (juce::Colours::black.withAlpha (0.45f), r.getX(), r.getY(),
+                                juce::Colours::transparentBlack, r.getX(), r.getY() + 5.0f, false);
+    g.setGradientFill (inner);
+    g.fillRect (r.withHeight (5.0f));
 }
 inline void paintGem (juce::Graphics& g, juce::Rectangle<float> r, bool on = true, juce::Colour tint = {})
 {
@@ -458,25 +723,35 @@ public:
             juce::Path p; p.addCentredArc (cx, cy, r, r, 0.0f, std::min (st, e), std::max (st, e), true);
             g.setColour (c); g.strokePath (p, juce::PathStrokeType (w, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         };
+        // A pack's filmstrip replaces the body of the knob, and goes down first so the state rings
+        // still land on top of it. What it does not replace is the rings themselves: those say
+        // whether this knob is the main one and whether it is moving without you, and a skin is not
+        // allowed to take that away however good its artwork is.
+        const bool packKnob = pack().drawKnob (g, area, juce::jlimit (0.0f, 1.0f, toNorm (value)));
+
         arc (rKnob + 4.0f, a0, a1, col (s.knobRingBack), 2.5f);
         arc (rKnob + 4.0f, a0, ang, main ? C::teal() : col (s.knobRingIdle), 2.5f);
         // a knob that is moving on its own wears a ring, so you can see which ones are not yours any more
         if (cycling) arc (rKnob + 7.5f, a0, a1, C::amber().withAlpha (0.85f), 1.6f);
-        for (int i = 0; i < 36; ++i)
+
+        if (! packKnob)
         {
-            const float t = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
-            g.setColour (i % 2 ? col (s.knobRidgeDark) : col (s.knobRidgeLight));
-            g.drawLine (cx + (rKnob - 1.0f) * std::sin (t), cy - (rKnob - 1.0f) * std::cos (t), cx + rKnob * std::sin (t), cy - rKnob * std::cos (t), 2.0f);
+            for (int i = 0; i < 36; ++i)
+            {
+                const float t = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
+                g.setColour (i % 2 ? col (s.knobRidgeDark) : col (s.knobRidgeLight));
+                g.drawLine (cx + (rKnob - 1.0f) * std::sin (t), cy - (rKnob - 1.0f) * std::cos (t), cx + rKnob * std::sin (t), cy - rKnob * std::cos (t), 2.0f);
+            }
+            auto cap = juce::Rectangle<float> (rKnob * 2.0f - 6.0f, rKnob * 2.0f - 6.0f).withCentre ({ cx, cy });
+            if (main) { g.setColour (C::glow().withAlpha (0.55f)); g.fillEllipse (cap.expanded (5.0f)); }
+            juce::ColourGradient cg (col (s.knobCapHi), cap.getX() + cap.getWidth() * 0.35f, cap.getY() + cap.getHeight() * 0.28f, col (s.knobCapLo), cap.getRight(), cap.getBottom(), true);
+            cg.addColour (0.22, col (s.knobCapMid)); cg.addColour (0.58, col (s.knobCapLow));
+            g.setGradientFill (cg); g.fillEllipse (cap);
+            g.setColour (col (s.knobCapEdge)); g.drawEllipse (cap, 1.0f);
+            const float pr0 = cap.getWidth() * 0.18f, pr1 = cap.getWidth() * 0.46f;
+            g.setColour (col (s.knobPointer));
+            g.drawLine (cx + pr0 * std::sin (ang), cy - pr0 * std::cos (ang), cx + pr1 * std::sin (ang), cy - pr1 * std::cos (ang), 2.6f);
         }
-        auto cap = juce::Rectangle<float> (rKnob * 2.0f - 6.0f, rKnob * 2.0f - 6.0f).withCentre ({ cx, cy });
-        if (main) { g.setColour (C::glow().withAlpha (0.55f)); g.fillEllipse (cap.expanded (5.0f)); }
-        juce::ColourGradient cg (col (s.knobCapHi), cap.getX() + cap.getWidth() * 0.35f, cap.getY() + cap.getHeight() * 0.28f, col (s.knobCapLo), cap.getRight(), cap.getBottom(), true);
-        cg.addColour (0.22, col (s.knobCapMid)); cg.addColour (0.58, col (s.knobCapLow));
-        g.setGradientFill (cg); g.fillEllipse (cap);
-        g.setColour (col (s.knobCapEdge)); g.drawEllipse (cap, 1.0f);
-        const float pr0 = cap.getWidth() * 0.18f, pr1 = cap.getWidth() * 0.46f;
-        g.setColour (col (s.knobPointer));
-        g.drawLine (cx + pr0 * std::sin (ang), cy - pr0 * std::cos (ang), cx + pr1 * std::sin (ang), cy - pr1 * std::cos (ang), 2.6f);
         const juce::String txt = toText ? toText (value) : juce::String (value, 2);
         g.setFont (font (10.5f));
         const int tw = std::min (valueArea.getWidth(), (int) textW (g.getCurrentFont(), txt) + 12);

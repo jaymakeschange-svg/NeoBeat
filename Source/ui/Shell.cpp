@@ -593,7 +593,7 @@ std::unique_ptr<juce::Component> makeRouteList (Ctx& c) { return std::make_uniqu
 Shell::Shell (NeoBeatProcessor& p) : ctx (p)
 {
     // NeoBeat's own values for the shared look, so merging the drawing code changes nothing on screen
-    nsui::setSkin (nsui::skins::chromePearlDeep());
+    nsui::setSkin (nsui::lookFor (nsui::skins::chromePearlDeep()));
     look.apply();
     setLookAndFeel (&look);
     header = makeHeader (ctx); tree = makeTree (ctx); inspector = makeInspector (ctx); dock = makeDock (ctx);
