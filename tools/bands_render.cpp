@@ -13,6 +13,7 @@
 // hearing. Listen to 00 and 01 back to back; that pair is the whole question.
 
 #include "rooms/Bands.h"
+#include "Chaos.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -282,6 +283,87 @@ int main (int argc, char* argv[])
       s.dsp.startTimeMs = 0.8f; s.dsp.finishTimeMs = 26.0f;   // a wider spread as well
       s.dsp.wet = 1.0f; s.dsp.dry = 0.5f;
       render (dir, "12-ringing-wide-spread", s, l, r); }
+
+    // ------------------------------------------------------------------ IDM Jack, seizing BANDS
+    //
+    // The room UI does not exist yet, and does not need to for this: the chaos engine takes a
+    // registered list of live parameters, and BANDS' own are a real list. So this is IDM Jack
+    // actually running, on a real effect, before a single control has been drawn.
+    {
+        bc::BandsState st;                       // the shipped defaults
+        auto& d = st.dsp;
+
+        nsr::Chaos jack;
+        // room, name, value, lo, hi, reach, on, never
+        jack.addTarget ({ "BANDS", "length",     &d.length,        0.0f,  1.0f,  0.55f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "start time", &d.startTimeMs,   0.3f,  60.0f, 0.70f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "end time",   &d.finishTimeMs,  1.0f, 200.0f, 0.70f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "feedback",   &d.finishFeedback,0.2f,  0.93f, 0.45f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "start Hz",   &d.startHz,       40.0f, 900.0f,0.60f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "end Hz",     &d.finishHz,    1500.0f,14000.f,0.60f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "Q",          &d.q,             0.8f,  9.0f,  0.70f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "side feed",  &d.sideFeedback,  0.0f,  0.6f,  0.80f, true, false, 0.0f });
+        jack.addTarget ({ "BANDS", "wet",        &d.wet,           0.5f,  1.0f,  0.30f, true, false, 0.0f });
+        // the never-list: the dry path, so a seizure can never silence the source entirely
+        jack.addTarget ({ "BANDS", "dry",        &d.dry,           0.0f,  1.0f,  0.0f, false, true,  0.0f });
+
+        auto renderJack = [&] (const char* name, const nsr::ChaosParams& cp)
+        {
+            bc::BandsState s2;
+            auto& e = s2.dsp;
+            nsr::Chaos j;
+            for (const auto& t : jack.allTargets())
+            {
+                // re-point the targets at this render's own state
+                nsr::ChaosTarget c = t;
+                const size_t off = (size_t) ((const char*) t.value - (const char*) &d);
+                c.value = (float*) ((char*) &e + off);
+                j.addTarget (c);
+            }
+            j.setParams (cp);
+
+            const int n = (int) l.size();
+            std::vector<float> outL ((size_t) n, 0.0f), outR ((size_t) n, 0.0f);
+            std::vector<float> sl ((size_t) kBlock, 0.0f), sr2 ((size_t) kBlock, 0.0f);
+            bc::BandsEngine eng;
+            eng.prepare (kSR, kBlock);
+            eng.setSendBus (sl.data(), sr2.data());
+
+            const double bps = 96.0 / 60.0 / kSR;
+            j.engage (0.0);
+            int events = 0;
+            for (int done = 0; done < n; done += kBlock)
+            {
+                const int m = std::min (kBlock, n - done);
+                const double at = (double) done * bps;
+                events += (int) j.advance (at, (double) m * bps).size();
+                eng.setState (s2);                 // the seizures reach the engine here
+                std::fill (sl.begin(), sl.end(), 0.0f); std::fill (sr2.begin(), sr2.end(), 0.0f);
+                eng.process (outL.data() + done, outR.data() + done,
+                             l.data() + done, r.data() + done, m, at);
+            }
+            const float pk = peakOf (outL, outR);
+            writeWav (std::string (dir) + "/" + name + ".wav", outL, outR);
+            std::printf ("  %-26s peak %.2f   %d seizures%s\n", (std::string (name) + ".wav").c_str(),
+                         pk, events, pk > 0.99f ? "   <- clipping" : "");
+        };
+
+        nsr::ChaosParams cp;
+        cp.division = 6; cp.swing = 0.58f; cp.density = 0.45f; cp.extremity = 0.55f;
+        cp.repeatProb = 0.6f; cp.windowSteps = 8; cp.seed = 3;
+        renderJack ("13-jack-moderate", cp);
+
+        cp.density = 0.9f; cp.extremity = 1.0f; cp.repeatProb = 0.1f; cp.seed = 5;
+        renderJack ("14-jack-total", cp);
+
+        // high repeat probability: the figure should persist long enough to hear as an idea
+        cp.density = 0.7f; cp.extremity = 0.8f; cp.repeatProb = 0.95f; cp.windowSteps = 6; cp.seed = 9;
+        renderJack ("15-jack-motifs", cp);
+
+        // and its own settings rolled on switch-on
+        cp.selfRandomise = 0.8f; cp.seed = 21;
+        renderJack ("16-jack-self-rolled", cp);
+    }
 
     std::printf ("done\n");
     return 0;

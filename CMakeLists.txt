@@ -142,11 +142,14 @@ target_include_directories (test_spectral PRIVATE Source/neobeat/shared)
 add_executable (test_bands tools/test_bands.cpp)
 target_include_directories (test_bands PRIVATE Source/neobeat/shared)
 
+add_executable (test_chaos tools/test_chaos.cpp)
+target_include_directories (test_chaos PRIVATE Source/neobeat/shared Source/neobeat)
+
 # BANDS rendered to WAV. The only check on this engine that a person can actually judge: every
 # other one is numeric or visual, and neither can tell you whether the defaults sound like the
 # bubbly register or just sound broken. Framework-free, so it is a plain executable.
 add_executable (bands_render tools/bands_render.cpp)
-target_include_directories (bands_render PRIVATE Source/neobeat/shared)
+target_include_directories (bands_render PRIVATE Source/neobeat/shared Source/neobeat)
 
 # The BANDS room, rendered to PNG. Deliberately built WITHOUT MIDIJAQ_APP_SOURCES: the room takes
 # a BandsState and a callback and nothing else, and linking it against the plugin would hide the
