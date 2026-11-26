@@ -290,6 +290,78 @@ int main()
         ok (diff == 0.0, "wet at zero leaves the input exactly as it was");
     }
 
+
+    //==============================================================================================
+    // The per-band path exists so a room can place each band through the shared Stereoroom. It has
+    // to be the same engine, not a second one that drifts: if these ever disagree, a band placed in
+    // the room will not sound like the same band heard straight.
+    heading ("the per-band path is the same engine as the mixed one");
+    {
+        auto makeParams = []
+        {
+            nsr::SpectralDelayParams p;
+            p.startTimeMs = 40.0f; p.finishTimeMs = 260.0f;
+            p.startFeedback = 0.45f; p.finishFeedback = 0.7f;
+            p.startLevel = 1.0f; p.finishLevel = 0.6f;
+            p.sideOffset = 1; p.sideFeedback = 0.3f;
+            p.startInterMs = 1.0f; p.finishInterMs = 6.0f;
+            p.dry = 0.0f; p.wet = 1.0f;          // wet only, so the output is exactly the band sum
+            return p;
+        };
+        // Long enough for every band to have spoken. The longest delay here is 260 ms, so a
+        // 6000 sample window - which is what this started as - leaves bands 6 upward silent and
+        // makes it look as though two thirds of the bank is broken.
+        const int N = 24000;
+        auto fill = [N] (Buf& b)
+        {
+            unsigned seed = 999u;
+            for (int i = 0; i < 2400; ++i)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                const float v = 0.4f * ((float) (seed >> 8) / 8388608.0f - 1.0f);
+                b.l[(size_t) i] = b.r[(size_t) i] = v;
+            }
+            (void) N;
+        };
+
+        nsr::SpectralDelay mixed; mixed.prepare (SR, N); mixed.setParams (makeParams());
+        Buf bm (N); fill (bm);
+        mixed.process (bm.l.data(), bm.r.data(), N);
+
+        nsr::SpectralDelay split; split.prepare (SR, N); split.setParams (makeParams());
+        Buf bs (N); fill (bs);
+        split.processSplit (bs.l.data(), bs.r.data(), N);
+        ok (split.splitLength() == N, "the split path reports the block it rendered");
+
+        double worst = 0.0;
+        for (int i = 0; i < N; ++i)
+        {
+            double sum = 0.0;
+            for (int b = 0; b < nsr::SpectralDelay::kBands; ++b)
+                sum += split.bandOut (b, 0)[i];
+            worst = std::max (worst, std::abs (sum - (double) bm.l[(size_t) i]));
+        }
+        std::printf ("     worst disagreement across %d samples: %.3g\n", N, worst);
+        ok (worst < 1.0e-5, "summing the bands reproduces the mixed output");
+
+        // and the bands are genuinely different signals, not sixteen copies
+        int distinct = 0;
+        for (int b = 1; b < nsr::SpectralDelay::kBands; ++b)
+        {
+            double d = 0.0;
+            for (int i = 0; i < N; ++i)
+                d += std::abs (split.bandOut (b, 0)[i] - split.bandOut (0, 0)[i]);
+            if (d > 1.0e-3) ++distinct;
+        }
+        ok (distinct == nsr::SpectralDelay::kBands - 1, "every band carries its own signal");
+
+        // the interaural split survives per band, which is the point of handing them out separately
+        double lr = 0.0;
+        for (int i = 0; i < N; ++i)
+            lr += std::abs (split.bandOut (12, 0)[i] - split.bandOut (12, 1)[i]);
+        ok (lr > 1.0e-3, "a band's two channels still differ, so its placement has something to place");
+    }
+
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
