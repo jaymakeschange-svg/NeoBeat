@@ -6,127 +6,50 @@ shared tree; Batchcut appears only where a change touches it.
 Status key: **proposed** (not specced), **specced** (design settled, not built), **building**,
 **done**, **open question** (needs a decision before it can be specced).
 
-Last updated 26 November 2026. Four decisions settled this session: MIDI export (baked),
-loose pool sounds (save), BassMono (whole mix), and the IDM Jack spec.
+Last updated 26 November 2026 (revised 21:20 — IDM Jack's two open questions were
+already answered in the transferable-mechanisms doc; this list had gone stale within two hours
+of being written, and was read in preference to the newer document. See REFERENCES.md.)
 
 ---
 
 ## New this session
 
-### IDM Jack — both plugins — *specced*
+### IDM Jack — both plugins — *specced, with two open questions*
 
 A glitch mode that stays rhythmic. Reference points: Autechre, Aphex Twin.
 
-**Purpose, as stated:** generative chaos with motifs, to be recorded in session and used in
-production. This is a **sound-design and capture tool, not a composition tool** — the goal is not
-that any given bar is "good", but that long takes yield material worth keeping. That changes what
-matters: variety over minutes, and recurring figures, rather than per-bar musicality.
+**The premise, as stated:** most IDM-style glitch comes from generative drum synthesis, which is
+uncontrolled and tends to fall back on four-on-the-floor. IDM Jack differs by constraining the
+chaos to a lattice.
 
-**The lattice is the core mechanism.** Glitch events snap to a **16th-triplet swung grid** — six
-per beat, twenty-four per bar, swing displacement applied within triplet groupings. The grid is
-**invisible**: not drawn, not editable, not something events are placed on by hand. Events can
-only land on it, so randomness decides *whether* and *how much*, never *where*. That constraint is
-what keeps the result rhythmic rather than broken.
-
-**Resolved:**
-- **Overlay or replace — both, as a toggle.** Either keep the written pattern and glitch over it,
-  or clear it and run on kit sounds alone.
-- **Source — everything in the kit.** Any lane is fair game; a burst picks from the whole kit.
+**The lattice is the whole mechanism.** Glitch events snap to a **16th-triplet swung grid** — six
+per beat, twenty-four per bar, with swing displacement applied within triplet groupings. The grid
+is **invisible**: not drawn, not editable, not something the user places events on. Events can
+only land on it, which is why the result reads as rhythmic rather than broken. Randomness decides
+*whether* and *how much*, never *where*.
 
 **Behaviour:**
-- A density amount sets the chance a burst fires at each lattice position
-- A burst **retriggers rapidly**, subdividing the lattice
-- **FX run off the same seed and the same grid**, so a parameter jump lands on the same instant as
-  a retrigger rather than smearing across it
-- One seed per window, with a probability the next window reuses it — bar-level coherence, and a
-  passage that can be kept
+- Some probability per lattice position that a glitch fires; one amount controls density
+- When it fires, a drum part is **repeated rapidly** — N retriggers subdividing the lattice
+- **FX are driven by the same process**: the same seed and the same lattice, so an effect jump
+  lands on the same instant as the retrigger rather than smearing across it
 
-**Motifs need a memory, not just a seed.** Per-position randomness produces texture, not motifs.
-Proposed mechanism: a **figure buffer**. When a burst fires, store what it was — which lanes, which
-lattice positions, how many retriggers. With some probability a later burst replays a stored figure
-instead of generating a new one, optionally varied. A few slots gives recurring shapes; many
-approaches pure texture. This is also what keeps a long take from drifting into uniform noise,
-which matters when the output is being recorded rather than listened to once.
+**Seeding.** One seed per window, with a probability that the next window reuses it (the
+`turing` idea from the Chassis study, §2.4 of the teardown). This is what makes a bar of chaos
+internally coherent and repeatable instead of noise — and it means a passage can be kept.
 
-**Per-hit parameter chaos.** The mode also randomises each sound's own parameters, fast: pitch up
-and down, drive, "hollowed" (a narrowing — comb, bandpass or formant; exact mapping still to pick).
-This is what separates the mode from an ordinary stutter effect, where repeats are identical and
-therefore mechanical. Each repeat in a burst gets its own parameter offsets.
+**Answered — overlay or replace.** Neither, strictly: it is a **held, non-destructive takeover**.
+Chaos while the control is held, the original pattern restored the moment it is released. The
+written pattern is never altered, so there is nothing to undo. (Recorded in the transferable-
+mechanisms doc, 26 Nov, which supersedes the open question first written here.)
 
-**The revert requirement makes this non-destructive by necessity.** Chaos exists while the control
-is held and stops the instant it is released, returning to whatever was playing. That means the
-parameter randomisation **must be an overlay applied at playback — per-hit offsets layered over the
-stored values, never written back to them.** Written back, releasing the control would leave every
-sound in the kit scrambled. Worth stating because it is cheap to get right at design time and
-expensive afterwards.
+**Answered — what it repeats.** Whatever is sounding. The brief was that the mode should *rapidly
+and randomly repeat drum parts* while each sound's own parameters get pitched up, down, driven and
+hollowed — so it grabs the kit sound that is playing, not a lane chosen in advance.
 
-**Performance:** several modes, of which the primary is **held** — chaos while the control is on,
-instant return to the original pattern when off. A latch and a per-bar probability are variants of
-the same engine.
-
-**Capture:** in Ableton. No WAV export needed from the plugin.
-
-**Consequence for the figure buffer:** a stored figure should store its parameter moves alongside
-its lanes and positions. A motif recurring with different pitch and drive each time is not
-recognisable as the same motif.
-
-### Interiority — a deliberate anti-externalisation processor — *proposed, both plugins*
-
-From practice-led research into SOPHIE's sound design (c. 2020): the metallic sounds carry a very
-slight delay between left and right, a couple of milliseconds, **continuously modulated by LFOs**.
-The result is not a sound placed somewhere around the listener but one that seems to be *inside*
-them - spatiality with effectively zero distance.
-
-**Why that works, in numbers.** The largest inter-aural time difference a real head can produce is
-about **690 microseconds** - the transit time around the skull. A 2 ms inter-channel delay is some
-three times larger than any physically possible ITD, so there is no direction it can be mapped to.
-It also sits above the summing-localisation region (below ~1 ms, where a delay reads as a
-direction) and below the echo threshold (~30-40 ms, where it separates into a discrete repeat).
-What remains is a fused image with no location. With no matching level difference, no pinna cue
-and no room reflections to support externalisation, the percept defaults to intracranial - the
-documented "inside-the-head locatedness" that untreated headphone audio produces. Modulating the
-delay means localisation never gets the stable window it needs to settle.
-
-**A second consequence of the same process.** Modulating a delay line resamples it, so one channel
-gets a micro pitch shift the other does not. That is a continuously varying detuning between
-channels - a comb filter whose notches are moving. On harmonically dense metallic material this
-does much of the timbral work. The spatial effect and the metallic sheen come out of one mechanism.
-
-**This is the inverse of what the Stereoroom currently does.** Equal-power pan, mid/side width and
-the RoomVerb depth are all externalising cues; they put a sound outside the listener. Nothing in
-the Neosystem currently pushes the other way.
-
-**Proposed:** a per-node inter-channel delay in the 0.5-5 ms range, LFO-modulated in rate and
-depth, available alongside the existing placement rather than replacing it. Pairs naturally with
-the MATERIAL engine, since metallic modal sounds are exactly the material the moving comb acts on.
-
-**Related but distinct:** stereo phaser with cross-channel feedback reaches a similar destination
-by a different road - allpass phase shift and inter-channel phase incoherence rather than an
-impossible ITD. Separately buildable; they do not sound the same. Worth having both.
-
-### Detector-driven placement — *proposed, both plugins*
-
-From studying the Sound Particles panners. All of them are one engine with a different **detector**
-driving it, and the panning target is a trajectory between two points with two traversal
-behaviours:
-
-- **Energy Panner** - amplitude drives position, with compressor-shaped controls: threshold, ratio,
-  attack, release. Sidechain input available.
-- **Brightness Panner** - the same engine driven by spectral brightness via a variable filter, by
-  detected note pitch over an adjustable range, or by MIDI.
-- **BeatPanner** - the same engine driven by a rhythmic sequencer.
-
-**Pan mode** moves start-to-end and returns to the start when the trigger falls away. **Sliding
-mode** is progressive: a loud or sustained signal advances the position along the trajectory, and
-when it goes quiet the sound *stays where it is* until the next trigger advances it further.
-
-**Sliding is the idea worth taking.** Position accumulates rather than resetting, so a sequence of
-short events produces long-form movement across a passage. That is a different musical behaviour
-from an LFO and from the Stereoroom's current Travel paths, both of which are periodic.
-
-**Proposed:** a node's position along its existing path can be driven by a detector - its own
-amplitude, its brightness, or the beat - with compressor-shaped controls and a choice of return or
-accumulate.
+**Still open — the third axis.** Micro-timing offset per voice (1–100 ms) came from the Density
+study, not from the brief; the doc notes it as "two of yours plus one you had not named". Worth
+confirming before it is built.
 
 ---
 
@@ -134,10 +57,8 @@ accumulate.
 
 | Feature | Status | Note |
 |---|---|---|
-| IDM Jack | specced | see above - sound design / capture, not composition |
+| IDM Jack | specced | see above |
 | Stereoroom UI | proposed | engine already in its shared tree; UI not built |
-| Interiority (anti-externalisation) | proposed | see above |
-| Detector-driven placement | proposed | see above |
 | Drag and drop | **unaudited** | may carry the same four bugs MidiJaQ had — see HANDOFF §5 |
 | Preset bar (arrows, hover audition) | proposed | shared component exists, built for Batchcut/MidiJaQ |
 | MATERIAL engine | available | `nsr::Material` now in the shared tree; no UI in NeoBeat yet |
@@ -153,15 +74,13 @@ accumulate.
 
 | Feature | Status | Note |
 |---|---|---|
-| IDM Jack | specced | see above - sound design / capture, not composition |
+| IDM Jack | specced | see above |
 | Right-click "send node to" | **unverified** | MOD room advertises it; never tested |
 | Shipped presets | missing | preset bars read an empty folder |
-| Interiority (anti-externalisation) | proposed | see above |
-| Detector-driven placement | proposed | see above |
 | Eight heads on one buffer | proposed | LOOPS mode — eight simultaneous windows onto one recording, each a Stereoroom node |
 | Record a take, then point at it | proposed | `recordingsDir()` already exists |
 | MATERIAL engine | available | as above |
-| MIDI file export | specced | yes. **Baked timing** - swing written into the note positions, so it keeps its feel when dropped into Ableton. Straight-grid export not built unless asked for later |
+| MIDI file export | **open question** | never answered: should MidiJaQ write MIDI files? |
 
 ## Shared / both
 
@@ -169,8 +88,8 @@ accumulate.
 |---|---|---|
 | Groove bus | proposed | one swing map read by both plugins — timing plane separate from timbre plane |
 | Theme layer (tokens + vector drawing) | proposed | 304-token precedent in Synplant; build the layer before any individual skin |
-| Loose pool sounds in saved state | specced | yes, save them. Costs project size in proportion to unplaced samples, FLAC-compressed - a few MB for a 48-sound pool. Changes `kitToXml`, which currently writes only what a lane uses, so it affects Batchcut too |
-| BassMono scope | specced | **whole mix**. Measured consequence: a hard-left voice goes from >12 dB channel separation to 9.2 dB because its low end is centred. That is correct for a mix safety net, so `test_audio`'s expectation gets updated rather than treated as a regression. Presets made before the change will sit slightly differently after it |
+| Loose pool sounds in saved state | **open question** | `kitToXml` writes only what a lane uses; may be wrong for MidiJaQ |
+| BassMono scope | **open question** | currently Stereoroom output only; globally it changed every preset's panning |
 
 ## JaqRack
 
@@ -192,15 +111,3 @@ on VCV Rack (GPLv3). See the generative-engines doc §6.
 | Preset bars with hover audition | Batchcut, MidiJaQ |
 | `.njqloop` round-trip loop preset | shared |
 | Audio import and drag-and-drop fixes | MidiJaQ |
-
-## Learner: the 16-band dense-noise layer — requested 26 Nov, not started
-
-MaterialLab's resonator form carried the modes across from the learner but not the 16-band dense
-noise layer that sits under them. Struck bodies are not only modes: the strike itself is broadband,
-and real material has a noise floor with its own spectral shape that the mode bank cannot produce.
-Without it a struck object is cleaner than anything physical, which is audible as plastic.
-
-Wanted: the learner's 16-band noise restored, so generated sounds are accurate rather than only
-tonally correct. Shares its band layout with `nsr::SpectralDelay`, which already splits 16 log
-spaced bands and is now in the shared tree — the split is the same piece of maths and should not
-be written twice.

@@ -16,6 +16,8 @@
 // what you hear - above all on feedback, which the engine trims when the neighbour feed is up by
 // an amount no interface could arrive at on its own.
 
+// The BANDS room interface. Spec: docs/research/transferable-mechanisms.md.
+// Control names follow Chimecho's published list so the two can be compared directly.
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
