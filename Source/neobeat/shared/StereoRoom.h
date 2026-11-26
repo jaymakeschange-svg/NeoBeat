@@ -419,6 +419,96 @@ private:
     float sr = 48000.0f, a = 1.0f;
 };
 
+// ------------------------------------------------------------------ a small space around each hit
+// Spatial impression - the sense that a sound has size and sits in three dimensions - comes mostly
+// from early lateral reflections arriving 5-80 ms after the direct sound, in roughly the 125-1500 Hz
+// range (Barron; Bradley). This is a handful of reflections reaching the two ears at different times
+// and opposite polarities, so the image opens out without smearing the strike.
+//
+// It does a different job from RoomVerb and the two are meant to be used together: these are the
+// first few discrete arrivals that say how big the space is, where the FDN is the diffuse tail that
+// says how far away the element is. Either alone is half a room.
+//
+// The lows below the cut stay dry and centred, because a reflected bass arrival only muddies the
+// bottom, and the highs are softened the way real walls absorb them. The tap times are coprime-ish
+// and deliberately different in each ear, and the gains alternate in polarity, which is what
+// decorrelates the two channels rather than producing a wide copy of the same thing.
+class EarlyReflections
+{
+public:
+    static constexpr int kTaps = 6;
+
+    void prepare (float newSampleRate)
+    {
+        sampleRate = newSampleRate;
+        // Longest tap 43 ms at size 2, with margin, at any sample rate.
+        size = 1;
+        while (size < (int) (0.1f * sampleRate) + 4) size <<= 1;
+        buffer.assign ((size_t) size, 0.0f);
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        std::fill (buffer.begin(), buffer.end(), 0.0f);
+        write = 0;
+        lowState = highState = 0.0f;
+    }
+
+    void configure (float roomSize, float dampHz, float lowCutHz) noexcept
+    {
+        static constexpr float leftMs[kTaps] = { 6.3f, 11.9f, 17.6f, 23.8f, 31.3f, 39.7f };
+        static constexpr float rightMs[kTaps] = { 8.1f, 13.4f, 20.2f, 26.9f, 34.6f, 42.8f };
+        static constexpr float leftGain[kTaps] = { 0.90f, -0.72f, 0.60f, -0.50f, 0.40f, -0.32f };
+        static constexpr float rightGain[kTaps] = { -0.85f, 0.70f, -0.58f, 0.47f, -0.38f, 0.30f };
+        const float s = std::min (2.0f, std::max (0.3f, roomSize));
+        for (int i = 0; i < kTaps; ++i)
+        {
+            leftDelay[(size_t) i] = std::min (size - 2, (int) (leftMs[i] * s * 0.001f * sampleRate));
+            rightDelay[(size_t) i] = std::min (size - 2, (int) (rightMs[i] * s * 0.001f * sampleRate));
+            gainLeft[(size_t) i] = leftGain[i];
+            gainRight[(size_t) i] = rightGain[i];
+        }
+        longest = std::max (leftDelay[kTaps - 1], rightDelay[kTaps - 1]);
+
+        // One pole each, set from a corner frequency. Written as seconds-then-coefficient rather
+        // than folded into one expression, so the arithmetic matches the per-plugin version this
+        // replaced to the last bit and no preset changes how it sounds.
+        const float lowSeconds = 1.0f / (6.283185307179586f * std::max (dampHz, 200.0f));
+        const float highSeconds = 1.0f / (6.283185307179586f * std::max (lowCutHz, 20.0f));
+        lowCoef = 1.0f - std::exp (-1.0f / (std::max (lowSeconds, 1.0e-5f) * sampleRate));
+        highCoef = 1.0f - std::exp (-1.0f / (std::max (highSeconds, 1.0e-5f) * sampleRate));
+    }
+
+    int tailSamples() const noexcept { return longest + 1; }
+
+    void process (float input, float& left, float& right) noexcept
+    {
+        // Band-limit what reaches the "walls": keep the lows dry, soften the highs.
+        highState += highCoef * (input - highState);
+        const float banded = input - highState;
+        lowState += lowCoef * (banded - lowState);
+        buffer[(size_t) write] = std::fabs (lowState) < 1.0e-20f ? 0.0f : lowState;
+        float l = 0.0f, r = 0.0f;
+        for (int i = 0; i < kTaps; ++i)
+        {
+            l += gainLeft[(size_t) i] * buffer[(size_t) ((write - leftDelay[(size_t) i]) & (size - 1))];
+            r += gainRight[(size_t) i] * buffer[(size_t) ((write - rightDelay[(size_t) i]) & (size - 1))];
+        }
+        write = (write + 1) & (size - 1);
+        left = l;
+        right = r;
+    }
+
+private:
+    float sampleRate = 48000.0f;
+    std::vector<float> buffer;
+    int size = 8192, write = 0, longest = 0;
+    std::array<int, kTaps> leftDelay {}, rightDelay {};
+    std::array<float, kTaps> gainLeft {}, gainRight {};
+    float lowState = 0.0f, highState = 0.0f, lowCoef = 0.5f, highCoef = 0.01f;
+};
+
 // ------------------------------------------------------------------ the safety net
 // Everything below the crossover is summed to mono. A locked element is already mono, but a wide
 // hat or a widened pad still has low content of its own, and that is what folds badly on a club
