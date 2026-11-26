@@ -102,9 +102,14 @@ private:
     };
     std::vector<Pair> pairs;
 
+    // The master time control, and the fix for Chimecho's one real usability failure. Start and
+    // Finish set the shape across the spectrum; this scales the whole bank, and opens at the short
+    // end so the bubbly register is where you begin rather than where you have to fight back to.
+    nsui::Knob kLength { {}, 0.0f, 1.0f, 0.0f };   // the heading is painted; the knob needs no second one
+
     // the interaural split and its drift: one idea, so they sit together
-    nsui::Knob kInterStart { "Start", 0.0f, 12.0f, 0.0f };
-    nsui::Knob kInterFinish { "Finish", 0.0f, 12.0f, 0.0f };
+    nsui::Knob kInterStart { "Start", 0.0f, nsr::kInterMaxMs, 0.0f };
+    nsui::Knob kInterFinish { "Finish", 0.0f, nsr::kInterMaxMs, 0.0f };
     nsui::Knob kInterLfoHz { "Drift", 0.0f, 4.0f, 0.23f, true };
     nsui::Knob kInterLfoAmt { "Amount", 0.0f, 1.0f, 0.5f };
 
