@@ -35,10 +35,23 @@ public:
     // Load one for real. Return false and the bar says so rather than pretending.
     std::function<bool (const juce::File&)> onLoad;
 
+    // Or a list of named items that are not files: NeoBeat's built-in patterns, say. Loading one
+    // calls onLoadItem with its index instead of onLoad. Everything else - the arrows, the hover
+    // audition, the snapshot that makes browsing free - works the same either way.
+    void setItems (const juce::StringArray& itemNames, int currentIndex);
+    std::function<bool (int)> onLoadItem;
+
+    // Which one is loaded, when something other than the bar loaded it. -1: none of them.
+    void setCurrent (int index);
+
     // Remember / put back what is loaded now, so hovering cannot lose it. Both are required for
     // hover audition; without them the bar still steps and loads, it just does not preview.
     std::function<std::unique_ptr<juce::XmlElement>()> onSnapshot;
     std::function<void (const juce::XmlElement&)> onRestore;
+
+    // How long an audition plays before it stops, in ms. Long enough to hear a loop or a chord by
+    // default; a plugin whose presets are patterns sets about a bar.
+    int auditionMs = 1200;
 
     // Make a sound, now that something is loaded (play the loop, strike a chord).
     std::function<void()> onAudition;
@@ -46,7 +59,7 @@ public:
 
     void step (int by);                       // -1 previous, +1 next
     juce::String currentName() const;
-    int count() const noexcept { return (int) files.size(); }
+    int count() const noexcept { return names.size(); }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -64,6 +77,8 @@ private:
     juce::File folder;
     juce::String pattern { "*" };
     juce::Array<juce::File> files;
+    juce::StringArray names;                  // what the list shows: the files' names, or the items
+    bool itemMode = false;
     int current = -1;
     juce::String message;                     // shown instead of the name when something went wrong
 

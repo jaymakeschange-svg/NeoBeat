@@ -456,6 +456,112 @@ nothing. In MidiJaQ it has things to act on.
 
 ---
 
+### Next in the same build: BANDS with per-lane sends, and the preset bar (27 Nov, 11:38)
+
+**Asked (the user):** *"I want you to include the bands, per pad sending, and preset menu."* In
+the same NeoBeat build as ROLL and Jack - still one download.
+
+| Question | Answer (the user, 27 Nov) |
+|---|---|
+| Which preset menu? | **Batchcut's preset bar** - arrows, and a list that auditions on hover and puts back what was loaded if nothing is clicked. The shared component, so the family stays standardised. Not the category browser (still proposed) |
+| Where does BANDS live? | **A window**, opened from the header next to FRICTION and BOUNCE, as NeoBeat's effects already are. Not a sixth room |
+| The send | A small knob per lane, with the lane's standard utilities (decided 26 Nov, "BANDS in NeoBeat - per-pad send"), plus an ALL control so every lane can go through at once |
+
+**Then, 27 Nov 12:47-14:42 (the user):** *"did you include the techno and house new presets for
+batchcut and neobeat?"* - no, in neither. *"Finish working on neobeat, dont build yet, and ship it
+with those presets."* So NeoBeat ships with them; Batchcut's are on the to-do list
+(`PROPOSED-FEATURES.md`, last section).
+
+#### How BANDS was built
+
+- **A lane's send keeps the by-ear balance.** The defaults were chosen with the drums going
+  *through* the bank (wet 1.0 over dry 0.4). As a send, a lane at *s* puts *s* of itself on the bus
+  and keeps `1 - s(1 - Dry)` of its direct path; the bank adds wet only. So a lane at full sounds
+  the way the bank was set by ear, and at 0 nothing about it changes. The window's **Dry** knob is
+  therefore "how much of a fully-sent lane's own sound remains". Claude's call.
+- **Where the send taps**: at the one place each sound path adds a lane to the mix - live voices,
+  prepared copies, live effect units (`BandSend` in `Rt.h`). So a lane with effects sends its
+  *effected* sound. Not lane-separated, so not sent: a MaterialLab place's room return, and
+  MATRIXXXER marks.
+- **ALL** (host parameter "Bands All") sends every lane at least that much. Each lane's knob is the
+  host parameter "N Bands"; the bank's settings and band positions save with the session.
+- **Costs nothing unused**: the bank runs only while something sends or its tail rings, and stops
+  after half a second of silence. **Exports include it** (stems too).
+- **ROLL leaves the send alone**: it is a routing utility, like mute or choke, not a sound
+  parameter. Claude's call.
+- **Header re-spaced** to fit the BANDS button: the LCD keeps its width (a first try narrowed it
+  and truncated the pattern name - caught in the snapshot), the space came from around MASTER.
+
+#### How the preset bar was built
+
+- It is Batchcut's shared component. NeoBeat's patterns are built in, not files, so the bar gained
+  an **item mode** (a list of names, loaded by index) beside its folder mode; Batchcut and MidiJaQ
+  use the folder mode, unchanged. **The audition length became settable**: Batchcut's 1.2 s is under
+  a bar of a NeoBeat pattern, so NeoBeat plays one bar at the current tempo.
+- **What it lists**: the 144 factory patterns, then the ones saved with SAVE (still marked MINE |).
+- **Hover**: a row loads into the current scene and plays; moving off the list puts back the
+  pattern, swing, tempo and number that were there; a click keeps it. With the host stopped, the
+  audition runs NeoBeat's own transport (a flag, not the host parameter "Run", so nothing is written
+  to the host's automation). Hovering loads count as edits, so they can leave steps in the room's
+  undo history.
+
+#### The house and techno patterns — 129 to 144
+
+Written from `docs/research/New jack swing parts and grooves.md` (MidiJaQ tree), "House and techno
+invert which lane carries the motion". **Appended after the 128**, so no existing pattern or number
+changes (checked: the first 128 are identical to before).
+
+| # | Name | Style it follows | BPM | Swing |
+|---|---|---|---|---|
+| 129 | Chicago Jack | Chicago house: 4-floor + extra offbeat + ghost kick, snare and clap on 2 and 4, clap on step 16, alternating 16th hats, 707-style rim on even 16ths | 122 | 0.52 |
+| 130 | Piston Floor | Chicago house | 124 | 0.54 |
+| 131 | Warehouse Stab | Chicago house, stabs between the kicks | 123 | 0.53 |
+| 132 | Garage Shuffle | Garage house: the shuffled one; extra kick in bar 2; clap 4 % of a step early, beat 4 of bar 2 pushed 12 % (the "jack"); noise hit after kick 1 | 122 | 0.74 |
+| 133 | Jersey Sunday | Garage house, stabs | 121 | 0.72 |
+| 134 | Night Bus Garage | Garage house | 123 | 0.70 |
+| 135 | Pearl Basement | Deep house, Detroit-style cross-rhythm rim | 120 | 0.56 |
+| 136 | Swing House | **Crossover**: house skeleton + new jack swing's snare on 2 late / 4 straight, swung pickup kick at the bar's tail, triplet hat roll at the phrase end | 120 | 0.66 |
+| 137 | Motor Grid | Detroit techno: invariant kick, two hat layers, a dotted-eighth clank layer | 124 | 0.57 |
+| 138 | Belleville Steel | Detroit techno: cross-rhythm rim never on a kick | 122 | 0.58 |
+| 139 | Assembly Line | Detroit techno, 5- and 7-step layers | 125 | 0.56 |
+| 140 | Clank Polymeter | Detroit techno: 3, 5 and 7-step layers at once | 126 | 0.58 |
+| 141 | Minimal Rubber | Minimal techno | 128 | 0.55 |
+| 142 | Click Floor | Minimal techno | 130 | 0.56 |
+| 143 | Tunnel Pressure | Club techno: a low lane kept off the kick steps (a contemporary tech-house rule, not 1980s practice - the research says so) | 132 | 0.57 |
+| 144 | Swing Techno | **Crossover**, as Swing House, on a techno skeleton | 124 | 0.62 |
+
+Rules every one holds (checked by a program, not by eye): the kick on every beat; the open hat on
+every offbeat eighth; the rim never on a kick; swing inside NeoBeat's 0.50-0.75. **No fills** - the
+research's techno arrangement rule is that a fill every 8 bars is already too many. Swing is
+NeoBeat's own scale, the MPC one (0.50 straight); the skeleton sits on even 16ths, which swing never
+moves, so only the 16th hats swing, which is the scope the research describes for these genres.
+
+**Limits, said plainly.** The figures are magazine craft recipes, not measurements (the research
+found none), so they are defaults to trust your ears over. A pattern can't tune a lane, so garage's
+"extra kick tuned down two semitones" is on the Kick 2 lane at whatever the kit has there. The
+garage "jack" push is on the Snare lane, because a nudge applies to a whole lane and that one hit
+needed more than the clap's. Nobody has listened to them yet.
+
+#### Found on the way
+
+- **The host test died, not stalled**: the monkey clicked the preset bar, whose list opens as a
+  desktop window; the test's virtual display has no window manager and refused it (X `BadAtom`),
+  and the process exits. A test-environment limit - the same list works on Windows in Batchcut.
+  The monkey now leaves the bar's list alone, as it already did combo boxes, and section 6b tests
+  the bar's real wiring in NeoBeat: load, put back (pattern, swing, number), audition on and off.
+
+### Tests for this part of the build
+
+| Test | Result |
+|---|---|
+| Every send at 0 (BANDS in the build) vs the engine before any of this work, kits 0 and 3 | **Bit-identical** |
+| `test_jack` section 9 - BANDS: sends at 0 = the plain kit and the bank never runs; a lane sending runs it and changes the sound; ALL; wet 0 leaves a fully-sent lane at its Dry level (measured 0.0234 against 0.0225 expected - the difference is the room returns and marks, which are not sent); the bank stops once its tail dies | **All pass** |
+| House and techno rules, by program; the first 128 patterns unchanged | **Hold** |
+| All engine tests | **Pass** |
+| Host test with the bar's item mode (4b), its wiring (6b), BANDS sends and ALL in the random edits and the window in the room tour | Seeds 7, 2026, 31337, 5, 1234 on the final code: **all pass** |
+| Snapshots 22-25: a lane's BANDS knob, the window, ALL following its parameter (it did not at first - fixed), the bar at 1/144 | Looked at |
+
+
 ## Still open — questions asked and not yet answered
 
 | Question | Asked | Where it blocks |
