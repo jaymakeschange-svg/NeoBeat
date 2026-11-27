@@ -7,8 +7,10 @@
 //
 // What happens to a file, in the learner's own terms:
 //   1. prepareClip   mono, 48 kHz, cut to start just before the strike (fit_v2.trim_to_strike),
-//                    at most 1.5 s with a 30 ms fade (analysis.crop_hit's length and fade), and the
-//                    noise floor measured as the training targets record it
+//                    at most 1.5 s, with crop_hit's 30 ms fade where that cuts it short, and the
+//                    noise floor measured (the training set takes it from the whole source
+//                    recording, which a dropped file does not come with: the clip's own quietest
+//                    5% stands in, within 1.5 dB of the training targets)
 //   2. initialBody   partials.py's analysis and fit2.initial_params, once
 //   3. fit, N times  fit2.fit, each started a float32 rounding step apart, on worker threads
 //
@@ -26,6 +28,7 @@
 #include "NumpyRandom.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -37,7 +40,9 @@ constexpr double kFitRate = 48000.0;
 // ------------------------------------------------------------------ the clip
 
 // A windowed-sinc resampler (Kaiser, beta 9, 32 zero crossings each side), cut off just below the
-// lower Nyquist. The learner uses scipy's resample_poly; any clean resampler serves.
+// lower Nyquist. The learner uses scipy's resample_poly; any clean resampler serves. The Kaiser window
+// is read from a table (linear between 8192 points, within 2e-7 of the exact window): computing its
+// Bessel function for every tap of every sample made a second of audio take a second.
 inline std::vector<float> resample (const float* x, int n, double from, double to)
 {
     if (n <= 0) return {};
@@ -46,27 +51,34 @@ inline std::vector<float> resample (const float* x, int n, double from, double t
     const int out = (int) std::floor (n * ratio);
     const double cut = 0.97 * std::min (1.0, ratio);         // of the input's Nyquist
     const int half = (int) std::ceil (32.0 / cut);
-    auto bessel0 = [] (double v) { double s = 1.0, t = 1.0; for (int k = 1; k < 30; ++k) { t *= (v / (2.0 * k)) * (v / (2.0 * k)); s += t; } return s; };
-    const double beta = 9.0, i0b = bessel0 (beta);
+    constexpr int kTable = 8192;
+    static const std::vector<double> kaiser = []
+    {
+        auto bessel0 = [] (double v) { double s = 1.0, t = 1.0; for (int k = 1; k < 30; ++k) { t *= (v / (2.0 * k)) * (v / (2.0 * k)); s += t; } return s; };
+        const double beta = 9.0, i0b = bessel0 (beta);
+        std::vector<double> t ((size_t) kTable + 2);
+        for (int i = 0; i <= kTable + 1; ++i) { const double r = std::min (1.0, (double) i / kTable); t[(size_t) i] = bessel0 (beta * std::sqrt (1.0 - r * r)) / i0b; }
+        return t;
+    }();
     std::vector<float> y ((size_t) out);
     for (int j = 0; j < out; ++j)
     {
         const double c = j / ratio;
         const int i0 = (int) std::floor (c);
-        double acc = 0.0, wsum = 0.0;
-        for (int i = i0 - half + 1; i <= i0 + half; ++i)
+        double acc = 0.0;
+        for (int i = std::max (0, i0 - half + 1); i <= std::min (n - 1, i0 + half); ++i)
         {
             const double d = c - i;
-            const double r = d / half;
-            if (r <= -1.0 || r >= 1.0) continue;
-            const double win = bessel0 (beta * std::sqrt (1.0 - r * r)) / i0b;
+            const double r = std::fabs (d) / half;
+            if (r >= 1.0) continue;
+            const double pos = r * kTable;
+            const int k = (int) pos;
+            const double win = kaiser[(size_t) k] + (kaiser[(size_t) k + 1] - kaiser[(size_t) k]) * (pos - k);
             const double a = an::kPi * cut * d;
             const double s = std::fabs (a) < 1e-12 ? 1.0 : std::sin (a) / a;
-            const double w = cut * s * win;
-            wsum += w;
-            if (i >= 0 && i < n) acc += w * x[i];
+            acc += cut * s * win * x[i];
         }
-        y[(size_t) j] = (float) (wsum > 0.0 ? acc * cut / wsum * (wsum / cut) : 0.0);
+        y[(size_t) j] = (float) acc;
     }
     return y;
 }
@@ -91,8 +103,10 @@ inline int strikeStart (const float* x, int n, double fs, double keepMs = 1.5)
     return std::max (0, first * w - (int) (keepMs / 1000.0 * fs));
 }
 
-// The training targets' noise_floor_db: the quietest 5% of the 10 ms / 5 ms RMS envelope against its
-// loudest frame (checked on the three targets the user has: within 0.9 dB).
+// A stand-in for the training targets' noise_floor_db (which the training set measured on the whole
+// source recording): the quietest 5% of the clip's 10 ms / 5 ms RMS envelope against its loudest
+// frame. On the three training clips: PVC pipe -45.5 (target -45.4), tin can -60.6 (-59.6), tube
+// clank -29.6 (-29.5) dB.
 inline double noiseFloorDb (const float* x, int n, double fs)
 {
     const auto e = framedDb (x, n, (int) (0.01 * fs), (int) (0.005 * fs));
@@ -116,18 +130,36 @@ struct Clip
 inline Clip prepareClip (const float* mono, int n, double sr, double maxSeconds = 1.5)
 {
     Clip c;
-    auto y = resample (mono, n, sr, kFitRate);
+    if (mono == nullptr || n <= 0 || sr < 1000.0) return c;
+    // Only the stretch around the strike is resampled: found first at the file's own rate, with 50 ms
+    // before and 100 ms after to spare, so a long recording costs no more than a short one. At 48 kHz
+    // nothing is resampled and the strike is found on the whole file, exactly as the learner finds it.
+    int from = 0, to = n;
+    if (std::fabs (sr - kFitRate) > 1e-9)
+    {
+        const int s0 = strikeStart (mono, n, sr);
+        from = std::max (0, s0 - (int) (0.05 * sr));
+        to = std::min (n, s0 + (int) ((maxSeconds + 0.1) * sr));
+    }
+    auto y = resample (mono + from, to - from, sr, kFitRate);
     const int start = strikeStart (y.data(), (int) y.size(), kFitRate);
-    c.sourceStart = start / kFitRate;
+    c.sourceStart = from / sr + start / kFitRate;
     const int len = std::min ((int) y.size() - start, (int) (maxSeconds * kFitRate));
     if (len <= 0) return c;
     c.x.assign (y.begin() + start, y.begin() + start + len);
-    const int fade = std::min (len / 8, (int) (0.03 * kFitRate));
-    for (int i = 0; i < fade; ++i) c.x[(size_t) (len - fade + i)] *= (float) (1.0 - (double) i / std::max (1, fade - 1));
     double peak = 0.0;
     for (float v : c.x) peak = std::max (peak, (double) std::fabs (v));
     if (peak < 1e-5) { c.x.clear(); return c; }             // silence: nothing to fit
+    // the floor of the recording itself, before any fade of ours lowers its quietest frames
     c.noiseFloor = noiseFloorDb (c.x.data(), len, kFitRate);
+    // A fade only where the clip is cut short, so the cut does not click. A file that already ends
+    // within the length keeps its own ending - which is also what makes a training clip come out
+    // here exactly as the learner fits it (its clips were faded when the training set was built).
+    if (len < (int) y.size() - start || to < n)
+    {
+        const int fade = std::min (len / 8, (int) (0.03 * kFitRate));
+        for (int i = 0; i < fade; ++i) c.x[(size_t) (len - fade + i)] *= (float) (1.0 - (double) i / std::max (1, fade - 1));
+    }
     return c;
 }
 
@@ -198,19 +230,29 @@ struct Fitted
     Body params;
     double loss = 0.0, startLoss = 0.0, seconds = 0.0;
     bool cancelled = false;
+    std::vector<float> strike;       // one strike of it at 48 kHz, when the job was asked to render one
 };
 
 // Runs `fits` fits of one clip on up to `threads` worker threads. Poll progress() and finished();
 // results() once finished, best first. Destroying it cancels and waits.
+//
+// strikeMaxSeconds > 0: each fit, once done, is also struck on its worker thread (renderStrike, as long
+// as it rings plus 0.1 s, at most that long), so whoever collects the results never has to render.
 class FitJob
 {
 public:
-    FitJob (Clip clip, int fits, int threads, int steps = 300)
-        : c (std::move (clip)), total (std::max (1, fits)), steps (std::max (1, steps)), stepsDone ((size_t) total)
+    FitJob (Clip clip, int fits, int threads, int steps = 300, double strikeMaxSeconds = 0.0)
+        : c (std::move (clip)), total (std::max (1, fits)), steps (std::max (1, steps)), strikeMax (strikeMaxSeconds), stepsDone ((size_t) total)
     {
-        for (auto& s : stepsDone) s.store (0);
-        const int workers = std::max (1, std::min (threads, total));
-        runner = std::thread ([this, workers] { run (workers); });
+        begin (threads);
+    }
+    // From a sound as it is (mono, any rate, any length): prepareClip runs on the job's own thread too,
+    // so nothing of the fit happens on the caller's. clip() is valid once finished().
+    FitJob (std::vector<float> mono, double sampleRate, int fits, int threads, int steps = 300, double strikeMaxSeconds = 0.0)
+        : total (std::max (1, fits)), steps (std::max (1, steps)), strikeMax (strikeMaxSeconds), stepsDone ((size_t) total),
+          raw (std::move (mono)), rawRate (sampleRate)
+    {
+        begin (threads);
     }
 
     ~FitJob() { cancel(); if (runner.joinable()) runner.join(); }
@@ -228,7 +270,9 @@ public:
         return 0.03 + 0.97 * s / ((double) total * steps);
     }
     int fits() const noexcept { return total; }
-    const Clip& clip() const noexcept { return c; }
+    // seconds since the job started
+    double elapsed() const noexcept { return std::chrono::duration<double> (std::chrono::steady_clock::now() - started).count(); }
+    const Clip& clip() const noexcept { return c; }        // (made from raw audio: once finished())
     std::string error() const { std::lock_guard<std::mutex> l (m); return err; }
 
     // best first; only complete fits
@@ -241,8 +285,16 @@ public:
     }
 
 private:
+    void begin (int threads)
+    {
+        for (auto& s : stepsDone) s.store (0);
+        const int workers = std::max (1, std::min (threads, total));
+        runner = std::thread ([this, workers] { run (workers); });
+    }
+
     void run (int workers)
     {
+        if (! raw.empty()) { c = prepareClip (raw.data(), (int) raw.size(), rawRate); raw = {}; }
         if (! c.ok()) { std::lock_guard<std::mutex> l (m); err = "The sound is too short or silent to fit."; done.store (true); return; }
         const int n = (int) c.x.size();
         const std::vector<double> xd (c.x.begin(), c.x.end());
@@ -278,8 +330,10 @@ private:
                 f.index = i; f.params = std::move (r.params); f.loss = r.loss; f.startLoss = r.startLoss;
                 f.cancelled = r.cancelled;
                 f.seconds = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+                if (! r.cancelled && std::isfinite (f.loss) && ! r.history.empty() && strikeMax > 0.0 && ! stop.load())
+                    f.strike = renderStrike (f.params, std::min (strikeMax, ringSeconds (f.params) + 0.1));
                 stepsDone[(size_t) i].store (steps);
-                if (! r.cancelled && std::isfinite (f.loss) && ! r.history.empty())
+                if (! r.cancelled && std::isfinite (f.loss) && ! r.history.empty() && ! stop.load())
                 {
                     std::lock_guard<std::mutex> l (m);
                     out.push_back (std::move (f));
@@ -295,11 +349,15 @@ private:
 
     Clip c;
     const int total, steps;
+    const double strikeMax;
     std::vector<std::atomic<int>> stepsDone;
+    std::vector<float> raw;                  // the sound as given, until run() has prepared it
+    double rawRate = kFitRate;
     std::atomic<bool> stop { false }, done { false }, analysed { false };
     mutable std::mutex m;
     std::vector<Fitted> out;
     std::string err;
+    const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
     std::thread runner;
 };
 

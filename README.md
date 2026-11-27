@@ -4,13 +4,15 @@ Batchcut finds the events in a recording (a ball bouncing in a noisy yard, the h
 field recording) and cuts them into one-shots, as many files as you like at once. Then it makes things out of
 them: drum kits, loops and playable instruments. It is a standalone app and a VST3 plugin.
 
-The switch at the top opens its four rooms, which share one pool of one-shots:
+The switch at the top opens its five rooms, which share one pool of one-shots:
 
 * **CUT**: find the events and export the one-shots (and gather them into the pool).
 * **KIT**: a drum kit for NeoBeat, played in NeoBeat's 128 patterns, saved as a `.NJQ` file.
 * **LOOPS** (new in 3.0): loops of up to 8 bars and 8 layers, rolled from the pool by rules you set.
 * **KEYS** (new in 3.0): an instrument to play from a keyboard, built from the pool, saved as a `.NJQ` instrument
   for MidiJaQ.
+* **MATERIAL** (new in 3.0): objects learned by the MaterialLab learner, struck or with sound sent through them,
+  and any sound fitted into such an object.
 
 **Also new in 3.0, for big batches.** **CLEAR ALL** takes every file off the list (and **REMOVE** takes several at
 once: Shift or Ctrl-click them). In the kit room, **RANDOM** (or **R**) deals fresh sounds: every sound that fits a
@@ -196,6 +198,24 @@ finds it. **OPEN .NJQ** opens one to play or change. The instrument is also kept
 KEYS keys: B builds, up and down choose a sound, Ctrl+Z / Ctrl+Shift+Z undo and redo, and the computer keyboard
 plays.
 
+## The material room (MATERIAL)
+
+MATERIAL plays objects learned by MaterialLab, the learner: each one a fitted model of how a particular piece of
+metal, plastic or rubber rings when it is hit, kept as a `.json` material file.
+
+* **FOLDER...** (or drop a material file or a folder on the room) lists the materials; click one to load it, **<**
+  and **>** step through them.
+* **STRIKE** hits the object; hit it again while it rings and the energy adds. **RENDER 8 HITS TO POOL** strikes it
+  eight times at different strengths into the pool.
+* **SEND THROUGH** sends the chosen pool sound through the object; the knob sets how much of the object you hear.
+* **Fitting any sound.** Drop an audio file on the room, or choose a pool sound and press **FIT**: Batchcut learns
+  the object that made it - the learner's own fit, run inside Batchcut - four times side by side, each started a
+  hair apart, so the four end as four slightly different objects. Each becomes a material file in
+  *Documents/Marbelite/Materials/(the sound's name)* and a sound in the pool (*... fit 1* is the closest), and the
+  room opens them with the closest loaded. Progress and **CANCEL** are on the line under the picture. A fit takes
+  the first strike in the sound and the 1.5 s after it, and takes about a minute (longer for a long, bright metal
+  ring); it carries on with the window closed. MaterialLab opens these files as its own.
+
 ## MIDI
 
 Batchcut takes MIDI in: in the standalone app from the MIDI input chosen under Options, in a DAW from its track.
@@ -267,8 +287,12 @@ your instrument while you build a kit.
   kit room end to end (gather, auto-fill, layers, undo, rate, save `.NJQ`, read it back, the kit in the project),
   RANDOM, Clear lanes, Remove and Clear all (with an export under way), LOOPS (roll, edit, play from MIDI, every
   export, the loop in the project), KEYS (build, play from MIDI in tune, chords, save and open a `.NJQ` instrument,
-  the instrument in the project, keys let go on leaving the room), and a long random session in all four rooms. The
+  the instrument in the project, keys let go on leaving the room), MATERIAL (an audio file dropped and fitted four
+  ways into the pool and into learner-format files that strike again to the same sound, a pool sound fitted and
+  cancelled, a fit finishing with the window closed), and a long random session in all five rooms. The
   `.NJQ` files it writes are loaded and played by NeoBeat 3.0's own host test.
+* `test_learner` (Linux, not part of the Windows build): the learner's fit as ported, checked stage by stage against
+  the MaterialLab learner itself on three of its training clips (`tools/learner_ref/README.md`).
 * pluginval at strictness 10 on the Windows build.
 
 ## Batchcut, NeoBeat and MidiJaQ

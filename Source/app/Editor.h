@@ -340,6 +340,7 @@ public:
     bc::KitRoom& getKitRoom() noexcept { return content.kitRoom; }
     bc::LoopsRoom& getLoopsRoom() noexcept { return content.loopsRoom; }
     bc::KeysRoom& getKeysRoom() noexcept { return content.keysRoom; }
+    MaterialRoom& getMaterialRoom() noexcept { return content.materialRoom; }
     FileList& getFiles() noexcept { return content.files; }
     void showRoom (int room) { view.room = room; if (view.roomChanged) view.roomChanged(); }
     SpecView& getSpec() noexcept { return content.spec; }

@@ -1,5 +1,6 @@
 // The MaterialLab learner's port, checked stage by stage against the learner itself.
-//   test_learner GOLDEN_DIR      (a directory written by the reference scripts: start/, fitted/, x.f32)
+//   test_learner GOLDEN_DIR [CLIP.wav]   (a directory written by the reference scripts: start/, fitted/,
+//                                         x.f32; the clip it was made from, for stage 7a)
 // Stage 2: the body renders the same samples as engine2.render_physical from the same parameters
 // and the same noise. The learner computes in float32 and this port in double, so "the same" is a
 // tolerance, stated with each check.
@@ -7,6 +8,8 @@
 #include "../Source/neobeat/shared/learner/Loss2.h"
 #include "../Source/neobeat/shared/learner/Analysis2.h"
 #include "../Source/neobeat/shared/learner/Fit2.h"
+#include "../Source/neobeat/shared/learner/FitJob.h"
+#include "../Source/neobeat/shared/learner/MaterialFile.h"
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -16,7 +19,9 @@
 #include <sstream>
 #include <string>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
+#include <thread>
 
 static int failures = 0;
 #define CHECK(cond, ...) do { std::printf ((cond) ? "  ok:   " : "  FAIL: "); std::printf (__VA_ARGS__); std::printf ("\n"); if (! (cond)) ++failures; } while (0)
@@ -409,6 +414,172 @@ static void stage6a (const std::string& g)
     CHECK (r.history.size() == 6 && ref.size() == 6 && worst4 < 1e-6, "the first three steps are the learner's (Adam, rates, schedule, regularisation, freeze, level match)");
 }
 
+// ------------------------------------------------------------------ stage 7a: the fit job
+
+// A WAV file as soundfile reads it (integer PCM scaled by 2^-(bits-1), or float), channels averaged.
+static std::vector<float> readWav (const std::string& path, double& sr)
+{
+    std::ifstream f (path, std::ios::binary);
+    std::vector<unsigned char> d ((std::istreambuf_iterator<char> (f)), {});
+    auto u16 = [&] (size_t i) { return (unsigned) d[i] | ((unsigned) d[i + 1] << 8); };
+    auto u32 = [&] (size_t i) { return u16 (i) | (u16 (i + 2) << 16); };
+    std::vector<float> x;
+    if (d.size() < 12 || std::string (d.begin(), d.begin() + 4) != "RIFF") return x;
+    int fmt = 0, ch = 1, bits = 16;
+    for (size_t p = 12; p + 8 <= d.size();)
+    {
+        const std::string id (d.begin() + (long) p, d.begin() + (long) p + 4);
+        const size_t len = u32 (p + 4), at = p + 8;
+        if (id == "fmt ") { fmt = (int) u16 (at); ch = (int) u16 (at + 2); sr = u32 (at + 4); bits = (int) u16 (at + 14); if (fmt == 0xFFFE) fmt = (int) u16 (at + 24); }
+        if (id == "data")
+        {
+            const int bytes = bits / 8;
+            const size_t frames = std::min (len, d.size() - at) / (size_t) (bytes * ch);
+            x.assign (frames, 0.0f);
+            for (size_t i = 0; i < frames; ++i)
+            {
+                double s = 0.0;
+                for (int c = 0; c < ch; ++c)
+                {
+                    const size_t q = at + (i * (size_t) ch + (size_t) c) * (size_t) bytes;
+                    if (fmt == 3 && bits == 32) { float v; std::memcpy (&v, &d[q], 4); s += v; continue; }
+                    int32_t v = 0;
+                    for (int b = 0; b < bytes; ++b) v |= (int32_t) d[q + (size_t) b] << (8 * b + 32 - bits);
+                    s += (double) ((float) v / 2147483648.0f);
+                }
+                x[i] = (float) (s / ch);
+            }
+        }
+        p = at + len + (len & 1);
+    }
+    return x;
+}
+
+// Where the learner cuts the clip, how loud it hears the noise, and a whole job of fits.
+static void stage7a (const std::string& g, const std::string& wav)
+{
+    double sr = 0.0;
+    const auto raw = readWav (wav, sr);
+    const auto ref = readRaw<float> (g + "/x.f32");                  // the learner's clip, from its cut
+    const auto c = ml::prepareClip (raw.data(), (int) raw.size(), sr);
+    const int cut = (int) std::lround (c.sourceStart * ml::kFitRate);
+    const int learnerCut = (int) raw.size() - (int) ref.size();      // trim_to_strike keeps everything after
+    size_t same = 0;
+    for (size_t i = 0; i < c.x.size() && i < ref.size(); ++i) same += c.x[i] == ref[i] ? 1 : 0;
+    std::printf ("  %.0f Hz, %zu samples: cut at sample %d here, %d in the learner; %zu of %zu samples identical\n",
+                 sr, raw.size(), cut, learnerCut, same, ref.size());
+    CHECK (cut == learnerCut && same == ref.size() && c.x.size() == ref.size(), "the clip is the one the learner fits, sample for sample (trim_to_strike)");
+
+    std::ifstream mf (g + "/meta.json"); std::string meta ((std::istreambuf_iterator<char> (mf)), {});
+    const auto at = meta.find ("\"noise_floor_db\":");
+    const double target = at == std::string::npos ? 0.0 : std::atof (meta.substr (at + 17).c_str());
+    std::printf ("  noise floor %.1f dB here, %.1f dB in the training target\n", c.noiseFloor, target);
+    // The training set measured its floor on the whole source recording, which a dropped file does
+    // not come with; the clip's quietest 5% stands in for it.
+    CHECK (std::fabs (c.noiseFloor - target) < 1.5, "the clip's own noise floor stands in for the training set's (within 1.5 dB)");
+
+    // Another rate, inside a long quiet recording: only the stretch around the strike is resampled,
+    // so the cost does not grow with the file, and the strike is found where it is.
+    {
+        auto at44 = ml::resample (c.x.data(), (int) c.x.size(), ml::kFitRate, 44100.0);
+        std::vector<float> longer ((size_t) (60 * 44100), 0.0f);
+        ml::NumpyRandom rng (7);
+        for (auto& v : longer) v = (float) (1e-4 * (rng.uniform() - 0.5));
+        const size_t put = (size_t) (20 * 44100);
+        for (size_t i = 0; i < at44.size(); ++i) longer[put + i] += at44[i];
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto c2 = ml::prepareClip (longer.data(), (int) longer.size(), 44100.0);
+        const double ms = 1000.0 * std::chrono::duration<double> (std::chrono::steady_clock::now() - t1).count();
+        const double off = (c2.sourceStart - 20.0) * 1000.0;
+        double e1 = 0, e2 = 0;
+        for (size_t i = 0; i < std::min (c.x.size(), c2.x.size()); ++i) { e1 += (double) c.x[i] * c.x[i]; e2 += (double) c2.x[i] * c2.x[i]; }
+        std::printf ("  the clip at 44.1 kHz, 20 s into 60 s of quiet: prepared in %.0f ms, strike found %.2f ms from where it is, level %.2f dB from the 48 kHz clip's\n",
+                     ms, off, 10.0 * std::log10 (e2 / e1));
+        // within one of trim_to_strike's 1 ms frames: the frames fall differently at another rate
+        CHECK (std::fabs (off) < 1.0 && std::fabs (10.0 * std::log10 (e2 / e1)) < 0.1 && ms < 1000.0, "any rate and any length: the strike found (within its 1 ms frame), the level kept, in under a second");
+    }
+
+    if (! std::getenv ("LEARNER_JOB")) return;
+
+    // One whole job: two fits on two threads, the first at the learner's own start and the second
+    // nudged, reported best first. Progress is polled the way the plugin's message thread will.
+    const int steps = std::getenv ("LEARNER_STEPS") ? std::atoi (std::getenv ("LEARNER_STEPS")) : 300;
+    const auto t0 = std::chrono::steady_clock::now();
+    ml::FitJob job (c, 2, 2, steps);
+    double last = -1.0; bool monotone = true; int polls = 0;
+    while (! job.finished())
+    {
+        const double p = job.progress();
+        monotone = monotone && p >= last; last = p; ++polls;
+        std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    }
+    const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    const auto r = job.results();
+    std::printf ("  2 fits x %d steps on 2 threads in %.0f s (%d progress readings)\n", steps, secs, polls);
+    for (const auto& f : r) std::printf ("    fit %d: %d modes, start %.4f, best %.4f, %.0f s\n", f.index, f.params.modes(), f.startLoss, f.loss, f.seconds);
+    CHECK (job.error().empty() && r.size() == 2 && r[0].loss <= r[1].loss && r[0].index != r[1].index,
+           "both fits come back, best first");
+    CHECK (monotone && job.progress() == 1.0, "progress only climbs, and ends at 1");
+    CHECK (r.size() == 2 && r[0].loss < 0.5 * r[0].startLoss && r[1].loss < 0.5 * r[1].startLoss, "each fit learns (best under half its start)");
+
+    // fit 0 is the plain fit from the learner's start: the job adds nothing to it
+    if (r.size() == 2)
+    {
+        const std::vector<double> xd (c.x.begin(), c.x.end());
+        ml::FitOptions opt; opt.steps = steps;
+        const auto p0 = ml::an::initialBody (xd, (int) ml::kFitRate, &opt.keepGlide);
+        const ml::Loss2 loss (c.x.data(), (int) c.x.size(), ml::kFitRate, true, c.noiseFloor);
+        const auto bands = ml::noiseBands ((int) c.x.size(), ml::kFitRate, 11), body = ml::noiseBands ((int) c.x.size(), ml::kFitRate, 101);
+        const auto ph = ml::strikePhases (p0.modes());
+        ml::Scene sc; sc.n = (int) c.x.size(); sc.bands = bands.data(); sc.body = body.data(); sc.phases = ph.data();
+        const auto direct = ml::fit (c.x.data(), loss, sc, p0, opt);
+        // LEARNER_WRITE=FILE: the best fit as a material file, for the learner to open
+        // (tools/learner_ref/open_material.py scores it against the same clip)
+        if (const char* w = std::getenv ("LEARNER_WRITE"))
+        {
+            ml::MaterialInfo info;
+            info.name = "test fit 1"; info.source = wav; info.madeBy = "test_learner"; info.of = 2;
+            info.loss = r[0].loss; info.startLoss = r[0].startLoss; info.seconds = r[0].seconds;
+            info.noiseFloor = c.noiseFloor; info.nSamples = (int) c.x.size();
+            std::ofstream (w) << ml::materialJson (r[0].params, info);
+        }
+        const auto& f0 = r[0].index == 0 ? r[0] : r[1];
+        std::printf ("  the same fit run directly: best %.6f; in the job: %.6f\n", direct.loss, f0.loss);
+        CHECK (direct.loss == f0.loss, "a fit in the job is the same fit, to the last bit (nothing shared between threads)");
+
+        // what goes into the pool: the best fit struck, as long as it rings
+        const double ring = ml::ringSeconds (r[0].params);
+        const auto y = ml::renderStrike (r[0].params, std::min (6.0, ring + 0.1));
+        double peak = 0.0, e = 0.0, ex = 0.0;
+        for (float v : y) peak = std::max (peak, (double) std::fabs (v));
+        for (size_t i = 0; i < std::min (y.size(), c.x.size()); ++i) { e += (double) y[i] * y[i]; ex += (double) c.x[i] * c.x[i]; }
+        std::printf ("  the best fit struck: rings %.2f s, %zu samples, peak %.3f, level %.1f dB from the clip's\n",
+                     ring, y.size(), peak, 10.0 * std::log10 ((e + 1e-30) / (ex + 1e-30)));
+        CHECK (peak > 1e-4 && std::fabs (10.0 * std::log10 ((e + 1e-30) / (ex + 1e-30))) < 6.0, "the struck fit sounds, at about the clip's level");
+    }
+
+    // Cancel: stops within a step of being asked, and leaves nothing half-done in the results
+    {
+        ml::FitJob j2 (c, 2, 2, steps);
+        std::this_thread::sleep_for (std::chrono::milliseconds (800));
+        const auto tc = std::chrono::steady_clock::now();
+        j2.cancel();
+        while (! j2.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        const double wait = std::chrono::duration<double> (std::chrono::steady_clock::now() - tc).count();
+        std::printf ("  cancelled after 0.8 s: stopped %.2f s later, %zu results\n", wait, j2.results().size());
+        CHECK (j2.wasCancelled() && j2.results().empty() && wait < 2.0, "Cancel stops the job promptly and keeps no partial fits");
+    }
+
+    // a silent clip is refused with a sentence, not a crash
+    {
+        std::vector<float> quiet (48000, 0.0f);
+        ml::FitJob j3 (ml::prepareClip (quiet.data(), (int) quiet.size(), 48000.0), 2, 2, steps);
+        while (! j3.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        std::printf ("  a silent clip: \"%s\"\n", j3.error().c_str());
+        CHECK (! j3.error().empty() && j3.results().empty(), "a silent clip is refused with a reason");
+    }
+}
+
 int main (int argc, char** argv)
 {
     const std::string g = argc > 1 ? argv[1] : "/tmp/mlref/pvc";
@@ -436,6 +607,11 @@ int main (int argc, char** argv)
     {
         std::printf ("stage 6b: a whole fit, beside fit2.fit from scratch\n");
         stage6 (g);
+    }
+    if (argc > 2)
+    {
+        std::printf ("stage 7a: the fit job (FitJob.h), from the clip's own file\n");
+        stage7a (g, argv[2]);
     }
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

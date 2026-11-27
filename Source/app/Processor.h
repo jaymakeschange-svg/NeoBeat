@@ -15,6 +15,8 @@
 #include "../neobeat/shared/LearnerStore.h"
 #include <deque>
 
+namespace ml { class FitJob; }
+
 // The input recorder: the audio thread writes into chunks the message thread allocates ahead of it.
 class Recorder
 {
@@ -116,6 +118,24 @@ public:
     bool materialThrough (int poolIndex, float mix, juce::String& error);
     int  materialRender (int hits, juce::String& error);
 
+    // Any sound fitted into a material: the learner's own fit, run here (neobeat/shared/learner/FitJob.h).
+    // A dropped audio file or a pool sound is fitted several times side by side; each fit is saved as
+    // a learner-format material under materialsDir()/<sound>/ and struck into the pool, closest first.
+    // The processor's timer collects a finished job, so it lands even with the editor closed.
+    static constexpr int kFitsPerSound = 4;
+    bool fitStartFile (const juce::File& audio, juce::String& error);
+    bool fitStartPool (int poolIndex, juce::String& error);
+    void fitCancel();
+    bool fitBusy() const noexcept { return fitJob != nullptr; }
+    double fitProgress() const;                  // 0..1
+    double fitSecondsLeft() const;               // a rough estimate, < 0 until there is one
+    juce::String fitSource;                      // the sound being fitted, or the last one
+    juce::File fitFolder;                        // where the last finished job's materials went
+    juce::File fitBest;                          // and its closest fit's file
+    int fitGeneration = 0;                       // changes when a job starts or ends, for the room to notice
+    // Documents/Marbelite/Materials (MARBELITE_MATERIALS_DIR: the tests keep away from the real one)
+    static juce::File materialsDir();
+
     BcProcessor();
     ~BcProcessor() override;
 
@@ -163,6 +183,11 @@ public:
 private:
 
 private:
+    bool fitStart (std::vector<float> mono, double sr, const juce::String& name, const juce::String& from, juce::String& error);
+    void fitCollect();                           // message thread, on the timer
+    std::unique_ptr<ml::FitJob> fitJob;
+    juce::String fitFrom;                        // the file or pool sound it came from, for the material's info
+
     void handleAsyncUpdate() override;
     void timerCallback() override;
     void refreshStateCache();

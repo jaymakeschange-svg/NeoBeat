@@ -156,8 +156,8 @@ inline Body bodyBackward (const Body& p, const BodyTrace& tr, int n, double fs, 
     // = total - (prefix before r). Prefixes are summed as the pass goes and the totals applied at
     // the end, so the phases are recomputed exactly as render() made them and never stored.
     std::vector<double> gAmp ((size_t) nf * k, 0.0), Ap ((size_t) nf * k, 0.0), Cs ((size_t) nf, 0.0);
-    std::vector<double> ph1 ((size_t) k), ph2 ((size_t) k), P1 ((size_t) k, 0.0), P2 ((size_t) k, 0.0), SD ((size_t) k, 0.0);
-    for (int m = 0; m < k; ++m) { ph1[(size_t) m] = phases[m]; ph2[(size_t) m] = phases[k + m]; }
+    std::vector<double> P1 ((size_t) k, 0.0), P2 ((size_t) k, 0.0), SD ((size_t) k, 0.0);
+    PairPhasors z (phases, k);          // the phases as render() makes them (see PairPhasors)
     const auto centres = bandCentres (fs);
     std::array<double, kBands> sigB {}, cxB {}, gSigB {}, gCxB {};
     for (int b = 0; b < kBands; ++b)
@@ -166,24 +166,25 @@ inline Body bodyBackward (const Body& p, const BodyTrace& tr, int n, double fs, 
         sigB[(size_t) b] = (p.b1 + p.b3 * cb * cb) * std::exp (p.dn_rho[(size_t) b]);
         cxB[(size_t) b] = p.cx_amt * sigmoid ((p.cx_f - centres[(size_t) b]) / (0.25 * p.cx_f));
     }
+    BandDecay dec;                      // and the dense layer's decay, likewise (see BandDecay)
+    dec.setup (sigB, cxB, fs);
     const double w = kTwoPi / fs;
     for (int s = 0; s < n; ++s)
     {
-        const double pos = (double) s / kHop;
-        const int i0 = (int) std::floor (pos);
-        const double fr = pos - i0;
+        const int i0 = s / kHop, j = s - i0 * kHop;
+        const double fr = (double) j / kHop;
         Cs[(size_t) i0] += 1 - fr; Cs[(size_t) i0 + 1] += fr;
         const double gs = gy[s];
+        const double* F0 = &tr.fpath[(size_t) i0 * k];
+        const double* F1 = F0 + k;
+        if (j == 0) z.begin (F0, F1, p.delta.data(), w);
+        else        z.advance (F0, F1, fr, p.delta.data(), w);
         for (int m = 0; m < k; ++m)
         {
             const size_t a0 = (size_t) i0 * k + m, a1 = a0 + (size_t) k;
             const double as = tr.amp[a0] * (1 - fr) + tr.amp[a1] * fr;
-            const double fs_ = tr.fpath[a0] * (1 - fr) + tr.fpath[a1] * fr;
-            const double half = 0.5 * p.delta[(size_t) m];
-            ph1[(size_t) m] += w * (fs_ - half);
-            ph2[(size_t) m] += w * (fs_ + half);
-            const double s1 = std::sin (ph1[(size_t) m]), c1 = std::cos (ph1[(size_t) m]);
-            const double s2 = std::sin (ph2[(size_t) m]), c2 = std::cos (ph2[(size_t) m]);
+            const double s1 = z.z1i[(size_t) m], c1 = z.z1r[(size_t) m];
+            const double s2 = z.z2i[(size_t) m], c2 = z.z2r[(size_t) m];
             const double be = p.beta[(size_t) m];
             const double gas = gs * ((1 - be) * s1 + be * s2);
             gAmp[a0] += gas * (1 - fr); gAmp[a1] += gas * fr;
@@ -199,13 +200,15 @@ inline Body bodyBackward (const Body& p, const BodyTrace& tr, int n, double fs, 
         const double onN = 1.0 - std::exp (-t / 0.0002), decN = std::exp (-t / p.tau_n);
         const double held = softplus ((t - p.cx_t) / 0.004) * 0.004;
         const double att = 1.0 - std::exp (-t / 0.0003);
+        dec.step (j == 0, t, sigB);
+        const bool touching = dec.contact (held);
         double click = 0.0, gHeld = 0.0;
         for (int b = 0; b < kBands; ++b)
         {
             const double nb = bands[(size_t) b * n + s];
             click += p.noise[(size_t) b] * nb;
             g.noise[(size_t) b] += gs * onN * decN * nb;
-            const double envB = std::exp (-sigB[(size_t) b] * t - cxB[(size_t) b] * held) * att;
+            const double envB = dec.env (b, cxB[(size_t) b], held, touching) * att;
             const double bb = body[(size_t) b * n + s];
             g.dn[(size_t) b] += gs * envB * bb;
             const double v = gs * p.dn[(size_t) b] * envB * bb;

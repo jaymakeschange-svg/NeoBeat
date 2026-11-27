@@ -2,6 +2,11 @@
 #include "Processor.h"
 #include "State.h"
 #include "Editor.h"
+#include "neobeat/shared/learner/FitJob.h"
+#include "neobeat/shared/learner/MaterialFile.h"
+#ifndef BATCHCUT_VERSION
+ #define BATCHCUT_VERSION "3.0.0"
+#endif
 
 int bcExpandChord (int chord, int root, int scaleIndex, const bc::KeysNote& in, bc::KeysNote* out, int room);   // KeysProc.cpp
 
@@ -65,6 +70,7 @@ BcProcessor::BcProcessor()
 
 BcProcessor::~BcProcessor()
 {
+    fitJob.reset();                 // cancels a fit still running, and waits for its threads
     stopTimer();
     session.onChange = nullptr;
     session.stop();
@@ -328,6 +334,7 @@ void BcProcessor::handleAsyncUpdate()
 
 void BcProcessor::timerCallback()
 {
+    fitCollect();
     recorder.service();
     preview.collect();
     if (playDoc != nullptr && ! preview.playing()) { playDoc = nullptr; playingEvent = false; }
@@ -495,4 +502,133 @@ bool BcProcessor::materialThrough (int poolIndex, float mix, juce::String& error
     lastMessage = "Added " + nm;
     roomsNotify();
     return true;
+}
+
+// ------------------------------------------------------------------ fitting any sound
+// The learner's fit, run in Batchcut (docs/PROPOSED-FEATURES.md, stage 7). The user decided that a
+// sound gets several fits side by side and every one goes into the pool, closest first: the fit is
+// path-dependent, so fits started a rounding step apart end as different materials, and the spread
+// is the first set of variants.
+
+juce::File BcProcessor::materialsDir()
+{
+    const auto env = juce::SystemStats::getEnvironmentVariable ("MARBELITE_MATERIALS_DIR", {});
+    return env.isNotEmpty() ? juce::File (env)
+                            : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Marbelite").getChildFile ("Materials");
+}
+
+bool BcProcessor::fitStartFile (const juce::File& audio, juce::String& error)
+{
+    if (fitJob != nullptr) { error = "A fit is already running - let it finish, or Cancel it first."; return false; }
+    std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (audio));
+    if (r == nullptr) { error = audio.getFileName() + " is not an audio file Batchcut can read."; return false; }
+    // the first minute is plenty: the fit takes the first strike and the 1.5 s after it
+    const int len = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (r->sampleRate * 60.0));
+    if (len <= 0 || r->sampleRate < 1000.0 || r->numChannels == 0) { error = audio.getFileName() + " is empty."; return false; }
+    juce::AudioBuffer<float> buf ((int) r->numChannels, len);
+    if (! r->read (&buf, 0, len, 0, true, true)) { error = audio.getFileName() + " could not be read."; return false; }
+    std::vector<float> mono ((size_t) len, 0.0f);
+    for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+        for (int i = 0; i < len; ++i) mono[(size_t) i] += buf.getSample (ch, i) / (float) buf.getNumChannels();
+    return fitStart (std::move (mono), r->sampleRate, audio.getFileNameWithoutExtension(), audio.getFullPathName(), error);
+}
+
+bool BcProcessor::fitStartPool (int poolIndex, juce::String& error)
+{
+    if (fitJob != nullptr) { error = "A fit is already running - let it finish, or Cancel it first."; return false; }
+    if (! juce::isPositiveAndBelow (poolIndex, (int) kit.pool.size())) { error = "Pick a sound from the pool to fit."; return false; }
+    const auto src = kit.pool[(size_t) poolIndex];
+    if (src == nullptr || src->l.empty()) { error = "That sound is empty."; return false; }
+    std::vector<float> mono (src->l.size());
+    for (size_t i = 0; i < mono.size(); ++i) mono[i] = src->r.empty() ? src->l[i] : 0.5f * (src->l[i] + src->r[i]);
+    const juce::String name (src->name);
+    return fitStart (std::move (mono), src->sr > 1000.0 ? src->sr : 48000.0, name, "pool:" + name, error);
+}
+
+bool BcProcessor::fitStart (std::vector<float> mono, double sr, const juce::String& name, const juce::String& from, juce::String& error)
+{
+    float peak = 0.0f;
+    for (float v : mono) peak = std::max (peak, std::fabs (v));
+    if (peak < 1.0e-5f) { error = "That sound is silent - there is nothing to fit."; return false; }
+    // one core is left for the host and the audio; four fits use at most four
+    const int threads = juce::jlimit (1, kFitsPerSound, juce::SystemStats::getNumCpus() - 1);
+    fitJob = std::make_unique<ml::FitJob> (std::move (mono), sr, kFitsPerSound, threads, 300, 6.0);
+    fitSource = name.isNotEmpty() ? name : juce::String ("sound");
+    fitFrom = from;
+    ++fitGeneration;
+    lastMessage = "Fitting " + fitSource + " - " + juce::String (kFitsPerSound) + " fits on " + juce::String (threads)
+                + (threads == 1 ? " core" : " cores");
+    roomsNotify();
+    return true;
+}
+
+void BcProcessor::fitCancel()
+{
+    if (fitJob != nullptr) fitJob->cancel();
+}
+
+double BcProcessor::fitProgress() const { return fitJob != nullptr ? fitJob->progress() : 0.0; }
+
+double BcProcessor::fitSecondsLeft() const
+{
+    if (fitJob == nullptr) return -1.0;
+    const double p = fitJob->progress(), t = fitJob->elapsed();
+    return p > 0.05 ? t * (1.0 - p) / p : -1.0;
+}
+
+void BcProcessor::fitCollect()
+{
+    if (fitJob == nullptr || ! fitJob->finished()) return;
+    const auto job = std::move (fitJob);            // fitBusy() is false from here on
+    ++fitGeneration;
+    if (job->wasCancelled()) { lastMessage = "Fitting " + fitSource + " cancelled."; roomsNotify(); return; }
+    if (! job->error().empty()) { lastMessage = fitSource + ": " + juce::String (job->error()); roomsNotify(); return; }
+    const auto results = job->results();
+    if (results.empty()) { lastMessage = "Nothing came of fitting " + fitSource + "."; roomsNotify(); return; }
+
+    // one folder per job, so a second fit of the same sound keeps the first's materials
+    const auto base = materialsDir();
+    const auto legal = juce::File::createLegalFileName (fitSource);
+    auto dir = base.getChildFile (legal);
+    for (int i = 2; dir.exists() && ! dir.findChildFiles (juce::File::findFiles, false, "*.json").isEmpty(); ++i)
+        dir = base.getChildFile (legal + " " + juce::String (i));
+    const bool canWrite = dir.createDirectory().wasOk();
+
+    int made = 0, saved = 0;
+    fitBest = juce::File();
+    for (size_t k = 0; k < results.size(); ++k)
+    {
+        const auto& f = results[k];
+        const auto name = fitSource + " fit " + juce::String ((int) k + 1);
+        if (canWrite)
+        {
+            const auto file = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+            ml::MaterialInfo info;
+            info.name = name.toStdString(); info.source = fitFrom.toStdString(); info.madeBy = "Batchcut " BATCHCUT_VERSION;
+            info.rank = (int) k + 1; info.of = (int) results.size();
+            info.loss = f.loss; info.startLoss = f.startLoss; info.seconds = f.seconds;
+            info.noiseFloor = job->clip().noiseFloor; info.nSamples = (int) job->clip().x.size();
+            if (file.replaceWithText (juce::String::fromUTF8 (ml::materialJson (f.params, info).c_str())))
+            {
+                ++saved;
+                if (k == 0) fitBest = file;
+            }
+        }
+        float peak = 0.0f;
+        for (float v : f.strike) peak = std::max (peak, std::fabs (v));
+        if (peak < 1.0e-5f) continue;
+        std::vector<float> l (f.strike.size());
+        const float g = 0.89f / peak;
+        for (size_t i = 0; i < l.size(); ++i) l[i] = f.strike[i] * g;
+        auto r = l;
+        kit.pool.push_back (poolItemFrom (std::move (l), std::move (r), ml::kFitRate, name, "material:" + name));
+        ++made;
+    }
+    fitFolder = saved > 0 ? dir : juce::File();
+    if (made > 0) { kitChanged(); stateChanged(); }
+    lastMessage = "Fitted " + fitSource + ": " + juce::String (made) + (made == 1 ? " sound" : " sounds") + " in the pool, closest "
+                + juce::String (results.front().loss, 2) + " (from " + juce::String (results.front().startLoss, 2) + ")"
+                + (saved > 0 ? ", materials in " + dir.getFileName()
+                             : ", but the materials could not be saved in " + base.getFullPathName());
+    roomsNotify();
 }

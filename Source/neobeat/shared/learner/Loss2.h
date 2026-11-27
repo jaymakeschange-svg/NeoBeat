@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <memory>
 #include <vector>
 
 namespace ml
@@ -48,8 +49,62 @@ inline void fft (std::vector<std::complex<double>>& a, bool inverse = false)
     }
 }
 
+// The same transform with its bit reversal and twiddles worked out once per size. The loss runs
+// thousands of frames at four sizes on every step of a fit, and recomputing the twiddles by
+// recurrence inside every frame was a large part of its time. The table is also the more accurate
+// of the two (each twiddle from cos and sin directly, not a running product).
+struct FftPlan
+{
+    int n = 0;
+    std::vector<int> rev;
+    std::vector<std::complex<double>> tw;            // e^{-2 pi i j / n}, j < n/2
+
+    explicit FftPlan (int size) : n (size), rev ((size_t) size), tw ((size_t) std::max (1, size / 2))
+    {
+        for (int i = 1, j = 0; i < n; ++i)
+        {
+            int bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            rev[(size_t) i] = j;
+        }
+        for (int j = 0; j < n / 2; ++j)
+            tw[(size_t) j] = { std::cos (2.0 * 3.14159265358979323846 * j / n), -std::sin (2.0 * 3.14159265358979323846 * j / n) };
+    }
+
+    // forward, in place: a[i] = sum_k a[k] e^{-2 pi i k i / n}
+    void run (std::complex<double>* a) const
+    {
+        for (int i = 1; i < n; ++i) if (i < rev[(size_t) i]) std::swap (a[i], a[rev[(size_t) i]]);
+        for (int len = 2; len <= n; len <<= 1)
+        {
+            const int half = len / 2, step = n / len;
+            for (int i = 0; i < n; i += len)
+                for (int j = 0; j < half; ++j)
+                {
+                    const auto u = a[i + j], v = a[i + j + half] * tw[(size_t) (j * step)];
+                    a[i + j] = u + v; a[i + j + half] = u - v;
+                }
+        }
+    }
+};
+
+// One plan per size for the life of the program; each worker thread keeps its own list, so fits
+// running side by side never share or lock anything.
+inline const FftPlan& fftPlan (int n)
+{
+    thread_local std::vector<std::unique_ptr<FftPlan>> plans;
+    for (const auto& p : plans) if (p->n == n) return *p;
+    plans.push_back (std::make_unique<FftPlan> (n));
+    return *plans.back();
+}
+
 // Short-time magnitudes, as fit2._mag: frames of n every n/4 (only whole frames), Hann window
 // (numpy's symmetric hanning), |rfft|. Row-major [frames][n/2 + 1].
+//
+// Two frames go through one complex FFT (one as the real part, the next as the imaginary part) and
+// are separated afterwards by the transform's symmetry - the usual way to halve the cost of real
+// transforms.
 struct Stft
 {
     int n = 0, hop = 0, frames = 0, bins = 0;
@@ -67,13 +122,29 @@ struct Stft
         for (int i = 0; i < n; ++i) win[(size_t) i] = n > 1 ? (double) (float) (0.5 - 0.5 * std::cos (2.0 * 3.14159265358979323846 * i / (n - 1))) : 1.0;
         mag.assign ((size_t) frames * bins, 0.0);
         spec.assign ((size_t) frames * bins, {});
+        const auto& plan = fftPlan (n);
         std::vector<std::complex<double>> buf ((size_t) n);
-        for (int f = 0; f < frames; ++f)
+        for (int f = 0; f < frames; f += 2)
         {
-            for (int i = 0; i < n; ++i) buf[(size_t) i] = x[f * hop + i] * win[(size_t) i];
-            fft (buf);
-            for (int b = 0; b < bins; ++b) { spec[(size_t) f * bins + b] = buf[(size_t) b]; mag[(size_t) f * bins + b] = std::abs (buf[(size_t) b]); }
+            const bool pair = f + 1 < frames;
+            for (int i = 0; i < n; ++i)
+                buf[(size_t) i] = { (double) x[f * hop + i] * win[(size_t) i], pair ? (double) x[(f + 1) * hop + i] * win[(size_t) i] : 0.0 };
+            plan.run (buf.data());
+            for (int b = 0; b < bins; ++b)
+            {
+                const auto Z = buf[(size_t) b], Zc = std::conj (buf[(size_t) ((n - b) % n)]);
+                put (f, b, 0.5 * (Z + Zc));
+                if (pair) put (f + 1, b, std::complex<double> (0.0, -0.5) * (Z - Zc));
+            }
         }
+    }
+
+private:
+    void put (int f, int b, std::complex<double> X)
+    {
+        const size_t i = (size_t) f * bins + b;
+        spec[i] = X;
+        mag[i] = std::sqrt (X.real() * X.real() + X.imag() * X.imag());
     }
 };
 
@@ -102,7 +173,17 @@ public:
         : n (len), sr (fs)
     {
         tgt.assign (target, target + len);
-        for (int i = 0; i < 3; ++i) tStft[i].compute (target, len, kSizes[i]);
+        for (int i = 0; i < 3; ++i)
+        {
+            tStft[i].compute (target, len, kSizes[i]);
+            // the target's side of the log-spectral term, which never changes during a fit
+            const auto& b = tStft[i];
+            specFloor[i] = *std::max_element (b.mag.begin(), b.mag.end()) * std::pow (10.0, -70.0 / 20.0) + 1e-9;
+            tLog[i].resize (b.mag.size());
+            double b2 = 0.0;
+            for (size_t j = 0; j < b.mag.size(); ++j) { tLog[i][j] = std::log (b.mag[j] + specFloor[i]); b2 += b.mag[j] * b.mag[j]; }
+            tNorm[i] = std::sqrt (b2) + 1e-9;
+        }
         envWin = (int) (0.01 * fs); envHop = (int) (0.005 * fs);
         tEnv = framedDb (target, len, envWin, envHop);
         const double tMax = *std::max_element (tEnv.begin(), tEnv.end());
@@ -125,15 +206,15 @@ public:
         {
             Stft a; a.compute (y, n, kSizes[i]);
             const auto& b = tStft[i];
-            const double fl = *std::max_element (b.mag.begin(), b.mag.end()) * std::pow (10.0, -70.0 / 20.0) + 1e-9;
-            double lsum = 0.0, d2 = 0.0, b2 = 0.0;
+            const double fl = specFloor[i];
+            double lsum = 0.0, d2 = 0.0;
             for (size_t j = 0; j < a.mag.size(); ++j)
             {
-                lsum += std::fabs (std::log (a.mag[j] + fl) - std::log (b.mag[j] + fl));
+                lsum += std::fabs (std::log (a.mag[j] + fl) - tLog[i][j]);
                 const double d = a.mag[j] - b.mag[j];
-                d2 += d * d; b2 += b.mag[j] * b.mag[j];
+                d2 += d * d;
             }
-            total += lsum / (double) a.mag.size() + std::sqrt (d2) / (std::sqrt (b2) + 1e-9);
+            total += lsum / (double) a.mag.size() + std::sqrt (d2) / tNorm[i];
         }
         total /= 3.0;
 
@@ -170,24 +251,22 @@ public:
         {
             Stft a; a.compute (y.data(), n, kSizes[i]);
             const auto& b = tStft[i];
-            const double fl = *std::max_element (b.mag.begin(), b.mag.end()) * std::pow (10.0, -70.0 / 20.0) + 1e-9;
+            const double fl = specFloor[i];
             const double N = (double) a.mag.size();
-            double lsum = 0.0, d2 = 0.0, b2 = 0.0;
-            for (size_t j = 0; j < a.mag.size(); ++j)
-            {
-                lsum += std::fabs (std::log (a.mag[j] + fl) - std::log (b.mag[j] + fl));
-                const double d = a.mag[j] - b.mag[j];
-                d2 += d * d; b2 += b.mag[j] * b.mag[j];
-            }
-            const double dn = std::sqrt (d2), bn = std::sqrt (b2) + 1e-9;
-            total += lsum / N + dn / bn;
+            double lsum = 0.0, d2 = 0.0;
             std::vector<double> ga (a.mag.size());
             for (size_t j = 0; j < a.mag.size(); ++j)
             {
-                const double diff = std::log (a.mag[j] + fl) - std::log (b.mag[j] + fl);
-                const double sg = diff > 0 ? 1.0 : (diff < 0 ? -1.0 : 0.0);
-                ga[j] = (sg / (a.mag[j] + fl) / N + (dn > 0 ? (a.mag[j] - b.mag[j]) / dn / bn : 0.0)) / 3.0;
+                const double diff = std::log (a.mag[j] + fl) - tLog[i][j];
+                lsum += std::fabs (diff);
+                ga[j] = diff > 0 ? 1.0 : (diff < 0 ? -1.0 : 0.0);          // the sign, for now
+                const double d = a.mag[j] - b.mag[j];
+                d2 += d * d;
             }
+            const double dn = std::sqrt (d2), bn = tNorm[i];
+            total += lsum / N + dn / bn;
+            for (size_t j = 0; j < a.mag.size(); ++j)
+                ga[j] = (ga[j] / (a.mag[j] + fl) / N + (dn > 0 ? (a.mag[j] - b.mag[j]) / dn / bn : 0.0)) / 3.0;
             magAdjoint (a, ga, gy);
         }
         total /= 3.0;
@@ -240,12 +319,12 @@ public:
             for (int j = 0; j < kTransportBands; ++j) dot += gw[(size_t) j] * A[j];
             std::vector<double> gpa ((size_t) kTransportBands);
             for (int j = 0; j < kTransportBands; ++j) gpa[(size_t) j] = gw[(size_t) j] / Sa - dot / (Sa * Sa);
-            // pa = |X|^2 @ W
+            // pa = |X|^2 @ W (each bin reaches only the few bands whose triangles cover it)
             for (int k = 0; k < a2.bins; ++k)
             {
                 const double* w = &W[(size_t) k * kTransportBands];
                 double s = 0.0;
-                for (int j = 0; j < kTransportBands; ++j) s += w[j] * gpa[(size_t) j];
+                for (int j = wLo[(size_t) k]; j < wHi[(size_t) k]; ++j) s += w[j] * gpa[(size_t) j];
                 gm2[(size_t) f * a2.bins + k] = s;
             }
         }
@@ -272,20 +351,45 @@ public:
 private:
     static std::vector<double>& gyScratch() { thread_local std::vector<double> v; return v; }
     // gy += d/dy of sum_k ga_k |X_k| over every frame of an Stft
+    //
+    // Per frame this is Re (sum_k c_k e^{-2 pi i k i / n}) over the half spectrum k = 0..n/2, with
+    // c_k = conj (X_k) / |X_k| ga_k. That equals the transform of the Hermitian sequence
+    // h_k = (c_k + conj (c_{n-k})) / 2, whose transform is real - so two frames share one complex
+    // transform, one as the real part of h and the next as the imaginary part, and come out as the
+    // real and imaginary parts of the result.
     static void magAdjoint (const Stft& s, const std::vector<double>& ga, std::vector<double>& gy)
     {
-        std::vector<std::complex<double>> buf ((size_t) s.n);
-        for (int f = 0; f < s.frames; ++f)
+        const auto& plan = fftPlan (s.n);
+        const int n = s.n, half = n / 2;
+        std::vector<std::complex<double>> buf ((size_t) n), c1 ((size_t) s.bins), c2 ((size_t) s.bins);
+        auto coeffs = [&] (int f, std::vector<std::complex<double>>& c)
         {
-            std::fill (buf.begin(), buf.end(), std::complex<double> (0.0));
             for (int k = 0; k < s.bins; ++k)
             {
-                const auto X = s.spec[(size_t) f * s.bins + k];
-                const double m = std::abs (X);
-                if (m > 0.0) buf[(size_t) k] = std::conj (X) / m * ga[(size_t) f * s.bins + k];
+                const size_t i = (size_t) f * s.bins + k;
+                const double m = s.mag[i];
+                c[(size_t) k] = m > 0.0 ? std::conj (s.spec[i]) / m * ga[i] : std::complex<double> (0.0);
             }
-            fft (buf);            // sum_k c_k e^{-2 pi i k i / n}
-            for (int i = 0; i < s.n; ++i) gy[(size_t) (f * s.hop + i)] += buf[(size_t) i].real() * s.win[(size_t) i];
+        };
+        for (int f = 0; f < s.frames; f += 2)
+        {
+            const bool pair = f + 1 < s.frames;
+            coeffs (f, c1);
+            if (pair) coeffs (f + 1, c2); else std::fill (c2.begin(), c2.end(), std::complex<double> (0.0));
+            const std::complex<double> j1 (0.0, 1.0);
+            buf[0] = c1[0].real() + j1 * c2[0].real();
+            buf[(size_t) half] = c1[(size_t) half].real() + j1 * c2[(size_t) half].real();
+            for (int k = 1; k < half; ++k)
+            {
+                buf[(size_t) k] = 0.5 * c1[(size_t) k] + j1 * (0.5 * c2[(size_t) k]);
+                buf[(size_t) (n - k)] = 0.5 * std::conj (c1[(size_t) k]) + j1 * (0.5 * std::conj (c2[(size_t) k]));
+            }
+            plan.run (buf.data());
+            for (int i = 0; i < n; ++i)
+            {
+                gy[(size_t) (f * s.hop + i)] += buf[(size_t) i].real() * s.win[(size_t) i];
+                if (pair) gy[(size_t) ((f + 1) * s.hop + i)] += buf[(size_t) i].imag() * s.win[(size_t) i];
+            }
         }
     }
     // gy += g x d/dy of 10 log10 (mean (y^2 over the window) + 1e-12)
@@ -317,6 +421,17 @@ private:
             }
         }
         octaves = std::log2 (fmax / fmin);
+        // Where each bin's weights are not zero. The bands are triangles that rise in order, so the
+        // ones covering a bin are a contiguous run; outside it every weight is exactly 0, and
+        // skipping a product with 0 leaves every sum exactly as it was.
+        wLo.assign ((size_t) bins, 0); wHi.assign ((size_t) bins, 0);
+        for (int k = 0; k < bins; ++k)
+        {
+            int lo = kTransportBands, hi = 0;
+            for (int b = 0; b < kTransportBands; ++b)
+                if (W[(size_t) k * kTransportBands + b] != 0.0) { lo = std::min (lo, b); hi = b + 1; }
+            wLo[(size_t) k] = lo < hi ? lo : 0; wHi[(size_t) k] = lo < hi ? hi : 0;
+        }
     }
 
     // [frames][160]: |X|^2 @ W
@@ -330,7 +445,7 @@ private:
                 if (m2 == 0.0) continue;
                 const double* w = &W[(size_t) k * kTransportBands];
                 double* row = &p[(size_t) f * kTransportBands];
-                for (int b = 0; b < kTransportBands; ++b) row[b] += m2 * w[b];
+                for (int b = wLo[(size_t) k]; b < wHi[(size_t) k]; ++b) row[b] += m2 * w[b];
             }
         return p;
     }
@@ -362,6 +477,9 @@ private:
     Stft tStft[3];
     int envWin = 0, envHop = 0, attN = 0, attWin = 0, attHop = 0;
     std::vector<double> tEnv, tAtt, W, tBandP;
+    std::vector<int> wLo, wHi;
+    std::vector<double> tLog[3];
+    double specFloor[3] {}, tNorm[3] {};
     double floorDb = 0.0, attFloor = 0.0, octaves = 0.0;
 };
 

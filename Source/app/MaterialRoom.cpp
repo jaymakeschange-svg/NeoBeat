@@ -10,8 +10,8 @@ struct MaterialRoom::Rows final : public juce::ListBoxModel
     void paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool sel) override
     {
         if (! juce::isPositiveAndBelow (row, owner.files.size())) return;
-        if (sel) { g.setColour (nsui::C::teal().withAlpha (0.18f)); g.fillRoundedRectangle (juce::Rectangle<int> (2, 1, w - 4, h - 2).toFloat(), 4.0f); }
-        g.setColour (row == owner.current ? nsui::C::teal() : nsui::C::text());
+        if (sel || row == owner.current) { g.setColour (nsui::C::glow().withAlpha (row == owner.current ? 0.45f : 0.25f)); g.fillRoundedRectangle (juce::Rectangle<int> (2, 1, w - 4, h - 2).toFloat(), 4.0f); }
+        g.setColour (nsui::C::text());
         g.setFont (nsui::font (13.0f, row == owner.current));
         g.drawText (owner.files[row].getFileNameWithoutExtension(), 10, 0, w - 16, h, juce::Justification::centredLeft, true);
     }
@@ -29,9 +29,13 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
     rows = std::make_unique<Rows> (*this);
     list.setModel (rows.get());
     list.setRowHeight (24);
+    // on a plate of its own, as the CUT room's file list is: the default dark list hid the dark row text
+    list.setColour (juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (list);
 
-    for (auto* b : { &folderBtn, &strike, &render, &through, &prev, &next }) addAndMakeVisible (*b);
+    for (auto* b : { &folderBtn, &strike, &render, &through, &prev, &next, &fit }) addAndMakeVisible (*b);
+    addChildComponent (cancel);
+    seenGeneration = proc.fitGeneration;
     addAndMakeVisible (poolBox);
     addAndMakeVisible (mixKnob);
     addAndMakeVisible (message);
@@ -40,6 +44,10 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
     strike.setTooltip ("Hit the object. Hit it again while it is ringing and the energy adds, the way a real body behaves");
     render.setTooltip ("Strike it eight times at different strengths and put every hit in the pool - no two the same");
     through.setTooltip ("Send the chosen pool sound through this material and add the result to the pool");
+    fit.setTooltip ("Learn the object that made the chosen pool sound. Batchcut fits it four times, each a little different, "
+                    "and puts every result in the pool as its own material, the closest first. About a minute; you can keep working. "
+                    "You can also drop any audio file here to fit it");
+    cancel.setTooltip ("Stop fitting. Nothing is added from a fit that was stopped");
 
     mixKnob.setRange (0.0, 1.0, 0.01);
     mixKnob.setValue (1.0, juce::dontSendNotification);
@@ -89,6 +97,16 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
         refresh();
     };
 
+    fit.onClick = [this]
+    {
+        juce::String error;
+        if (proc.fitStartPool (poolBox.getSelectedId() - 1, error)) say (proc.lastMessage);
+        else                                                        say (error);
+        refresh();
+    };
+
+    cancel.onClick = [this] { proc.fitCancel(); say ("Stopping..."); };
+
     startTimerHz (8);
 }
 
@@ -133,12 +151,49 @@ void MaterialRoom::refresh()
     strike.setEnabled (has);
     render.setEnabled (has);
     through.setEnabled (has && ! proc.kit.pool.empty());
+    fit.setEnabled (! proc.kit.pool.empty() && ! proc.fitBusy());
+    cancel.setVisible (proc.fitBusy());
     repaint();
 }
 
 void MaterialRoom::timerCallback()
 {
     if (isShowing()) proc.materialLive.store (true);
+    if (proc.fitGeneration != seenGeneration)
+    {
+        seenGeneration = proc.fitGeneration;
+        if (! proc.fitBusy()) fitFinished();
+        refresh();
+    }
+    if (proc.fitBusy())
+    {
+        const double left = proc.fitSecondsLeft();
+        say ("Fitting " + proc.fitSource + " - " + juce::String (juce::roundToInt (100.0 * proc.fitProgress())) + "%"
+             + (left >= 0.0 ? ", about " + (left < 90.0 ? juce::String (juce::jmax (1, juce::roundToInt (left))) + " s"
+                                                        : juce::String (juce::roundToInt (left / 60.0)) + " min") + " left" : juce::String()));
+        repaint (message.getBounds().expanded (0, 4));
+    }
+}
+
+// A job ended (the processor has already put its sounds in the pool): show its materials, the
+// closest one loaded, so the next press of Strike is the new object.
+void MaterialRoom::fitFinished()
+{
+    const auto msg = proc.lastMessage;
+    if (proc.fitFolder.isDirectory())
+    {
+        openFolder (proc.fitFolder);
+        const int row = files.indexOf (proc.fitBest);
+        if (row >= 0) loadRow (row);
+    }
+    proc.lastMessage = msg;           // the fit's summary, not the "Opened" line loading it wrote
+    say (msg);
+    if (onChanged) onChanged();
+}
+
+bool MaterialRoom::isAudio (const juce::File& f) const
+{
+    return f.existsAsFile() && proc.formats.findFormatForFileExtension (f.getFileExtension()) != nullptr;
 }
 
 bool MaterialRoom::isInterestedInFileDrag (const juce::StringArray& files_)
@@ -146,7 +201,7 @@ bool MaterialRoom::isInterestedInFileDrag (const juce::StringArray& files_)
     for (const auto& f : files_)
     {
         const juce::File file (f);
-        if (file.isDirectory() || file.hasFileExtension ("json")) return true;
+        if (file.isDirectory() || file.hasFileExtension ("json") || isAudio (file)) return true;
     }
     return false;
 }
@@ -156,6 +211,15 @@ void MaterialRoom::filesDropped (const juce::StringArray& files_, int, int)
     dropping = false;
     if (files_.isEmpty()) { repaint(); return; }
     const juce::File f (files_[0]);
+    if (isAudio (f))
+    {
+        // any sound: fit it (the first, if several were dropped - one fit at a time)
+        juce::String error;
+        if (proc.fitStartFile (f, error)) say (proc.lastMessage + (files_.size() > 1 ? " (one sound at a time: the first of those dropped)" : ""));
+        else                              say (error);
+        refresh();
+        return;
+    }
     openFolder (f.isDirectory() ? f : f.getParentDirectory());
     if (! f.isDirectory())
     {
@@ -180,7 +244,10 @@ void MaterialRoom::resized()
 
     r.removeFromLeft (14);
     auto bottom = r.removeFromBottom (92);
-    message.setBounds (r.removeFromBottom (22));
+    auto line = r.removeFromBottom (22);
+    cancel.setBounds (line.removeFromRight (80).reduced (0, 1));
+    line.removeFromRight (8);
+    message.setBounds (line);
 
     auto row1 = bottom.removeFromTop (32);
     strike.setBounds (row1.removeFromLeft (120).reduced (0, 2));
@@ -193,11 +260,14 @@ void MaterialRoom::resized()
     row2.removeFromLeft (8);
     mixKnob.setBounds (row2.removeFromLeft (34));
     row2.removeFromLeft (8);
+    fit.setBounds (row2.removeFromRight (80).reduced (0, 2));
+    row2.removeFromRight (8);
     poolBox.setBounds (row2.reduced (0, 4));
 }
 
 void MaterialRoom::paint (juce::Graphics& g)
 {
+    nsui::paintPlate (g, list.getBounds().toFloat(), 8.0f);
     auto r = getLocalBounds().reduced (12);
     r.removeFromLeft (274);
     auto face = r.removeFromTop (r.getHeight() - 114).toFloat();
@@ -208,7 +278,10 @@ void MaterialRoom::paint (juce::Graphics& g)
         g.setColour (nsui::C::dim());
         g.setFont (nsui::font (14.0f));
         g.drawText ("Open a folder of material files, or drop one here",
-                    face.toNearestInt(), juce::Justification::centred, false);
+                    face.toNearestInt().translated (0, -10), juce::Justification::centred, false);
+        g.setFont (nsui::font (12.0f));
+        g.drawText ("or drop any sound to fit it into a material",
+                    face.toNearestInt().translated (0, 12), juce::Justification::centred, false);
     }
     else
     {
@@ -247,6 +320,17 @@ void MaterialRoom::paint (juce::Graphics& g)
             g.setColour (nsui::C::teal().withAlpha (0.25f + 0.65f * std::sqrt (juce::jlimit (0.0f, 1.0f, ring))));
             g.fillRect (juce::Rectangle<float> (x, plot.getBottom() - h, 1.6f, h));
         }
+    }
+
+    // the fit's progress, under the message line
+    if (proc.fitBusy())
+    {
+        const auto m = message.getBounds().toFloat();
+        const auto bar = juce::Rectangle<float> (m.getX(), m.getBottom() - 3.0f, m.getWidth(), 3.0f);
+        g.setColour (nsui::C::dim().withAlpha (0.25f));
+        g.fillRoundedRectangle (bar, 1.5f);
+        g.setColour (nsui::C::teal());
+        g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (float) juce::jlimit (0.0, 1.0, proc.fitProgress())), 1.5f);
     }
 
     if (dropping)

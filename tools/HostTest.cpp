@@ -6,6 +6,7 @@
 #include "app/Editor.h"
 #include "TestAudio.h"
 #include "neobeat/shared/NjqInstrument.h"
+#include "neobeat/shared/learner/FitJob.h"
 
 static int failures = 0;
 #define CHECK(c, ...) do { char m_[400]; std::snprintf (m_, sizeof m_, __VA_ARGS__); if (c) std::printf ("  ok:   %s\n", m_); else { std::printf ("  FAIL: %s\n", m_); ++failures; } std::fflush (stdout); } while (0)
@@ -76,10 +77,15 @@ int main (int argc, char** argv)
     // (the learner and the preset folder of this test are its own, not yours)
     const auto sharedDir = dir.getSiblingFile ("batchcut_hosttest_shared");
     sharedDir.deleteRecursively(); sharedDir.createDirectory();
+    // (and the materials it fits go to a folder of its own, not your Documents)
+    const auto materialsDir = dir.getSiblingFile ("batchcut_hosttest_materials");
+    materialsDir.deleteRecursively();
    #if JUCE_WINDOWS
     _putenv_s ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8());
+    _putenv_s ("MARBELITE_MATERIALS_DIR", materialsDir.getFullPathName().toRawUTF8());
    #else
     setenv ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8(), 1);
+    setenv ("MARBELITE_MATERIALS_DIR", materialsDir.getFullPathName().toRawUTF8(), 1);
    #endif
     std::printf ("1. test recordings\n");
     const auto field = testaudio::field (dir), loop = testaudio::loop (dir), take = testaudio::longTake (dir);
@@ -730,14 +736,133 @@ int main (int argc, char** argv)
         ed->showRoom (0); pump (*proc, 30);
     }
 
-    std::printf ("11. a long random session (seed %d)\n", seed);
+    std::printf ("11. the MATERIAL room: any sound fitted into materials\n");
+    {
+        ed->showRoom (4); pump (*proc, 100);
+        auto& room = ed->getMaterialRoom();
+        auto button = [&room] (const char* text) -> juce::Button*
+        {
+            for (auto* c : room.getChildren()) if (auto* b = dynamic_cast<juce::Button*> (c)) if (b->getButtonText() == text) return b;
+            return nullptr;
+        };
+        // a struck object at 44.1 kHz, so the fit resamples it too; short, so four fits are quick
+        const double sr44 = 44100.0;
+        std::vector<float> x ((size_t) (0.35 * sr44), 0.0f);
+        testaudio::Gen g;
+        testaudio::clank (x, (size_t) (0.02 * sr44), 0.8f, 520.0, 9.0, sr44, g);
+        const auto wav = dir.getChildFile ("struck pipe.wav"), txt = dir.getChildFile ("notes.txt");
+        testaudio::write (wav, x, x, sr44);
+        txt.replaceWithText ("not a sound");
+        CHECK (room.isInterestedInFileDrag ({ wav.getFullPathName() }) && ! room.isInterestedInFileDrag ({ txt.getFullPathName() }),
+               "the room takes an audio file as well as material files and folders, and not a text file");
+
+        const size_t pool0 = proc->kit.pool.size();
+        room.filesDropped ({ wav.getFullPathName() }, 10, 10);
+        CHECK (proc->fitBusy(), "an audio file dropped on the room starts a fit (\"%s\")", proc->lastMessage.toRawUTF8());
+        CHECK (button ("Cancel") != nullptr && button ("Cancel")->isVisible(), "Cancel shows while it runs");
+        juce::String err;
+        const bool second = proc->fitStartFile (wav, err);
+        CHECK (! second && err.isNotEmpty(), "a second fit waits its turn: \"%s\"", err.toRawUTF8());
+        bool climbs = true; double last = 0.0;
+        const double t0 = juce::Time::getMillisecondCounterHiRes();
+        while (proc->fitBusy() && juce::Time::getMillisecondCounterHiRes() - t0 < 600000.0)
+        {
+            pump (*proc, 200);
+            if (proc->fitBusy()) { const double p = proc->fitProgress(); climbs = climbs && p >= last; last = p; }
+        }
+        const double secs = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+        pump (*proc, 300);                     // the room's timer opens what was made
+        const int fits = BcProcessor::kFitsPerSound;
+        CHECK (! proc->fitBusy() && proc->kit.pool.size() == pool0 + (size_t) fits, "%d fits in %.0f s, every one in the pool (\"%s\")", fits, secs, proc->lastMessage.toRawUTF8());
+        bool named = proc->kit.pool.size() == pool0 + (size_t) fits;
+        for (int k = 0; named && k < fits; ++k) named = proc->kit.pool[pool0 + (size_t) k]->name == ("struck pipe fit " + std::to_string (k + 1));
+        CHECK (named && climbs, "named \"struck pipe fit 1\" (the closest) to \"fit %d\", and the progress only climbed", fits);
+
+        // learner-format materials, ranked, each holding exactly the sound that went into the pool
+        const auto folder = proc->fitFolder;
+        CHECK (folder.isDirectory() && folder.isAChildOf (materialsDir) && folder.findChildFiles (juce::File::findFiles, false, "*.json").size() == fits,
+               "%d material files in %s", fits, folder.getFileName().toRawUTF8());
+        static const char* keys[] = { "f", "a", "rho", "delta", "beta", "eps", "glide", "tau_g", "b1", "b3", "C", "gamma", "tau_c", "G", "tau_a",
+                                      "cx_amt", "cx_t", "cx_f", "lb_m", "lb_rate", "lb_f", "tau_n", "noise", "dn", "dn_rho" };
+        bool allKeys = true, ranked = true, loads = true, sameSound = true;
+        double prevLoss = -1.0, worst = 0.0;
+        for (int k = 0; k < fits; ++k)
+        {
+            const auto file = folder.getChildFile ("struck pipe fit " + juce::String (k + 1) + ".json");
+            const auto j = juce::JSON::parse (file);
+            auto* params = j.getProperty ("params", {}).getDynamicObject();
+            if (params == nullptr) { allKeys = false; continue; }
+            for (auto* key : keys) allKeys = allKeys && params->hasProperty (key);
+            const double loss = j.getProperty ("loss", -1.0);
+            const auto info = j.getProperty ("info", {});
+            ranked = ranked && loss >= prevLoss && (int) info.getProperty ("fit", 0) == k + 1 && (int) info.getProperty ("of", 0) == fits
+                     && info.getProperty ("made_by", "").toString().startsWith ("Batchcut");
+            prevLoss = loss;
+            nsr::Material m; juce::String e;
+            loads = loads && m.load (file, e) && m.numModes == params->getProperty ("f").size();
+            // the file's numbers, struck again, are the pool's sound
+            auto vec = [params] (const char* key) { std::vector<double> v; if (auto* a = params->getProperty (key).getArray()) for (const auto& q : *a) v.push_back ((double) q); return v; };
+            auto one = [params] (const char* key) { return (double) params->getProperty (key); };
+            ml::Body b;
+            b.f = vec ("f"); b.a = vec ("a"); b.rho = vec ("rho"); b.delta = vec ("delta"); b.beta = vec ("beta"); b.eps = vec ("eps"); b.glide = vec ("glide"); b.tau_g = vec ("tau_g");
+            b.b1 = one ("b1"); b.b3 = one ("b3"); b.C = one ("C"); b.gamma = one ("gamma"); b.tau_c = one ("tau_c"); b.G = one ("G"); b.tau_a = one ("tau_a");
+            b.cx_amt = one ("cx_amt"); b.cx_t = one ("cx_t"); b.cx_f = one ("cx_f"); b.lb_m = one ("lb_m"); b.lb_rate = one ("lb_rate"); b.lb_f = one ("lb_f"); b.tau_n = one ("tau_n");
+            const auto nz = vec ("noise"), dn = vec ("dn"), dr = vec ("dn_rho");
+            for (int q = 0; q < ml::kBands && q < (int) nz.size() && q < (int) dn.size() && q < (int) dr.size(); ++q) { b.noise[(size_t) q] = nz[(size_t) q]; b.dn[(size_t) q] = dn[(size_t) q]; b.dn_rho[(size_t) q] = dr[(size_t) q]; }
+            const auto y = ml::renderStrike (b, std::min (6.0, ml::ringSeconds (b) + 0.1));
+            const auto& pl = proc->kit.pool[pool0 + (size_t) k]->l;
+            float pk = 0.0f; for (float v : y) pk = std::max (pk, std::fabs (v));
+            if (y.size() != pl.size() || pk <= 0.0f) { sameSound = false; continue; }
+            for (size_t i = 0; i < y.size(); ++i) worst = std::max (worst, (double) std::fabs (y[i] / pk * 0.89f - pl[i]));
+        }
+        sameSound = sameSound && worst < 1e-5;
+        CHECK (allKeys && ranked, "each file has every parameter of the learner's engine, its rank and where it came from, closest first");
+        CHECK (loads && sameSound, "the room reads them, and each file struck again is its pool sound (largest difference %.1e)", worst);
+        CHECK (proc->material.valid() && proc->material.name == "struck pipe fit 1", "the room opened them with the closest loaded (%s)", proc->material.name.toRawUTF8());
+
+        // the buttons that were there before work on a fitted material as on any other
+        juce::String e2;
+        const size_t pool1 = proc->kit.pool.size();
+        const int n8 = proc->materialRender (8, e2);
+        CHECK (n8 == 8 && proc->kit.pool.size() == pool1 + 8, "Render 8 hits: eight more in the pool");
+        pump (*proc, 100);
+
+        // Fit on a pool sound, then Cancel, both by their buttons
+        auto* fitBtn = button ("Fit");
+        CHECK (fitBtn != nullptr && fitBtn->isEnabled(), "Fit is there for a pool sound");
+        const size_t pool2 = proc->kit.pool.size();
+        if (fitBtn != nullptr && fitBtn->onClick) fitBtn->onClick();
+        const bool started = proc->fitBusy();
+        pump (*proc, 1500);
+        if (auto* c = button ("Cancel")) if (c->onClick) c->onClick();
+        const double tc = juce::Time::getMillisecondCounterHiRes();
+        while (proc->fitBusy() && juce::Time::getMillisecondCounterHiRes() - tc < 10000.0) pump (*proc, 20);
+        const double stopMs = juce::Time::getMillisecondCounterHiRes() - tc;
+        CHECK (started && ! proc->fitBusy() && proc->kit.pool.size() == pool2 && proc->lastMessage.contains ("cancelled"),
+               "Fit on the chosen pool sound starts, Cancel stops it in %.0f ms and adds nothing", stopMs);
+
+        // the editor closed while a fit runs: the processor still collects it
+        const bool again = proc->fitStartFile (wav, err);
+        CHECK (again, "a fit started again");
+        ed.reset();
+        const double t1 = juce::Time::getMillisecondCounterHiRes();
+        while (proc->fitBusy() && juce::Time::getMillisecondCounterHiRes() - t1 < 600000.0) pump (*proc, 200);
+        CHECK (proc->kit.pool.size() == pool2 + (size_t) fits && proc->fitFolder != folder && proc->fitFolder.isDirectory(),
+               "with the editor closed it still lands in the pool, in a folder of its own (\"%s\")", proc->fitFolder.getFileName().toRawUTF8());
+        ed.reset (dynamic_cast<BcEditor*> (proc->createEditor()));
+        ed->setSize (1280, 800);
+        pump (*proc, 100);
+        ed->showRoom (0); pump (*proc, 30);
+    }
+
+    std::printf ("12. a long random session (seed %d)\n", seed);
     {
         juce::Random r (seed);
         int actions = 0;
         for (int it = 0; it < 700; ++it)
         {
             auto& w = ed->getView();   // the editor may have been closed and opened again
-            const int a = r.nextInt (39);
+            const int a = r.nextInt (40);
             auto rp = [&] (juce::Component& c) { return juce::Point<float> (r.nextFloat() * (float) c.getWidth(), r.nextFloat() * (float) c.getHeight()); };
             const auto mods = r.nextInt (4) == 0 ? juce::ModifierKeys::shiftModifier : r.nextInt (5) == 0 ? juce::ModifierKeys::altModifier : 0;
             auto& sp = ed->getSpec();
@@ -821,7 +946,17 @@ int main (int argc, char** argv)
                                    if (r.nextBool()) mb.addEvent (juce::MidiMessage::noteOff (1, 48 + r.nextInt (40)), 511); proc->processBlock (buf, mb); break; }
                     }
                     break;
-                case 37: ed->showRoom (r.nextInt (4)); break;
+                case 37: ed->showRoom (r.nextInt (5)); break;
+                case 39:            // the MATERIAL room: fits started and stopped, strikes and renders
+                    switch (r.nextInt (5))
+                    {
+                        case 0: ed->showRoom (4); break;
+                        case 1: { juce::String e; if (! proc->fitBusy() && ! proc->kit.pool.empty() && r.nextInt (3) == 0) proc->fitStartPool (r.nextInt ((int) proc->kit.pool.size()), e); break; }
+                        case 2: proc->fitCancel(); break;
+                        case 3: { juce::String e; if (proc->material.valid()) proc->materialRender (1 + r.nextInt (2), e); break; }
+                        default: proc->materialPending.store (0.3f + 0.6f * r.nextFloat()); break;
+                    }
+                    break;
                 case 38:
                     switch (r.nextInt (6))
                     {
@@ -855,7 +990,7 @@ int main (int argc, char** argv)
     ed.reset();
     proc->releaseResources();
     proc.reset();
-    dir.deleteRecursively(); sharedDir.deleteRecursively();
+    dir.deleteRecursively(); sharedDir.deleteRecursively(); materialsDir.deleteRecursively();
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
 }

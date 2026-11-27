@@ -83,6 +83,102 @@ struct BodyTrace
     std::vector<double> sigma, gain, low;
 };
 
+// The phasors of every mode's pair of partials, stepped through one control frame at a time.
+//
+// A mode's frequency is a straight line across a control frame (interpolated between the frame's
+// two values), so its phase step grows by the same amount each sample, and e^{i phase} can be turned
+// by complex multiplication instead of computed with sin and cos: the step is itself a phasor,
+// turned by a fixed rotation each sample. Two sin per mode per sample were most of a render and of
+// the gradient pass; this costs a handful of sin per mode per frame. The phases are still summed
+// sample by sample exactly as the learner sums them (a cumsum), and each phasor is taken afresh from
+// that sum at the start of every frame, so the rotations' rounding never runs longer than 64 samples
+// (tools/test_learner.cpp holds the render and the gradient to the learner's, as before).
+struct PairPhasors
+{
+    int k = 0;
+    std::vector<double> ph1, ph2;                      // the running phase sums
+    std::vector<double> z1r, z1i, z2r, z2i;            // e^{i phase} this sample
+    std::vector<double> r1r, r1i, r2r, r2i;            // e^{i step} of the next sample
+    std::vector<double> qr, qi;                        // how far the step turns each sample
+
+    PairPhasors (const double* phases, int modes)
+        : k (modes), ph1 (phases, phases + modes), ph2 (phases + modes, phases + 2 * modes),
+          z1r ((size_t) modes), z1i ((size_t) modes), z2r ((size_t) modes), z2i ((size_t) modes),
+          r1r ((size_t) modes), r1i ((size_t) modes), r2r ((size_t) modes), r2i ((size_t) modes),
+          qr ((size_t) modes), qi ((size_t) modes) {}
+
+    // The first sample of a frame (fr = 0). F0, F1: each mode's frequency at this frame and the next.
+    void begin (const double* F0, const double* F1, const double* delta, double w)
+    {
+        constexpr double fr = 1.0 / kHop;
+        for (int m = 0; m < k; ++m)
+        {
+            const double half = 0.5 * delta[m];
+            const double f0 = F0[m] * (1 - 0.0) + F1[m] * 0.0;      // the learner's interpolation at fr = 0
+            ph1[(size_t) m] += w * (f0 - half);
+            ph2[(size_t) m] += w * (f0 + half);
+            z1r[(size_t) m] = std::cos (ph1[(size_t) m]); z1i[(size_t) m] = std::sin (ph1[(size_t) m]);
+            z2r[(size_t) m] = std::cos (ph2[(size_t) m]); z2i[(size_t) m] = std::sin (ph2[(size_t) m]);
+            const double f1 = F0[m] * (1 - fr) + F1[m] * fr;
+            r1r[(size_t) m] = std::cos (w * (f1 - half)); r1i[(size_t) m] = std::sin (w * (f1 - half));
+            r2r[(size_t) m] = std::cos (w * (f1 + half)); r2i[(size_t) m] = std::sin (w * (f1 + half));
+            const double dq = w * (F1[m] - F0[m]) * fr;
+            qr[(size_t) m] = std::cos (dq); qi[(size_t) m] = std::sin (dq);
+        }
+    }
+
+    // Each later sample of the frame (fr = j / kHop, j >= 1): the sums as the learner makes them,
+    // the phasors turned by one step and the steps by one rotation. One plain loop over the modes,
+    // so the compiler can run several modes at once.
+    void advance (const double* F0, const double* F1, double fr, const double* delta, double w) noexcept
+    {
+        double* P1 = ph1.data(); double* P2 = ph2.data();
+        double* Z1r = z1r.data(); double* Z1i = z1i.data(); double* Z2r = z2r.data(); double* Z2i = z2i.data();
+        double* R1r = r1r.data(); double* R1i = r1i.data(); double* R2r = r2r.data(); double* R2i = r2i.data();
+        const double* Qr = qr.data(); const double* Qi = qi.data();
+        for (int i = 0; i < k; ++i)
+        {
+            const double f = F0[i] * (1 - fr) + F1[i] * fr, half = 0.5 * delta[i];
+            P1[i] += w * (f - half);
+            P2[i] += w * (f + half);
+            const double a1 = Z1r[i] * R1r[i] - Z1i[i] * R1i[i], b1 = Z1r[i] * R1i[i] + Z1i[i] * R1r[i];
+            const double a2 = Z2r[i] * R2r[i] - Z2i[i] * R2i[i], b2 = Z2r[i] * R2i[i] + Z2i[i] * R2r[i];
+            const double c1 = R1r[i] * Qr[i] - R1i[i] * Qi[i], d1 = R1r[i] * Qi[i] + R1i[i] * Qr[i];
+            const double c2 = R2r[i] * Qr[i] - R2i[i] * Qi[i], d2 = R2r[i] * Qi[i] + R2i[i] * Qr[i];
+            Z1r[i] = a1; Z1i[i] = b1; Z2r[i] = a2; Z2i[i] = b2;
+            R1r[i] = c1; R1i[i] = d1; R2r[i] = c2; R2i[i] = d2;
+        }
+    }
+};
+
+// The dense layer's decay in each band, exp (-sigB t - cxB held (t)), sample by sample. The decay
+// part is a running product, taken afresh from exp at the start of each control frame (so its
+// rounding never runs past 64 samples, as with the phasors); the contact part is 1 to double
+// precision until the contact has begun, and only then costs an exp per band. Sixteen exp per
+// sample, in the render and again in the gradient pass, were most of what was left of a render's
+// time once the modes were cheap.
+struct BandDecay
+{
+    std::array<double, kBands> e {}, r {};
+    double cxMax = 0.0;
+
+    void setup (const std::array<double, kBands>& sigB, const std::array<double, kBands>& cxB, double fs)
+    {
+        cxMax = 0.0;
+        for (int b = 0; b < kBands; ++b) { r[(size_t) b] = std::exp (-sigB[(size_t) b] / fs); cxMax = std::max (cxMax, cxB[(size_t) b]); }
+    }
+    // to sample s (t = s / fs); `frameStart` at the first sample of each control frame
+    void step (bool frameStart, double t, const std::array<double, kBands>& sigB) noexcept
+    {
+        for (int b = 0; b < kBands; ++b)
+            e[(size_t) b] = frameStart ? std::exp (-sigB[(size_t) b] * t) : e[(size_t) b] * r[(size_t) b];
+    }
+    // exp (-cxB held) is exactly 1 in double once cxB held < 2^-54; below 1e-17 that holds for every band
+    bool contact (double held) const noexcept { return cxMax * held > 1e-17; }
+    double env (int b, double cxB, double held, bool inContact) const noexcept
+    { return inContact ? e[(size_t) b] * std::exp (-cxB * held) : e[(size_t) b]; }
+};
+
 template <typename Out>
 inline void render (const Body& p, int n, double fs, const float* bands, const float* body,
                     const double* phases, Out* out, BodyTrace* tr = nullptr)
@@ -150,8 +246,7 @@ inline void render (const Body& p, int n, double fs, const float* bands, const f
     }
 
     // ---- sample rate
-    std::vector<double> ph1 ((size_t) k), ph2 ((size_t) k);
-    for (int m = 0; m < k; ++m) { ph1[(size_t) m] = phases[m]; ph2[(size_t) m] = phases[k + m]; }
+    PairPhasors z (phases, k);
     const auto centres = bandCentres (fs);
     std::array<double, kBands> sigB {}, cxB {};
     for (int b = 0; b < kBands; ++b)
@@ -160,33 +255,36 @@ inline void render (const Body& p, int n, double fs, const float* bands, const f
         sigB[(size_t) b] = (p.b1 + p.b3 * cb * cb) * std::exp (p.dn_rho[(size_t) b]);
         cxB[(size_t) b] = p.cx_amt * sigmoid ((p.cx_f - centres[(size_t) b]) / (0.25 * p.cx_f));
     }
+    BandDecay dec;
+    dec.setup (sigB, cxB, fs);
     const double w = kTwoPi / fs;
     for (int s = 0; s < n; ++s)
     {
-        const double pos = (double) s / kHop;
-        const int i0 = (int) std::floor (pos);
-        const double fr = pos - i0;
+        const int i0 = s / kHop, j = s - i0 * kHop;
+        const double fr = (double) j / kHop;
+        const double* A0 = &amp[(size_t) i0 * k];
+        const double* A1 = A0 + k;
+        const double* F0 = &fpath[(size_t) i0 * k];
+        const double* F1 = F0 + k;
+        if (j == 0) z.begin (F0, F1, p.delta.data(), w);
+        else        z.advance (F0, F1, fr, p.delta.data(), w);
         double y = 0.0;
+        const double* beta = p.beta.data();
+        const double* s1 = z.z1i.data();
+        const double* s2 = z.z2i.data();
         for (int m = 0; m < k; ++m)
-        {
-            const size_t a0 = (size_t) i0 * k + m, a1 = a0 + (size_t) k;
-            const double as = amp[a0] * (1 - fr) + amp[a1] * fr;
-            const double fs_ = fpath[a0] * (1 - fr) + fpath[a1] * fr;
-            const double half = 0.5 * p.delta[(size_t) m];
-            ph1[(size_t) m] += w * (fs_ - half);          // cumsum: this sample's increment included
-            ph2[(size_t) m] += w * (fs_ + half);
-            const double be = p.beta[(size_t) m];
-            y += as * ((1 - be) * std::sin (ph1[(size_t) m]) + be * std::sin (ph2[(size_t) m]));
-        }
+            y += (A0[m] * (1 - fr) + A1[m] * fr) * ((1 - beta[m]) * s1[m] + beta[m] * s2[m]);
         const double t = s / fs;
         const double envN = (1.0 - std::exp (-t / 0.0002)) * std::exp (-t / p.tau_n);
         double click = 0.0, bodyS = 0.0;
         const double held = softplus ((t - p.cx_t) / 0.004) * 0.004;
         const double att = 1.0 - std::exp (-t / 0.0003);
+        dec.step (j == 0, t, sigB);
+        const bool touching = dec.contact (held);
         for (int b = 0; b < kBands; ++b)
         {
             click += p.noise[(size_t) b] * bands[(size_t) b * n + s];
-            const double envB = std::exp (-sigB[(size_t) b] * t - cxB[(size_t) b] * held) * att;
+            const double envB = dec.env (b, cxB[(size_t) b], held, touching) * att;
             bodyS += p.dn[(size_t) b] * envB * body[(size_t) b * n + s];
         }
         out[s] = (Out) (y + click * envN + bodyS);

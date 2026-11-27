@@ -31,10 +31,14 @@ int main (int argc, char** argv)
     // (the learner and settings of the snapshots are their own)
     const auto sharedDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("batchcut_snapshots_shared");
     sharedDir.deleteRecursively(); sharedDir.createDirectory();
+    const auto materialsDir = sharedDir.getSiblingFile ("batchcut_snapshots_materials");
+    materialsDir.deleteRecursively();
    #if JUCE_WINDOWS
     _putenv_s ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8());
+    _putenv_s ("MARBELITE_MATERIALS_DIR", materialsDir.getFullPathName().toRawUTF8());
    #else
     setenv ("MARBELITE_SHARED_DIR", sharedDir.getFullPathName().toRawUTF8(), 1);
+    setenv ("MARBELITE_MATERIALS_DIR", materialsDir.getFullPathName().toRawUTF8(), 1);
    #endif
     juce::ScopedJuceInitialiser_GUI init;
     const juce::File outDir (juce::File::getCurrentWorkingDirectory().getChildFile (argc > 1 ? argv[1] : "shots"));
@@ -184,8 +188,26 @@ int main (int argc, char** argv)
     pump (*proc, 120);
     shot (*ed, outDir, "17_folders");
 
+    // MATERIAL: empty, a sound being fitted, and the fits done with the closest loaded
+    ed->getInspector().show (0);
+    ed->showRoom (4); pump (*proc, 150);
+    shot (*ed, outDir, "18_material_empty");
+    {
+        std::vector<float> x ((size_t) (0.35 * 44100), 0.0f);
+        testaudio::Gen g;
+        testaudio::clank (x, (size_t) (0.02 * 44100), 0.8f, 520.0, 9.0, 44100.0, g);
+        const auto wav = dir.getChildFile ("struck pipe.wav");
+        testaudio::write (wav, x, x, 44100.0);
+        ed->getMaterialRoom().filesDropped ({ wav.getFullPathName() }, 10, 10);
+        pump (*proc, 2500);
+        shot (*ed, outDir, "19_material_fitting");
+        for (int i = 0; i < 3000 && proc->fitBusy(); ++i) pump (*proc, 100);
+        pump (*proc, 400);
+        shot (*ed, outDir, "20_material_fitted");
+    }
+
     ed.reset();
     proc.reset();
-    dir.deleteRecursively();
+    dir.deleteRecursively(); materialsDir.deleteRecursively();
     return 0;
 }

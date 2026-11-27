@@ -20,10 +20,18 @@ done
 for t in start fitted; do python3 -I grad_u64.py PKG_DIR OUTDIR $t; done                # stage 5b
 python3 -I -c "import numpy as np; d=np.load('OUTDIR/fit.npz'); open('OUTDIR/fit_history.txt','w').write(' '.join(repr(float(v)) for v in d['history']))"
 AS_PORT=1 STEPS=6 python3 -I fit64.py PKG_DIR OUTDIR                                  # stage 6a
-g++ -std=c++17 -O2 -o test_learner ../test_learner.cpp && ./test_learner OUTDIR
+g++ -std=c++17 -O2 -pthread -o test_learner ../test_learner.cpp && ./test_learner OUTDIR
 LEARNER_FIT=1 ./test_learner OUTDIR                     # stage 6b: one whole fit, minutes
 TEST=./test_learner REF=REFDIR ./spread.sh CLIP 3       # one whole fit, nudged by 1e-7 (index 3)
+./test_learner OUTDIR CLIP.wav                          # stage 7a: the clip cut as the learner cuts it, its noise floor, any rate
+LEARNER_JOB=1 ./test_learner OUTDIR CLIP.wav            # and a whole job: two fits side by side, Cancel, a silent clip
+LEARNER_JOB=1 LEARNER_WRITE=fit.json ./test_learner OUTDIR CLIP.wav     # a fit written as Batchcut writes it,
+python3 -I ref1.py PKG_DIR CLIP.wav TARGET.json fit.json fit_ref.npz      # then opened and scored by the learner
 ```
+
+On a fresh container the reference for one clip takes a few minutes (`golden.py` runs a whole fit in the learner).
+With JAX 0.12.1 the learner's own refits landed at PVC 0.665, tin can 1.468, tube clank 2.503 rather than the
+recorded losses: a different JAX build rounds differently, and the fit is path-dependent (below).
 
 Precision. The learner runs in single precision; the port runs in double. Where that matters the
 checks compare against the learner run in double precision (`render64.py` swaps `jnp.float32` for

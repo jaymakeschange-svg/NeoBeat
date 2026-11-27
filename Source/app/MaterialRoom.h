@@ -9,6 +9,11 @@
 //   3. send sound through it   any pool sound, heard in that material
 //
 // and one button that puts what you made into the pool, where the rest of Batchcut can reach it.
+//
+// And a way in for any sound: drop an audio file here, or press Fit with a pool sound chosen, and
+// Batchcut learns the object that made it - the learner's own fit, four times side by side. Every
+// fit becomes a material in its own file and a sound in the pool, closest first, and the room opens
+// them when they are done.
 
 #include "Ui.h"
 #include "Processor.h"
@@ -37,6 +42,8 @@ private:
     void openFolder (const juce::File& dir);
     void loadRow (int row);
     void say (const juce::String& s);
+    bool isAudio (const juce::File& f) const;
+    void fitFinished();
 
     BcProcessor& proc;
     std::function<void()> onChanged;
@@ -48,6 +55,8 @@ private:
 
     bcui::Pill folderBtn { "Folder..." }, strike { "Strike" }, render { "Render 8 hits to pool" };
     bcui::Pill through { "Send through" }, prev { "<" }, next { ">" };
+    bcui::Pill fit { "Fit" }, cancel { "Cancel" };
+    int seenGeneration = 0;
     juce::ListBox list { "materials", nullptr };
     juce::ComboBox poolBox;
     juce::Slider mixKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
