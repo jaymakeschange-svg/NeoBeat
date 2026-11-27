@@ -10,6 +10,7 @@
 #include "../Source/neobeat/shared/learner/Fit2.h"
 #include "../Source/neobeat/shared/learner/FitJob.h"
 #include "../Source/neobeat/shared/learner/MaterialFile.h"
+#include "../Source/neobeat/shared/learner/Breed.h"
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -580,6 +581,190 @@ static void stage7a (const std::string& g, const std::string& wav)
     }
 }
 
+// ------------------------------------------------------------------ stage 7b: breeding
+
+// the strongest frequency in a stretch of sound (Hann, zero-padded FFT, parabolic peak)
+static double peakHz (const std::vector<float>& x, int from, int len, double fs)
+{
+    int N = 1; while (N < 4 * len) N <<= 1;
+    std::vector<std::complex<double>> b ((size_t) N);
+    for (int i = 0; i < len && from + i < (int) x.size(); ++i) b[(size_t) i] = x[(size_t) (from + i)] * (0.5 - 0.5 * std::cos (2.0 * ml::an::kPi * i / len));
+    ml::fftPlan (N).run (b.data());
+    int k = 1; for (int i = 1; i < N / 2; ++i) if (std::abs (b[(size_t) i]) > std::abs (b[(size_t) k])) k = i;
+    const double a = std::abs (b[(size_t) k - 1]), c = std::abs (b[(size_t) k]), d = std::abs (b[(size_t) k + 1]);
+    return (k + 0.5 * (a - d) / (a - 2 * c + d)) * fs / N;
+}
+
+static void stage7b (const std::string& g, const std::string& other)
+{
+    using namespace ml;
+    const Body pvc = readBody (g + "/fitted/body.txt"), can = readBody (other + "/fitted/body.txt");
+    const auto xf = readRaw<float> (g + "/x.f32");
+    std::ifstream mf (g + "/meta.json"); std::string meta ((std::istreambuf_iterator<char> (mf)), {});
+    Clip target; target.x = xf; target.noiseFloor = std::atof (meta.substr (meta.find ("\"noise_floor_db\":") + 17).c_str());
+
+    // the larger moves do what they say, on the numbers themselves
+    {
+        Params u = unconstrained (pvc), t = u;
+        applyMove (t, Move::Transpose, 5.0 / 12.0);
+        const Body b = physical (t);
+        double worst = 0; for (int m = 0; m < pvc.modes(); ++m) worst = std::max (worst, std::fabs (b.f[(size_t) m] / pvc.f[(size_t) m] / std::pow (2.0, 5.0 / 12.0) - 1.0));
+        Params s2 = u; applyMove (s2, Move::Stretch, 0.4);            // spread +10%
+        const Body bs = physical (s2);
+        double lo = 1e300; int top = 0; for (int m = 0; m < pvc.modes(); ++m) { lo = std::min (lo, pvc.f[(size_t) m]); if (pvc.f[(size_t) m] > pvc.f[(size_t) top]) top = m; }
+        const double spread = std::log (bs.f[(size_t) top] / lo) / std::log (pvc.f[(size_t) top] / lo);
+        Params r2 = u; applyMove (r2, Move::Ring, 0.5);
+        CHECK (worst < 1e-12 && std::fabs (spread - 1.1) < 1e-9 && physical (r2).b1 < pvc.b1,
+               "transpose +5 st moves every mode by 2^(5/12) (to %.0e), a 10%% spread is 10%% (%.6f), rings longer lowers the damping", worst, spread);
+    }
+
+    // REACH: how far children go. 24 body children of the PVC pipe at three settings, each measured
+    // against the parent's own strike with the learner's loss
+    {
+        Clip parentClip; parentClip.x = renderStrike (pvc, 0.78, kShowSeed + 7);
+        parentClip.noiseFloor = noiseFloorDb (parentClip.x.data(), (int) parentClip.x.size(), kFitRate);
+        const Scorer sp (parentClip);
+        double means[3] = {}; int playable = 0, made = 0;
+        const double reaches[3] = { 0.1, 0.5, 1.0 };
+        std::vector<const Source*> bodies; Source ps; ps.isBody = true; ps.body = pvc; ps.name = "pvc"; bodies.push_back (&ps);
+        for (int k = 0; k < 3; ++k)
+        {
+            for (int i = 0; i < 24; ++i)
+            {
+                Child c; ++made;
+                if (! makeChild (ChildKind::Body, bodies, {}, reaches[k], childSeed (7, k, i), c)) continue;
+                ++playable;
+                means[k] += sp.body (c.body, 1) / 24.0;
+            }
+        }
+        const double self = sp.body (pvc, 1);
+        std::printf ("  body children of this clip's material, distance from it (the parent itself: %.3f): REACH 0.1 %.3f, 0.5 %.3f, 1.0 %.3f; %d of %d playable\n",
+                     self, means[0], means[1], means[2], playable, made);
+        CHECK (playable == made && means[0] < means[1] && means[1] < means[2], "every body child plays, and the further the REACH the further they go");
+    }
+
+    // a cross takes the modes below its split from one parent and above it from the other
+    {
+        BreedRandom r (3); std::string how; double split = 0;
+        const Body c = crossBodies (pvc, can, 0.5, r, how, &split);
+        // (to 1e-12: a frequency goes through log and exp on its way through the unconstrained numbers)
+        auto has = [] (const Body& p, double f) { for (double q : p.f) if (std::fabs (q / f - 1.0) < 1e-12) return true; return false; };
+        bool right = c.modes() > 0;
+        int below = 0;
+        for (double f : c.f) { right = right && (f < split ? has (pvc, f) : has (can, f)); below += f < split ? 1 : 0; }
+        std::printf ("  this clip's material x the other's, %s: %d modes below from the one, %d above from the other\n", how.c_str(), below, c.modes() - below);
+        CHECK (right && below > 0 && below < c.modes(), "a cross: every mode below the split from one parent, every one above from the other");
+    }
+
+    // the time stretch keeps the pitch
+    {
+        std::vector<float> tone (48000);
+        for (int i = 0; i < 48000; ++i) { const double t = i / 48000.0; tone[(size_t) i] = (float) (std::exp (-2.0 * t) * (0.6 * std::sin (2 * ml::an::kPi * 440 * t) + 0.3 * std::sin (2 * ml::an::kPi * 1320 * t))); }
+        bool ok = true; std::string say;
+        for (double f : { 2.0, 0.5 })
+        {
+            const auto y = stretchKeepPitch (tone, f);
+            const double hz = peakHz (y, (int) (0.1 * y.size()), 8192, 48000.0);
+            const double lvl = 20.0 * std::log10 (rmsOf (y.data(), (int) y.size() / 4) / rmsOf (tone.data(), (int) tone.size() / 4));
+            char b[120]; std::snprintf (b, sizeof b, " %.1fx: %.3f s long, strongest %.1f Hz, level %+.1f dB;", f, y.size() / 48000.0, hz, lvl); say += b;
+            ok = ok && std::fabs (y.size() / 48000.0 - f) < 0.01 * f && std::fabs (hz - 440.0) < 2.0 && std::fabs (lvl) < 1.5;
+        }
+        std::printf ("  a 440 Hz tone stretched%s\n", say.c_str());
+        CHECK (ok, "stretched to twice and half its length, a tone keeps its pitch and its level");
+    }
+
+    // sound through a material rings at the material's modes
+    {
+        std::vector<float> burst (4800, 0.0f); NumpyRandom r (5);
+        for (int i = 0; i < 480; ++i) burst[(size_t) i] = (float) (r.uniform() - 0.5);
+        const auto y = throughBody (burst, pvc);
+        // a 1 s window: the low pairs of a long body (the tube's) sit about 3 Hz apart
+        const double hz = peakHz (y, 4800, std::min (48000, (int) y.size() - 4800), kFitRate);
+        // each mode rings as its pair, half its beating either side of its frequency
+        double nearest = 1e9;
+        for (int m = 0; m < pvc.modes(); ++m) for (double side : { -0.5, 0.5 }) nearest = std::min (nearest, std::fabs ((pvc.f[(size_t) m] + side * pvc.delta[(size_t) m]) / hz - 1.0));
+        std::printf ("  a noise burst through this clip's material rings at %.1f Hz, %.2f%% from one of its modes' pairs\n", hz, 100.0 * nearest);
+        CHECK (nearest < 0.01 || nearest * hz < 1.0, "Through: a burst rings at the material's own modes (within 1%% or 1 Hz)");
+    }
+
+    // a Wander generation: from the pipe and the clip, eight children, closest first; the same children
+    // on one thread or two
+    {
+        BreedRequest q; q.mode = BreedRequest::Wander; q.reach = 0.4; q.seed = 11; q.hasTarget = true; q.target = target;
+        Source a; a.name = "pvc"; a.isBody = true; a.body = pvc; strikeOf (pvc, 3, a.sound);
+        Source b; b.name = "clip"; b.sound = target.x;
+        q.parents = { a, b };
+        std::vector<Child> runs[2]; double secs[2] = {};
+        for (int t = 0; t < 2; ++t)
+        {
+            q.threads = t + 1;
+            const auto t0 = std::chrono::steady_clock::now();
+            BreedJob job (q);
+            while (! job.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (10));
+            secs[t] = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+            runs[t] = job.results();
+        }
+        bool sorted = true, same = runs[0].size() == runs[1].size(), finite = true;
+        int kinds[4] = {};
+        for (size_t i = 0; i < runs[0].size(); ++i)
+        {
+            const auto& c = runs[0][i];
+            if (i > 0) sorted = sorted && c.loss >= runs[0][i - 1].loss;
+            finite = finite && std::isfinite (c.loss) && ! c.sound.empty();
+            ++kinds[(int) c.kind];
+            if (same) same = c.loss == runs[1][i].loss && c.sound == runs[1][i].sound;
+            std::printf ("    %-7s %.3f  %s\n", kindName (c.kind), c.loss, c.how.c_str());
+        }
+        std::printf ("  one generation: %zu children in %.1f s on one thread, %.1f s on two (body %d, file %d, through %d)\n",
+                     runs[0].size(), secs[0], secs[1], kinds[0], kinds[2], kinds[3]);
+        CHECK (runs[0].size() == 8 && kinds[0] == 5 && kinds[2] == 2 && kinds[3] == 1 && finite && sorted,
+               "Wander from a material and a sound: five body children, two file, one through, closest first");
+        CHECK (same, "the same children on one thread or two, to the last sample");
+        // two materials kept: half the generation are crosses
+        Source c2; c2.name = "can"; c2.isBody = true; c2.body = can; strikeOf (can, 4, c2.sound);
+        q.parents = { a, c2, b }; q.threads = 2;
+        BreedJob j2 (q);
+        while (! j2.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        int crosses = 0; for (const auto& c : j2.results()) crosses += c.kind == ChildKind::Cross ? 1 : 0;
+        CHECK (j2.results().size() == 8 && crosses == 4, "two materials kept: four of the eight are crosses (%d)", crosses);
+    }
+
+    // Grow: generations on their own toward the clip, from somewhere else - the tin can - as Petri's
+    // takes climb toward a pinned sound (from the PVC pipe's own fit there is little left to climb)
+    {
+        BreedRequest q; q.mode = BreedRequest::Grow; q.reach = 0.4; q.seed = 5; q.hasTarget = true; q.target = target;
+        q.generations = std::getenv ("LEARNER_GROW_GENS") ? std::atoi (std::getenv ("LEARNER_GROW_GENS")) : 12;
+        q.polishSteps = std::getenv ("LEARNER_GROW_POLISH") ? std::atoi (std::getenv ("LEARNER_GROW_POLISH")) : 5;
+        q.threads = 2;
+        Source a; a.name = std::getenv ("LEARNER_GROW_FROM_SELF") ? "clip's own material" : "other clip's material"; a.isBody = true; a.body = std::getenv ("LEARNER_GROW_FROM_SELF") ? pvc : can;
+        q.parents = { a };
+        const Scorer sc (target);
+        const double parentShown = sc.body (a.body, 1);
+        const auto t0 = std::chrono::steady_clock::now();
+        BreedJob job (q);
+        double last = 0.0; bool climbs = true;
+        while (! job.finished()) { const double p = job.progress(); climbs = climbs && p >= last; last = p; std::this_thread::sleep_for (std::chrono::milliseconds (20)); }
+        const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+        const auto h = job.history();
+        const auto r = job.results();
+        bool down = ! h.empty(); for (size_t i = 1; i < h.size(); ++i) down = down && h[i] <= h[i - 1];
+        std::printf ("  Grow from the %s, %d generations (%d fit steps each child) on 2 threads in %.0f s: closest on the choosing draw %.3f to %.3f; on the showing draw the parent %.3f, the closest grown %.3f\n",
+                     a.name.c_str(), q.generations, q.polishSteps, secs, h.empty() ? 0.0 : h.front(), h.empty() ? 0.0 : h.back(), parentShown, r.empty() ? 0.0 : r.front().loss);
+        if (std::getenv ("LEARNER_VERBOSE")) { std::printf ("   "); for (double v : h) std::printf (" %.3f", v); std::printf ("\n"); for (const auto& c : r) std::printf ("    %.3f %s\n", c.loss, c.how.c_str()); }
+        CHECK (down && climbs && r.size() == 8, "Grow never loses its closest, the progress only climbs, and it shows the eight closest it made");
+        CHECK (! r.empty() && r.front().loss < parentShown, "what Grow shows is closer than the material it grew from, on a draw it never chose by");
+        // Cancel
+        q.generations = 200;
+        BreedJob j2 (q);
+        std::this_thread::sleep_for (std::chrono::milliseconds (500));
+        const auto tc = std::chrono::steady_clock::now();
+        j2.cancel();
+        while (! j2.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (5));
+        const double wait = std::chrono::duration<double> (std::chrono::steady_clock::now() - tc).count();
+        CHECK (j2.wasCancelled() && j2.results().empty() && wait < 1.0, "Cancel stops Grow in %.2f s and keeps nothing", wait);
+    }
+}
+
 int main (int argc, char** argv)
 {
     const std::string g = argc > 1 ? argv[1] : "/tmp/mlref/pvc";
@@ -612,6 +797,11 @@ int main (int argc, char** argv)
     {
         std::printf ("stage 7a: the fit job (FitJob.h), from the clip's own file\n");
         stage7a (g, argv[2]);
+    }
+    if (const char* other = std::getenv ("LEARNER_BREED"))       // another clip's reference directory, for crosses
+    {
+        std::printf ("stage 7b: breeding (Breed.h)\n");
+        stage7b (g, other);
     }
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

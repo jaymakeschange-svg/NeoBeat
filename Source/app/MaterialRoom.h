@@ -14,6 +14,12 @@
 // Batchcut learns the object that made it - the learner's own fit, four times side by side. Every
 // fit becomes a material in its own file and a sound in the pool, closest first, and the room opens
 // them when they are done.
+//
+// And breeding (7b): Wander makes eight variants of the loaded material and the fitted sound - the
+// material moved and crossed, the sound stretched, smeared, granulated and sent through it; Grow climbs
+// toward the sound from what is loaded or kept, generation after generation. They appear in a strip
+// along the bottom of the picture: click one to hear it, Keep the ones to breed from next. Only a kept
+// child goes into the pool.
 
 #include "Ui.h"
 #include "Processor.h"
@@ -57,6 +63,20 @@ private:
     bcui::Pill through { "Send through" }, prev { "<" }, next { ">" };
     bcui::Pill fit { "Fit" }, cancel { "Cancel" };
     int seenGeneration = 0;
+
+    // breeding
+    bcui::Pill wander { "Wander" }, grow { "Grow" };
+    juce::Slider reachKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+    juce::Label reachLabel;
+    int seenBreed = 0;
+    void breedFinished();
+public:
+    // the generation's eight tiles, for the tests: tile i spans an eighth of the width (inset 3, 2), and
+    // its Keep button is the 44 x 18 at the bottom right of the tile inset by 5 more
+    juce::Component& getStrip() noexcept;
+private:
+    struct Strip;
+    std::unique_ptr<Strip> strip;
     juce::ListBox list { "materials", nullptr };
     juce::ComboBox poolBox;
     juce::Slider mixKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };

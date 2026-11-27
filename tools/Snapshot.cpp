@@ -204,6 +204,20 @@ int main (int argc, char** argv)
         for (int i = 0; i < 3000 && proc->fitBusy(); ++i) pump (*proc, 100);
         pump (*proc, 400);
         shot (*ed, outDir, "20_material_fitted");
+        // breeding: a generation from the closest fit and the sound, one child kept
+        juce::String e;
+        proc->breedStart (false, e);
+        for (int i = 0; i < 3000 && proc->breedBusy(); ++i) pump (*proc, 100);
+        pump (*proc, 300);
+        for (int i = 0; i < (int) proc->breedChildren.size(); ++i) if (proc->breedChildren[(size_t) i].kind == ml::ChildKind::Body) { proc->breedKeep (i, e); break; }
+        pump (*proc, 300);
+        shot (*ed, outDir, "21_material_wander");
+        proc->breedStart (true, e);
+        pump (*proc, 1500);
+        shot (*ed, outDir, "22_material_growing");
+        for (int i = 0; i < 6000 && proc->breedBusy(); ++i) pump (*proc, 100);
+        pump (*proc, 300);
+        shot (*ed, outDir, "23_material_grown");
     }
 
     ed.reset();

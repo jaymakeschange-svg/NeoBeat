@@ -827,6 +827,74 @@ int main (int argc, char** argv)
         CHECK (n8 == 8 && proc->kit.pool.size() == pool1 + 8, "Render 8 hits: eight more in the pool");
         pump (*proc, 100);
 
+        std::printf ("11b. breeding: Wander, Keep, Grow\n");
+        {
+            auto& strip = room.getStrip();
+            auto tileAt = [&strip] (int i) { const float w = (float) strip.getWidth() / 8.0f; return juce::Point<float> (w * ((float) i + 0.5f), (float) strip.getHeight() * 0.4f); };
+            auto keepAt = [&strip] (int i) { const float w = (float) strip.getWidth() / 8.0f; return juce::Point<float> (w * (float) (i + 1) - 3.0f - 5.0f - 22.0f, (float) strip.getHeight() - 2.0f - 5.0f - 9.0f); };
+            auto waitBreed = [&] { const double t = juce::Time::getMillisecondCounterHiRes(); while (proc->breedBusy() && juce::Time::getMillisecondCounterHiRes() - t < 600000.0) pump (*proc, 100); pump (*proc, 200); return (juce::Time::getMillisecondCounterHiRes() - t) / 1000.0; };
+            auto* wb = button ("Wander"); auto* gb = button ("Grow");
+            CHECK (wb != nullptr && gb != nullptr && wb->isEnabled() && gb->isEnabled(), "Wander and Grow are there once a sound is fitted and its closest loaded");
+            const size_t poolB = proc->kit.pool.size();
+            if (wb != nullptr) wb->onClick();
+            const bool began = proc->breedBusy();
+            const double tw = waitBreed();
+            const auto& kids = proc->breedChildren;
+            int kinds[4] = {}; bool sorted = true, finite = true;
+            for (size_t i = 0; i < kids.size(); ++i) { ++kinds[(int) kids[i].kind]; finite = finite && std::isfinite (kids[i].loss) && ! kids[i].sound.empty(); if (i > 0) sorted = sorted && kids[i].loss >= kids[i - 1].loss; }
+            CHECK (began && kids.size() == 8 && sorted && finite, "Wander: eight children in %.1f s, closest first (\"%s\")", tw, proc->lastMessage.toRawUTF8());
+            CHECK (kinds[0] == 5 && kinds[2] == 2 && kinds[3] == 1, "from the closest fit and the sound: five body children, two of the sound, one through the material");
+            CHECK (proc->kit.pool.size() == poolB, "and none of them went into the pool");
+            proc->stopPlayback(); pump (*proc, 50);
+            click (strip, tileAt (3));
+            pump (*proc, 150, 0.0f, 8);
+            CHECK (proc->isPlaying() && lastOut > 0.01f, "clicking a child's tile plays it (peak %.2f)", lastOut);
+            // keep a material and a sound
+            int b = -1, f = -1;
+            for (int i = 0; i < (int) kids.size(); ++i) { if (b < 0 && kids[(size_t) i].kind == ml::ChildKind::Body) b = i; if (f < 0 && kids[(size_t) i].kind == ml::ChildKind::File) f = i; }
+            click (strip, keepAt (b));
+            pump (*proc, 50);
+            const auto keptName = "struck pipe g1 " + juce::String (b + 1);
+            const auto keptFile = proc->fitFolder.getChildFile (keptName + ".json");
+            nsr::Material km; juce::String ke;
+            CHECK (proc->kit.pool.size() == poolB + 1 && juce::String (proc->kit.pool.back()->name) == keptName && keptFile.existsAsFile() && km.load (keptFile, ke),
+                   "Keep on a material child: into the pool as \"%s\", and its material file beside the fits", keptName.toRawUTF8());
+            click (strip, keepAt (b));
+            click (strip, keepAt (f));
+            pump (*proc, 50);
+            CHECK (proc->kit.pool.size() == poolB + 2 && proc->breedKept.size() == 2 && ! proc->fitFolder.getChildFile ("struck pipe g1 " + juce::String (f + 1) + ".json").exists(),
+                   "kept once only; a kept sound child goes into the pool too, with no material file (it is not one)");
+            // the next generation breeds from what was kept (and the fitted sound)
+            proc->breedReach = 0.7f;
+            if (wb != nullptr) wb->onClick();
+            waitBreed();
+            int fromKept = 0, bodies = 0;
+            for (const auto& c : proc->breedChildren) if (c.kind == ml::ChildKind::Body) { ++bodies; fromKept += c.name == keptName.toStdString() ? 1 : 0; }
+            CHECK (proc->breedChildren.size() == 8 && proc->breedGenerationNumber == 2 && bodies > 0 && fromKept == bodies,
+                   "the next generation's material children all come from the kept material (%d of %d)", fromKept, bodies);
+            // Grow: from the kept material toward the sound
+            if (gb != nullptr) gb->onClick();
+            const bool growing = proc->breedBusy() && proc->breedGrowing;
+            const double tg = waitBreed();
+            bool allBody = proc->breedChildren.size() == 8, gsorted = true;
+            for (size_t i = 0; i < proc->breedChildren.size(); ++i) { allBody = allBody && proc->breedChildren[i].kind == ml::ChildKind::Body; if (i > 0) gsorted = gsorted && proc->breedChildren[i].loss >= proc->breedChildren[i - 1].loss; }
+            CHECK (growing && allBody && gsorted, "Grow: twelve generations in %.0f s, the eight closest materials shown (\"%s\")", tg, proc->lastMessage.toRawUTF8());
+            // a Grow cancelled: stops, and the generation shown stays
+            const auto before = proc->breedChildren.size() > 0 ? proc->breedChildren[0].loss : 0.0;
+            if (gb != nullptr) gb->onClick();
+            pump (*proc, 600);
+            juce::String fe;
+            const bool fitRefused = ! proc->fitStartFile (wav, fe);
+            if (auto* c = button ("Cancel")) if (c->onClick) c->onClick();
+            const double tc2 = juce::Time::getMillisecondCounterHiRes();
+            while (proc->breedBusy() && juce::Time::getMillisecondCounterHiRes() - tc2 < 10000.0) pump (*proc, 20);
+            const double stop2 = juce::Time::getMillisecondCounterHiRes() - tc2;
+            pump (*proc, 300);          // the room's own timer (8 a second) brings its buttons back
+            CHECK (fitRefused && ! proc->breedBusy() && proc->breedChildren.size() == 8 && proc->breedChildren[0].loss == before && proc->lastMessage.contains ("cancelled"),
+                   "a fit waits while breeding; Cancel stops a Grow in %.0f ms and leaves the generation shown", stop2);
+            CHECK (proc->kit.pool.size() == poolB + 2, "after three generations the pool holds only the two kept");
+        }
+
         // Fit on a pool sound, then Cancel, both by their buttons
         auto* fitBtn = button ("Fit");
         CHECK (fitBtn != nullptr && fitBtn->isEnabled(), "Fit is there for a pool sound");
@@ -862,7 +930,7 @@ int main (int argc, char** argv)
         for (int it = 0; it < 700; ++it)
         {
             auto& w = ed->getView();   // the editor may have been closed and opened again
-            const int a = r.nextInt (40);
+            const int a = r.nextInt (41);
             auto rp = [&] (juce::Component& c) { return juce::Point<float> (r.nextFloat() * (float) c.getWidth(), r.nextFloat() * (float) c.getHeight()); };
             const auto mods = r.nextInt (4) == 0 ? juce::ModifierKeys::shiftModifier : r.nextInt (5) == 0 ? juce::ModifierKeys::altModifier : 0;
             auto& sp = ed->getSpec();
@@ -947,6 +1015,16 @@ int main (int argc, char** argv)
                     }
                     break;
                 case 37: ed->showRoom (r.nextInt (5)); break;
+                case 40:            // breeding: generations started and stopped, children heard and kept
+                    switch (r.nextInt (5))
+                    {
+                        case 0: { juce::String e; if (r.nextInt (4) == 0) proc->breedStart (r.nextInt (3) == 0, e); break; }
+                        case 1: proc->breedCancel(); break;
+                        case 2: if (! proc->breedChildren.empty()) proc->breedPlay (r.nextInt ((int) proc->breedChildren.size())); break;
+                        case 3: { juce::String e; if (! proc->breedChildren.empty() && r.nextInt (3) == 0) proc->breedKeep (r.nextInt ((int) proc->breedChildren.size()), e); break; }
+                        default: proc->breedReach = r.nextFloat(); break;
+                    }
+                    break;
                 case 39:            // the MATERIAL room: fits started and stopped, strikes and renders
                     switch (r.nextInt (5))
                     {

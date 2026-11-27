@@ -304,7 +304,7 @@ reference before the next starts:**
 | 6. Adam (`Fit2.h`) | Level match, Adam with the learner's rates (0.04, logf 0.002), schedule, regularisation, freeze mask and best-point keeping. Step for step against the learner run in double precision: the first three steps agree to 1e-7 on all three clips. A whole 300-step fit: 60 s (PVC), 74 s (tin can), 210 s (tube), one core |
 | 6, finding | **The learner's fit is path-dependent.** Adam moves every parameter by about its rate however small its gradient, so parameters whose gradient is at roundoff level step whichever way roundoff says; any change of rounding parts the paths after 3-5 steps and the fits end in different places. Measured: the learner itself in double precision ends PVC at 0.672, or 1.096 with the window and start rounded to float32 (its recorded float32 run: 0.671). The port, nudging the start by 1e-7 six times: PVC 0.583-1.073 (three runs near 0.58, three near 1.0; recorded 0.671), tin can 1.166-1.422 (recorded 1.381), tube clank 2.420-2.538 over four runs (recorded 2.644). So the port fits as well as the learner, and the learner's recorded results are one draw each. **Decided by the user, 27 Nov:** *"Several, all into the pool"* - Batchcut runs several fits of a dropped file side by side (e.g. 4, one per core), each nudged at the start, and every one lands in the pool as its own material, ranked by loss, the closest the default. The spread becomes variants |
 | 7a. Into Batchcut | **Built 27 Nov (evening).** Drop any audio file on the MATERIAL room, or press Fit on a pool sound: four fits side by side, each saved as a learner-format material and struck into the pool, closest first. With it, a step is 4-5x faster (tube clank: 0.66 s to 0.14 s) and every check above still holds. Record below |
-| 7b. The variant search | next: the breeding design, shown before building |
+| 7b. The variant search | **First build 27 Nov (night):** Wander and Grow in the MATERIAL room - material children moved and crossed, the sound stretched, through spectral and granular effects and through a material; a strip of eight to hear and Keep; only kept children go into the pool. NeoBeat's voices next, as decided. Record below |
 
 **Stage 7a, built 27 Nov (evening, in a second chat - the first handed over to save usage).** The handoff's
 five steps, in its order. The reference data was rebuilt here from the user's `MaterialLab.zip` and the three
@@ -455,7 +455,71 @@ to that engine.
 **Estimate given (27 Nov, 19:50):** about 3-4 hours of work, in two halves - the engine first (children, scoring
 on a fresh noise draw, Grow and Wander on worker threads, its checks in `test_learner`), then the room (the
 generation of eight, Keep, REACH, Grow and Wander with progress and Cancel, the host test, snapshots, docs).
-Waiting for the user's go.
+**Go given 19:49** (*"Start 7b"*).
+
+### 7b, first build - 27 Nov (night)
+
+**The engine** (`Source/neobeat/shared/learner/Breed.h`, no JUCE). The four kinds of child as designed: *Body*
+(a small step in every law, noise band and mode in the fit's own unconstrained numbers, plus one of ten larger
+moves: transpose, partial spread, ring, damping tilt, beating, cascade, glide, the contact stop, the low-body
+rock, the click and noise - each described in plain words on its tile); *Cross* (laws and bands from either
+parent, the modes split at a frequency, at most 160); *File* (a time stretch that keeps the pitch - a phase
+vocoder with identity phase locking, written here - or one of seven spectral and three granular effects from
+`MatrixFx.h`, used unchanged, with their settings drawn around the defaults by REACH); *Through* (the sound
+through a material's modes, each a resonator pair at its beating). A generation of eight: one material and the
+sound give 5 body, 2 file, 1 through; two or more materials kept give 4 crosses. Each child has its own seed, so
+a generation is the same on any number of threads. Closeness: the learner's loss against the fitted sound, level
+matched, on fixed noise draws that are never a fit's (seeds 2027 and 4049).
+
+**Found building Grow: random steps do not climb from a fit.** Twelve generations of the designed mutations from
+the learner's own PVC material found nothing closer: a gradient fit sits at the bottom of its valley, and random
+steps across a thousand numbers at once almost never go downhill. Grow is for climbing from *somewhere else* - a
+wandered child, another material - toward the sound, as Petri's takes climb toward a pinned sound. So each Grow
+child is a small Gaussian step in every number (its size adapted each generation by the one-fifth rule, a larger
+move now and then), then **five steps of the learner's own fit** carry it down into the valley it landed in; two
+of each eight are crosses of the two closest; the two closest are kept each generation. It chooses on one draw
+and shows its eight closest measured on another that no step or choice used. Measured, 12 generations on two
+threads, toward each training clip from another clip's material (closeness on the showing draw):
+
+| Toward | From | Before | After | Time |
+|---|---|---|---|---|
+| PVC pipe | the tin can's material | 11.36 | 2.62 (random steps only: 6.14) | 36 s (3 s) |
+| tin can | the tube clank's | 7.89 | 2.98 | 16 s |
+| tube clank | the PVC pipe's | 9.15 | 4.70 | 18 s |
+
+From the clip's own fit there is nothing left to climb (PVC: 0.94 before, 1.00 after - no pass mark).
+
+**In Batchcut** (`Processor.*`, `MaterialRoom.*`). **Wander** and **Grow** beside Strike, with **REACH**; the
+generation in a strip of eight tiles along the bottom of the picture (kind, closeness, waveform, what was done);
+click a tile to hear it, **Keep** to put it in the pool (`<sound> g<n> <i>`) and, for a material, save its file
+beside the fits. Progress, time left and Cancel on the message line, as for a fit; a fit and a generation never
+run at once. Claude's calls in this build, any of which can change:
+- *Parents:* what was kept; if no material is kept, the material loaded in the room (after a fit, the closest);
+  and the fitted sound, always, for File and Through children. Clicking a material in the list starts again
+  from it (the kept parents are cleared), as does a new fit.
+- *Grow:* twelve generations per press; press again to climb further from what you keep.
+- *A material opened from a folder* breeds too (if its file has every parameter of the learner's engine); without
+  a fitted sound there is no closeness and no Grow.
+
+**Checks.** `test_learner` stage 7b (`LEARNER_BREED=OTHER_REFDIR`), on all three clips: the moves do what they
+say (transpose +5 st to 1e-15, spread 10% exactly); 72 of 72 body children playable at REACH 0.1/0.5/1.0, further
+the higher the REACH (PVC: 1.33, 2.67, 3.52 from the parent); a cross takes every mode below its split from one
+parent and above from the other; the stretch keeps a 440 Hz tone at 440.0 Hz and its level within 0.3 dB at 2x and
+0.5x; Through rings at the material's own mode pairs; Wander's mix of kinds, closest first, identical on one
+thread or two to the last sample; four crosses with two materials; Grow never loses its closest and shows
+something closer than where it started; Cancel within 0.2 s. Host test section 11b: Wander by its button (eight,
+closest first, none in the pool), a tile clicked plays, Keep on a material (pool and file) and on a sound (pool
+only), kept once only, the next generation's material children all from the kept one, Grow, a fit refused while
+breeding, Cancel on a Grow leaving the generation shown, and the pool holding only the two kept after three
+generations; the random session now breeds too. Seeds 1, 7 and 2026: all pass. Snapshots 21-23 (a generation
+with one kept, growing, grown) looked at. Not yet in a Batchcut download, and not yet listened to by the user.
+
+*On the estimate (the user asked, 20:20):* built in about an hour and a half against 3-4 hours estimated. The
+estimate allowed for the reference data and the JUCE build (already in place from 7a), for writing the file
+transforms (the Matrixxxer's effects were already in the tree; only the stretch was new) and for tuning Grow
+(one problem, solved by adding the fit's own steps).
+
+**Next for 7b:** NeoBeat's voices as children (the user: after this build works).
 
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 

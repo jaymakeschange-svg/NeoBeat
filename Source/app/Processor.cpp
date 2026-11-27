@@ -71,6 +71,7 @@ BcProcessor::BcProcessor()
 BcProcessor::~BcProcessor()
 {
     fitJob.reset();                 // cancels a fit still running, and waits for its threads
+    breedJob.reset();               // likewise a generation
     stopTimer();
     session.onChange = nullptr;
     session.stop();
@@ -335,6 +336,7 @@ void BcProcessor::handleAsyncUpdate()
 void BcProcessor::timerCallback()
 {
     fitCollect();
+    breedCollect();
     recorder.service();
     preview.collect();
     if (playDoc != nullptr && ! preview.playing()) { playDoc = nullptr; playingEvent = false; }
@@ -393,11 +395,38 @@ std::shared_ptr<bc::PoolItem> poolItemFrom (std::vector<float> l, std::vector<fl
 // Everything made here lands in the pool as an ordinary sound, which is the point - cutting,
 // classifying, kit building and .NJQ export all work on it without knowing where it came from.
 
+// A material file's every parameter (the learner's engine2), for breeding: false if the file lacks any.
+static bool bodyFromFile (const juce::File& file, ml::Body& b)
+{
+    const auto j = juce::JSON::parse (file);
+    auto* params = j.getProperty ("params", {}).getDynamicObject();
+    if (params == nullptr) return false;
+    auto vec = [params] (const char* key, std::vector<double>& v) { v.clear(); if (auto* a = params->getProperty (key).getArray()) for (const auto& q : *a) v.push_back ((double) q); return ! v.empty(); };
+    bool ok = vec ("f", b.f) && vec ("a", b.a) && vec ("rho", b.rho) && vec ("delta", b.delta) && vec ("beta", b.beta) && vec ("eps", b.eps) && vec ("glide", b.glide) && vec ("tau_g", b.tau_g);
+    for (auto* v : { &b.a, &b.rho, &b.delta, &b.beta, &b.eps, &b.glide, &b.tau_g }) ok = ok && v->size() == b.f.size();
+    double* laws[] = { &b.b1, &b.b3, &b.C, &b.gamma, &b.tau_c, &b.G, &b.tau_a, &b.cx_amt, &b.cx_t, &b.cx_f, &b.lb_m, &b.lb_rate, &b.lb_f, &b.tau_n };
+    for (int k = 0; k < ml::kGlobalKeys; ++k)
+    {
+        const auto v = params->getProperty (ml::globalKeyName (k));
+        if (v.isVoid()) return false;
+        *laws[k] = (double) v;
+    }
+    std::vector<double> nz, dn, dr;
+    if (! vec ("noise", nz) || nz.size() < (size_t) ml::kBands) return false;
+    if (! vec ("dn", dn)) dn.assign ((size_t) ml::kBands, 1e-6);                 // as engine2.complete fills them
+    if (! vec ("dn_rho", dr)) dr.assign ((size_t) ml::kBands, 0.0);
+    if (dn.size() < (size_t) ml::kBands || dr.size() < (size_t) ml::kBands) return false;
+    for (int i = 0; i < ml::kBands; ++i) { b.noise[(size_t) i] = nz[(size_t) i]; b.dn[(size_t) i] = dn[(size_t) i]; b.dn_rho[(size_t) i] = dr[(size_t) i]; }
+    return ok;
+}
+
 bool BcProcessor::materialOpen (const juce::File& file, juce::String& error)
 {
     nsr::Material m;
     if (! m.load (file, error)) return false;
     material = std::move (m);
+    loadedBodyValid = bodyFromFile (file, loadedBody);
+    if (! breedBusy()) { breedKept.clear(); breedChildren.clear(); breedKeptFlags.clear(); ++breedGeneration; }   // breeding starts again from here
     materialVoice.prepare (getSampleRate() > 0.0 ? getSampleRate() : 48000.0, 256);
     materialVoice.setMaterial (material);
     lastMessage = "Opened " + material.name + " - " + juce::String (material.numModes) + " modes, rings "
@@ -547,6 +576,7 @@ bool BcProcessor::fitStartPool (int poolIndex, juce::String& error)
 
 bool BcProcessor::fitStart (std::vector<float> mono, double sr, const juce::String& name, const juce::String& from, juce::String& error)
 {
+    if (breedJob != nullptr) { error = "Wait for the generation to finish first, or Cancel it."; return false; }
     float peak = 0.0f;
     for (float v : mono) peak = std::max (peak, std::fabs (v));
     if (peak < 1.0e-5f) { error = "That sound is silent - there is nothing to fit."; return false; }
@@ -585,6 +615,9 @@ void BcProcessor::fitCollect()
     if (! job->error().empty()) { lastMessage = fitSource + ": " + juce::String (job->error()); roomsNotify(); return; }
     const auto results = job->results();
     if (results.empty()) { lastMessage = "Nothing came of fitting " + fitSource + "."; roomsNotify(); return; }
+    // what breeding grows toward from now on
+    breedTarget = job->clip(); breedHasTarget = breedTarget.ok(); breedTargetName = fitSource;
+    breedKept.clear(); breedChildren.clear(); breedKeptFlags.clear();
 
     // one folder per job, so a second fit of the same sound keeps the first's materials
     const auto base = materialsDir();
@@ -631,4 +664,119 @@ void BcProcessor::fitCollect()
                 + (saved > 0 ? ", materials in " + dir.getFileName()
                              : ", but the materials could not be saved in " + base.getFullPathName());
     roomsNotify();
+}
+
+// ------------------------------------------------------------------ breeding (7b)
+
+bool BcProcessor::breedStart (bool grow, juce::String& error)
+{
+    if (breedJob != nullptr) { error = "A generation is already on its way - let it finish, or Cancel it."; return false; }
+    if (fitJob != nullptr) { error = "Wait for the fit to finish first."; return false; }
+    ml::BreedRequest q;
+    q.mode = grow ? ml::BreedRequest::Grow : ml::BreedRequest::Wander;
+    bool keptBody = false;
+    for (const auto& k : breedKept) keptBody = keptBody || k.isBody;
+    for (const auto& k : breedKept) if (k.isBody || ! grow) q.parents.push_back (k);
+    if (! keptBody && loadedBodyValid)
+    {
+        ml::Source s; s.name = material.name.toStdString(); s.isBody = true; s.body = loadedBody;
+        q.parents.insert (q.parents.begin(), std::move (s));
+    }
+    if (breedHasTarget && ! grow)
+    {
+        ml::Source s; s.name = breedTargetName.toStdString(); s.sound = breedTarget.x;
+        q.parents.push_back (std::move (s));
+    }
+    bool anyBody = false;
+    for (const auto& p : q.parents) anyBody = anyBody || p.isBody;
+    if (grow && ! breedHasTarget) { error = "Grow climbs toward a sound: drop one to fit first."; return false; }
+    if (grow && ! anyBody) { error = "Grow breeds materials: load or keep one first."; return false; }
+    if (q.parents.empty()) { error = "Load a material or fit a sound first."; return false; }
+    q.hasTarget = breedHasTarget;
+    if (breedHasTarget) q.target = breedTarget;
+    q.reach = juce::jlimit (0.0, 1.0, (double) breedReach);
+    q.generations = 12;
+    q.seed = (uint32_t) juce::Random::getSystemRandom().nextInt (0x7fffffff) + 1u;
+    q.threads = juce::jlimit (1, 4, juce::SystemStats::getNumCpus() - 1);
+    breedGrowing = grow;
+    breedJob = std::make_unique<ml::BreedJob> (std::move (q));
+    ++breedGeneration;
+    lastMessage = grow ? "Growing toward " + breedTargetName : "Wandering";
+    roomsNotify();
+    return true;
+}
+
+void BcProcessor::breedCancel() { if (breedJob != nullptr) breedJob->cancel(); }
+double BcProcessor::breedProgress() const { return breedJob != nullptr ? breedJob->progress() : 0.0; }
+double BcProcessor::breedSecondsLeft() const
+{
+    if (breedJob == nullptr) return -1.0;
+    const double p = breedJob->progress(), t = breedJob->elapsed();
+    return p > 0.05 ? t * (1.0 - p) / p : -1.0;
+}
+
+void BcProcessor::breedCollect()
+{
+    if (breedJob == nullptr || ! breedJob->finished()) return;
+    const auto job = std::move (breedJob);
+    ++breedGeneration;
+    if (job->wasCancelled()) { lastMessage = breedGrowing ? "Grow cancelled." : "Cancelled."; roomsNotify(); return; }
+    if (! job->error().empty()) { lastMessage = juce::String (job->error()); roomsNotify(); return; }
+    breedChildren = job->results();
+    breedKeptFlags.assign (breedChildren.size(), 0);
+    ++breedGenerationNumber;
+    lastMessage = "Generation " + juce::String (breedGenerationNumber) + ": " + juce::String ((int) breedChildren.size()) + " children";
+    if (! breedChildren.empty() && std::isfinite (breedChildren.front().loss))
+        lastMessage << ", the closest " << juce::String (breedChildren.front().loss, 2) << " from " << breedTargetName;
+    lastMessage << " - click one to hear it, Keep the ones to breed from";
+    roomsNotify();
+}
+
+bool BcProcessor::breedPlay (int child)
+{
+    if (! juce::isPositiveAndBelow (child, (int) breedChildren.size())) return false;
+    const auto& c = breedChildren[(size_t) child];
+    float peak = 0.0f; for (float v : c.sound) peak = std::max (peak, std::fabs (v));
+    if (peak <= 0.0f) return false;
+    std::vector<float> l (c.sound.size());
+    for (size_t i = 0; i < l.size(); ++i) l[i] = c.sound[i] * (0.89f / peak);
+    auto r = l;
+    preview.playClip (std::move (l), std::move (r), ml::kFitRate);
+    return true;
+}
+
+bool BcProcessor::breedKeep (int child, juce::String& error)
+{
+    if (! juce::isPositiveAndBelow (child, (int) breedChildren.size())) { error = "Pick a child to keep."; return false; }
+    if (breedKeptFlags[(size_t) child]) { error = "Already kept."; return false; }
+    const auto& c = breedChildren[(size_t) child];
+    const auto base = breedTargetName.isNotEmpty() ? breedTargetName : material.name;
+    const auto name = base + " g" + juce::String (breedGenerationNumber) + " " + juce::String (child + 1);
+    float peak = 0.0f; for (float v : c.sound) peak = std::max (peak, std::fabs (v));
+    if (peak < 1.0e-6f) { error = "That one is silent."; return false; }
+    std::vector<float> l (c.sound.size());
+    for (size_t i = 0; i < l.size(); ++i) l[i] = c.sound[i] * (0.89f / peak);
+    auto r = l;
+    kit.pool.push_back (poolItemFrom (std::move (l), std::move (r), ml::kFitRate, name, "bred:" + name));
+    juce::String saved;
+    if (c.isBody)
+    {
+        auto dir = fitFolder.isDirectory() ? fitFolder : materialsDir().getChildFile (juce::File::createLegalFileName (base));
+        if (dir.createDirectory().wasOk())
+        {
+            ml::MaterialInfo info;
+            info.name = name.toStdString(); info.source = "bred (" + std::string (ml::kindName (c.kind)) + "): " + c.how; info.madeBy = "Batchcut " BATCHCUT_VERSION;
+            info.loss = std::isfinite (c.loss) ? c.loss : 0.0; info.startLoss = info.loss;
+            info.noiseFloor = breedHasTarget ? breedTarget.noiseFloor : -70.0; info.nSamples = breedHasTarget ? (int) breedTarget.x.size() : 0;
+            const auto file = dir.getChildFile (juce::File::createLegalFileName (name) + ".json");
+            if (file.replaceWithText (juce::String::fromUTF8 (ml::materialJson (c.body, info).c_str()))) saved = ", and its material in " + dir.getFileName();
+        }
+    }
+    ml::Source k = c; k.name = name.toStdString();
+    breedKept.push_back (std::move (k));
+    breedKeptFlags[(size_t) child] = 1;
+    kitChanged(); stateChanged();
+    lastMessage = "Kept " + name + " in the pool" + saved + " - the next generation breeds from what you keep";
+    roomsNotify();
+    return true;
 }

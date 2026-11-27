@@ -215,6 +215,13 @@ metal, plastic or rubber rings when it is hit, kept as a `.json` material file.
   room opens them with the closest loaded. Progress and **CANCEL** are on the line under the picture. A fit takes
   the first strike in the sound and the 1.5 s after it, and takes about a minute (longer for a long, bright metal
   ring); it carries on with the window closed. MaterialLab opens these files as its own.
+* **Breeding.** **WANDER** makes eight variants of the loaded material and of the sound it was fitted to: the
+  material moved (transposed, more metallic, ringing longer, beating more...) or crossed with another, the sound
+  stretched, smeared, granulated or sent through the material. **GROW** climbs toward the sound from the loaded
+  material (or what you kept), twelve generations on its own, and shows the eight closest it made. **REACH** sets
+  how far the children go. They appear along the bottom of the picture, with how close each came to the sound:
+  click one to hear it, **KEEP** the ones you like - a kept child goes into the pool (and a kept material into a
+  material file beside the fits), and the next generation breeds from what you kept.
 
 ## MIDI
 
@@ -289,7 +296,8 @@ your instrument while you build a kit.
   export, the loop in the project), KEYS (build, play from MIDI in tune, chords, save and open a `.NJQ` instrument,
   the instrument in the project, keys let go on leaving the room), MATERIAL (an audio file dropped and fitted four
   ways into the pool and into learner-format files that strike again to the same sound, a pool sound fitted and
-  cancelled, a fit finishing with the window closed), and a long random session in all five rooms. The
+  cancelled, a fit finishing with the window closed; Wander, Keep and Grow by their buttons and tiles), and a long
+  random session in all five rooms. The
   `.NJQ` files it writes are loaded and played by NeoBeat 3.0's own host test.
 * `test_learner` (Linux, not part of the Windows build): the learner's fit as ported, checked stage by stage against
   the MaterialLab learner itself on three of its training clips (`tools/learner_ref/README.md`).

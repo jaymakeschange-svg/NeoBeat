@@ -21,11 +21,122 @@ struct MaterialRoom::Rows final : public juce::ListBoxModel
     MaterialRoom& owner;
 };
 
+// The generation: one tile per child, with its kind, how close it came, its waveform and what was done
+// to make it. Click a tile to hear it; Keep (bottom right of the tile) puts it in the pool and makes it
+// a parent of the next generation.
+struct MaterialRoom::Strip final : public juce::Component
+{
+    explicit Strip (MaterialRoom& o) : owner (o) { setComponentID ("breed strip"); }
+
+    int count() const { return (int) owner.proc.breedChildren.size(); }
+    juce::Rectangle<int> tile (int i) const
+    {
+        const float w = (float) getWidth() / 8.0f;
+        return juce::Rectangle<float> (w * (float) i, 0.0f, w, (float) getHeight()).reduced (3.0f, 2.0f).toNearestInt();
+    }
+    juce::Rectangle<int> keep (int i) const { auto t = tile (i).reduced (5); return t.removeFromBottom (18).removeFromRight (44); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        for (int i = 0; i < count(); ++i)
+        {
+            if (keep (i).contains (e.getPosition()))
+            {
+                juce::String error;
+                if (owner.proc.breedKeep (i, error)) owner.say (owner.proc.lastMessage); else owner.say (error);
+                if (owner.onChanged) owner.onChanged();
+                owner.refresh();
+                return;
+            }
+            if (tile (i).contains (e.getPosition())) { owner.proc.breedPlay (i); playing = i; repaint(); return; }
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto& kids = owner.proc.breedChildren;
+        if (kids.empty())
+        {
+            g.setColour (nsui::C::dim());
+            g.setFont (nsui::font (11.5f));
+            g.drawFittedText (owner.proc.breedBusy() ? "Breeding..." :
+                              "Wander makes eight variants of the loaded material and the sound it was fitted to; "
+                              "Grow climbs toward the sound from what is loaded or kept. They appear here.",
+                              getLocalBounds().reduced (12, 4), juce::Justification::centred, 2);
+            return;
+        }
+        for (int i = 0; i < (int) kids.size() && i < 8; ++i)
+        {
+            const auto& c = kids[(size_t) i];
+            const bool kept = i < (int) owner.proc.breedKeptFlags.size() && owner.proc.breedKeptFlags[(size_t) i];
+            auto t = tile (i).toFloat();
+            g.setColour (nsui::C::glow().withAlpha (i == playing ? 0.40f : 0.14f));
+            g.fillRoundedRectangle (t, 5.0f);
+            if (kept) { g.setColour (nsui::C::teal()); g.drawRoundedRectangle (t.reduced (0.5f), 5.0f, 1.6f); }
+            auto r = t.reduced (6.0f, 4.0f);
+            auto top = r.removeFromTop (14.0f);
+            g.setColour (nsui::C::text());
+            g.setFont (nsui::font (11.0f, true));
+            g.drawText (juce::String (i + 1) + " " + ml::kindName (c.kind), top, juce::Justification::centredLeft, false);
+            if (std::isfinite (c.loss))
+            {
+                g.setColour (nsui::C::label());
+                g.setFont (nsui::font (10.5f));
+                g.drawText (juce::String (c.loss, 2), top, juce::Justification::centredRight, false);
+            }
+            // the waveform, its envelope on a log scale so a long ring shows
+            auto wave = r.removeFromTop (r.getHeight() - 34.0f).reduced (0.0f, 2.0f);
+            const int cols = std::max (1, (int) wave.getWidth());
+            float pk = 1.0e-9f; for (float v : c.sound) pk = std::max (pk, std::fabs (v));
+            g.setColour (nsui::C::teal().withAlpha (0.8f));
+            const size_t per = std::max<size_t> (1, c.sound.size() / (size_t) cols);
+            for (int x = 0; x < cols; ++x)
+            {
+                float m = 0.0f;
+                for (size_t k = (size_t) x * per; k < std::min (c.sound.size(), (size_t) (x + 1) * per); ++k) m = std::max (m, std::fabs (c.sound[k]));
+                const float h = juce::jlimit (0.0f, 1.0f, 1.0f + std::log10 (m / pk + 1e-6f) / 3.0f) * wave.getHeight() * 0.5f;
+                g.fillRect (wave.getX() + (float) x, wave.getCentreY() - h, 1.0f, std::max (0.5f, 2.0f * h));
+            }
+            g.setColour (nsui::C::label());
+            g.setFont (nsui::font (10.0f));
+            g.drawFittedText (c.how, r.removeFromTop (14.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
+            const auto kb = keep (i).toFloat();
+            g.setColour (kept ? nsui::C::teal() : nsui::C::dim().withAlpha (0.35f));
+            g.fillRoundedRectangle (kb, 8.0f);
+            g.setColour (kept ? juce::Colours::white : nsui::C::text());
+            g.setFont (nsui::font (10.5f, true));
+            g.drawText (kept ? "Kept" : "Keep", kb, juce::Justification::centred, false);
+        }
+    }
+
+    MaterialRoom& owner;
+    int playing = -1;
+};
+
 // ------------------------------------------------------------------
 
 MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
     : proc (p), onChanged (std::move (changed))
 {
+    strip = std::make_unique<Strip> (*this);
+    addAndMakeVisible (*strip);
+    for (auto* b : { &wander, &grow }) addAndMakeVisible (*b);
+    addAndMakeVisible (reachKnob);
+    reachLabel.setText ("Reach", juce::dontSendNotification);
+    reachLabel.setFont (nsui::font (11.0f));
+    reachLabel.setColour (juce::Label::textColourId, nsui::C::dim());
+    addAndMakeVisible (reachLabel);
+    reachKnob.setRange (0.0, 1.0, 0.01);
+    reachKnob.setValue (proc.breedReach, juce::dontSendNotification);
+    reachKnob.onValueChange = [this] { proc.breedReach = (float) reachKnob.getValue(); };
+    reachKnob.setTooltip ("How far the children go from their parents: low for variants you would mistake for the parent, high for wild ones");
+    wander.setTooltip ("Make eight variants of the loaded material (or what you kept) and of the sound it was fitted to. "
+                       "Click one to hear it; Keep the ones to breed from next. Only kept ones go into the pool");
+    grow.setTooltip ("Climb toward the fitted sound from the loaded material (or what you kept), twelve generations on its own, "
+                     "keeping the closest each time. Then the eight closest it made appear below. Takes a minute or so");
+    wander.onClick = [this] { juce::String e; if (proc.breedStart (false, e)) say (proc.lastMessage); else say (e); refresh(); };
+    grow.onClick = [this] { juce::String e; if (proc.breedStart (true, e)) say (proc.lastMessage); else say (e); refresh(); };
+
     rows = std::make_unique<Rows> (*this);
     list.setModel (rows.get());
     list.setRowHeight (24);
@@ -105,12 +216,15 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
         refresh();
     };
 
-    cancel.onClick = [this] { proc.fitCancel(); say ("Stopping..."); };
+    cancel.onClick = [this] { proc.fitCancel(); proc.breedCancel(); say ("Stopping..."); };
+    seenBreed = proc.breedGeneration;
 
     startTimerHz (8);
 }
 
 MaterialRoom::~MaterialRoom() { list.setModel (nullptr); }
+
+juce::Component& MaterialRoom::getStrip() noexcept { return *strip; }
 
 void MaterialRoom::say (const juce::String& s) { message.setText (s, juce::dontSendNotification); }
 
@@ -151,9 +265,21 @@ void MaterialRoom::refresh()
     strike.setEnabled (has);
     render.setEnabled (has);
     through.setEnabled (has && ! proc.kit.pool.empty());
-    fit.setEnabled (! proc.kit.pool.empty() && ! proc.fitBusy());
-    cancel.setVisible (proc.fitBusy());
+    const bool busy = proc.fitBusy() || proc.breedBusy();
+    fit.setEnabled (! proc.kit.pool.empty() && ! busy);
+    cancel.setVisible (busy);
+    wander.setEnabled (! busy && (proc.loadedBodyValid || proc.breedHasTarget || ! proc.breedKept.empty()));
+    grow.setEnabled (! busy && proc.breedHasTarget && (proc.loadedBodyValid || ! proc.breedKept.empty()));
+    strip->repaint();
     repaint();
+}
+
+// A generation ended: show it (the processor has its children; nothing went into the pool).
+void MaterialRoom::breedFinished()
+{
+    strip->playing = -1;
+    say (proc.lastMessage);
+    if (onChanged) onChanged();
 }
 
 void MaterialRoom::timerCallback()
@@ -165,12 +291,26 @@ void MaterialRoom::timerCallback()
         if (! proc.fitBusy()) fitFinished();
         refresh();
     }
+    if (proc.breedGeneration != seenBreed)
+    {
+        seenBreed = proc.breedGeneration;
+        if (! proc.breedBusy()) breedFinished();
+        refresh();
+    }
+    auto timeLeft = [] (double left)
+    {
+        return left >= 0.0 ? ", about " + (left < 90.0 ? juce::String (juce::jmax (1, juce::roundToInt (left))) + " s"
+                                                       : juce::String (juce::roundToInt (left / 60.0)) + " min") + " left" : juce::String();
+    };
     if (proc.fitBusy())
     {
-        const double left = proc.fitSecondsLeft();
-        say ("Fitting " + proc.fitSource + " - " + juce::String (juce::roundToInt (100.0 * proc.fitProgress())) + "%"
-             + (left >= 0.0 ? ", about " + (left < 90.0 ? juce::String (juce::jmax (1, juce::roundToInt (left))) + " s"
-                                                        : juce::String (juce::roundToInt (left / 60.0)) + " min") + " left" : juce::String()));
+        say ("Fitting " + proc.fitSource + " - " + juce::String (juce::roundToInt (100.0 * proc.fitProgress())) + "%" + timeLeft (proc.fitSecondsLeft()));
+        repaint (message.getBounds().expanded (0, 4));
+    }
+    else if (proc.breedBusy())
+    {
+        say ((proc.breedGrowing ? "Growing toward " + proc.breedTargetName : juce::String ("Wandering")) + " - "
+             + juce::String (juce::roundToInt (100.0 * proc.breedProgress())) + "%" + timeLeft (proc.breedSecondsLeft()));
         repaint (message.getBounds().expanded (0, 4));
     }
 }
@@ -243,6 +383,10 @@ void MaterialRoom::resized()
     list.setBounds (left);
 
     r.removeFromLeft (14);
+    {
+        auto face = r.withTrimmedBottom (114);
+        strip->setBounds (face.removeFromBottom (104).reduced (8, 6));
+    }
     auto bottom = r.removeFromBottom (92);
     auto line = r.removeFromBottom (22);
     cancel.setBounds (line.removeFromRight (80).reduced (0, 1));
@@ -253,6 +397,12 @@ void MaterialRoom::resized()
     strike.setBounds (row1.removeFromLeft (120).reduced (0, 2));
     row1.removeFromLeft (8);
     render.setBounds (row1.removeFromLeft (200).reduced (0, 2));
+    grow.setBounds (row1.removeFromRight (80).reduced (0, 2));
+    row1.removeFromRight (8);
+    wander.setBounds (row1.removeFromRight (90).reduced (0, 2));
+    row1.removeFromRight (10);
+    reachKnob.setBounds (row1.removeFromRight (30));
+    reachLabel.setBounds (row1.removeFromRight (46));
 
     bottom.removeFromTop (8);
     auto row2 = bottom.removeFromTop (34);
@@ -277,11 +427,12 @@ void MaterialRoom::paint (juce::Graphics& g)
     {
         g.setColour (nsui::C::dim());
         g.setFont (nsui::font (14.0f));
+        const auto above = face.withTrimmedBottom (104.0f).toNearestInt();
         g.drawText ("Open a folder of material files, or drop one here",
-                    face.toNearestInt().translated (0, -10), juce::Justification::centred, false);
+                    above.translated (0, -10), juce::Justification::centred, false);
         g.setFont (nsui::font (12.0f));
         g.drawText ("or drop any sound to fit it into a material",
-                    face.toNearestInt().translated (0, 12), juce::Justification::centred, false);
+                    above.translated (0, 12), juce::Justification::centred, false);
     }
     else
     {
@@ -289,7 +440,7 @@ void MaterialRoom::paint (juce::Graphics& g)
         // colour how long it rings for - so a bright tall forest is a bell and a dark short one
         // is a thud. This is the same table the sound reads from, not a picture of a waveform.
         const auto& m = proc.material;
-        auto plot = face.reduced (18.0f, 26.0f);
+        auto plot = face.withTrimmedBottom (104.0f).reduced (18.0f, 26.0f);
 
         g.setColour (nsui::C::text());
         g.setFont (nsui::font (15.0f, true));
@@ -322,15 +473,21 @@ void MaterialRoom::paint (juce::Graphics& g)
         }
     }
 
-    // the fit's progress, under the message line
-    if (proc.fitBusy())
+    {
+        const auto sb = strip->getBounds().toFloat();
+        g.setColour (nsui::C::dim().withAlpha (0.25f));
+        g.drawHorizontalLine ((int) sb.getY() - 3, sb.getX() + 4.0f, sb.getRight() - 4.0f);
+    }
+
+    // the fit's (or a generation's) progress, under the message line
+    if (proc.fitBusy() || proc.breedBusy())
     {
         const auto m = message.getBounds().toFloat();
         const auto bar = juce::Rectangle<float> (m.getX(), m.getBottom() - 3.0f, m.getWidth(), 3.0f);
         g.setColour (nsui::C::dim().withAlpha (0.25f));
         g.fillRoundedRectangle (bar, 1.5f);
         g.setColour (nsui::C::teal());
-        g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (float) juce::jlimit (0.0, 1.0, proc.fitProgress())), 1.5f);
+        g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * (float) juce::jlimit (0.0, 1.0, proc.fitBusy() ? proc.fitProgress() : proc.breedProgress())), 1.5f);
     }
 
     if (dropping)

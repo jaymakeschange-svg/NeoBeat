@@ -13,9 +13,8 @@
 #include "neobeat/shared/rooms/Loops.h"
 #include "neobeat/shared/rooms/Keys.h"
 #include "../neobeat/shared/LearnerStore.h"
+#include "../neobeat/shared/learner/Breed.h"
 #include <deque>
-
-namespace ml { class FitJob; }
 
 // The input recorder: the audio thread writes into chunks the message thread allocates ahead of it.
 class Recorder
@@ -136,6 +135,31 @@ public:
     // Documents/Marbelite/Materials (MARBELITE_MATERIALS_DIR: the tests keep away from the real one)
     static juce::File materialsDir();
 
+    // Breeding (stage 7b, neobeat/shared/learner/Breed.h): variants of the loaded material and the fitted
+    // sound. A generation lives here, in memory, until a child is kept: only Keep puts one in the pool
+    // (the user's choice, 27 Nov - every child in the pool would cost memory and time) and saves a kept
+    // material as a file. The parents of the next generation are what was kept, or else the loaded
+    // material; and the fitted sound, always, when there is one.
+    std::vector<ml::Child> breedChildren;        // the generation shown
+    std::vector<char> breedKeptFlags;            // per child: kept
+    std::vector<ml::Source> breedKept;           // what was kept: the parents of what comes next
+    bool breedHasTarget = false;                 // the sound the last fit was of: closeness is measured against it
+    ml::Clip breedTarget;
+    juce::String breedTargetName;
+    bool loadedBodyValid = false;                // the loaded material in full (the learner's every parameter)
+    ml::Body loadedBody;
+    float breedReach = 0.4f;
+    int breedGenerationNumber = 0;               // the g<n> in a kept child's name
+    int breedGeneration = 0;                     // changes when a job starts or ends, for the room to notice
+    bool breedGrowing = false;                   // the job running (or last run) is a Grow
+    bool breedStart (bool grow, juce::String& error);
+    void breedCancel();
+    bool breedBusy() const noexcept { return breedJob != nullptr; }
+    double breedProgress() const;
+    double breedSecondsLeft() const;
+    bool breedPlay (int child);
+    bool breedKeep (int child, juce::String& error);
+
     BcProcessor();
     ~BcProcessor() override;
 
@@ -186,6 +210,8 @@ private:
     bool fitStart (std::vector<float> mono, double sr, const juce::String& name, const juce::String& from, juce::String& error);
     void fitCollect();                           // message thread, on the timer
     std::unique_ptr<ml::FitJob> fitJob;
+    void breedCollect();                         // likewise
+    std::unique_ptr<ml::BreedJob> breedJob;
     juce::String fitFrom;                        // the file or pool sound it came from, for the material's info
 
     void handleAsyncUpdate() override;

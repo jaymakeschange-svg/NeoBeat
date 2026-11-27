@@ -27,6 +27,7 @@ TEST=./test_learner REF=REFDIR ./spread.sh CLIP 3       # one whole fit, nudged 
 LEARNER_JOB=1 ./test_learner OUTDIR CLIP.wav            # and a whole job: two fits side by side, Cancel, a silent clip
 LEARNER_JOB=1 LEARNER_WRITE=fit.json ./test_learner OUTDIR CLIP.wav     # a fit written as Batchcut writes it,
 python3 -I ref1.py PKG_DIR CLIP.wav TARGET.json fit.json fit_ref.npz      # then opened and scored by the learner
+LEARNER_BREED=OTHER_REFDIR ./test_learner OUTDIR       # stage 7b: breeding, with another clip's material to cross and grow from
 ```
 
 On a fresh container the reference for one clip takes a few minutes (`golden.py` runs a whole fit in the learner).
