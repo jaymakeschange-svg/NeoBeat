@@ -558,6 +558,33 @@ artifact `Batchcut-Windows` (the VST3, the standalone app, the README) - everyth
 sound) and 7b (Wander, Grow, Scratch). Windows built it after one fix (MSVC would not let a lambda use a local
 constant uncaptured, C3493); every Windows test passed and pluginval at strictness 10 passed on 3 of 3 seeds.
 
+## Batchcut MATERIAL: save the children, send them to the other rooms - asked and built 27 Nov (night)
+
+**Asked (the user, 22:06):** *"I would like the material lab to export its sounds to a folder I select. Wav is
+ok"* - and, asked which sounds: *"[give] me an option to batch save or right click save, also, I want an option to
+right click send sound to (kit, keys, loops,)"*.
+
+**Built.**
+- **Save all...** on the message line (where Cancel is while something runs): every child of the generation shown,
+  as a WAV, into a folder you choose. **Right-click a child's tile** for the menu: Hear it, Keep, **Save as WAV in
+  a folder...**, **Save as WAV in <the last folder>**, and **Send to KIT / KEYS / LOOPS**.
+- WAVs: 24-bit, 48 kHz, at the pool's level (peak -1 dB), named as Keep names them plus the kind
+  (`struck pipe g4 3 body.wav`); an existing file is never overwritten (a number is added). The folder chooser
+  opens where you last saved, or else at the Neosystem's assigned WAV folder.
+- **Send to KIT:** the child is kept and goes on the kit lane its sound suits (its strongest role), or the next
+  best lane that is not locked. **Send to KEYS:** kept, and KEYS is rebuilt from every sound sent there (pool
+  source "MATERIAL to KEYS"; Undo in KEYS brings back the instrument before). **Send to LOOPS:** kept, and a
+  LOOPS layer of its own (source "MATERIAL to LOOPS") is added the first time and rolled again from every sound
+  sent there. A child sent to both KEYS and LOOPS is in the pool once for each. *Claude's calls, any can change:*
+  a sent child counts as kept (and so becomes a parent); KEYS is rebuilt rather than added to note by note.
+
+**Checks.** Host test 11c: Save all writes eight readable 48 kHz 24-bit WAVs, one more by the menu's "Save in" adds
+a ninth (nothing overwritten); Send to KIT keeps the child and puts it on the lane its role suits; Send to KEYS
+twice gives an instrument of the two sounds sent; Send to LOOPS adds one layer whose chops are all from what was
+sent there. The random session saves and sends too. (The right-click menu itself cannot open on the test's
+virtual display, which has no window manager; the tests drive the same actions the menu calls.) Seeds 1, 7 and
+2026: all pass. Built for Windows by the push that added it (see the Actions run for `batchcut-3.0`).
+
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
 **Asked (the user, 27 Nov):** *"did you include the techno and house new presets for batchcut and
