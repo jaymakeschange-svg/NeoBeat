@@ -214,6 +214,50 @@ lattice division, the seven settings, the five axis toggles, and the target list
 never-targets struck through. Plain on purpose — enough to play with, so the room it becomes can
 be drawn once it is known what the thing wants.
 
+#### Wired into MidiJaQ, 27 Nov
+
+JACK is room 6 of 7, in RANDOM's slot. `Source/app/RandomRoom.cpp` and `.h` are **deleted**, with
+`makeRandomTargets`, `rollRandom` and `toggleRandomTarget` gone from the processor. The panel's
+ROLL button is the global randomiser.
+
+**What the old randomiser actually did**, found on reading it before deleting it. Of its twelve
+listed targets:
+
+| Target | What it did |
+|---|---|
+| KEYS zone mapping | **nothing** — no handler |
+| KEYS attack / release | **nothing** — no handler |
+| MAP traffic | **nothing** — matched no branch |
+| LOOPS chop pitch | fell into the `room == "LOOPS"` branch and re-rolled the chop order |
+| MOD LFO rates | fell into the `room == "MOD"` branch and moved the orb |
+| the other five | worked |
+
+Six of the ten active targets were dead or duplicated a sibling, and it used
+`juce::Random::getSystemRandom()`, so no pass was ever reproducible and "landing back on the
+original" was never possible. That is the whole of "wasn't really controlling much", and it
+settles the delete-and-start-clean decision.
+
+**What is registered now.** Eleven targets, every one of which does something: `LINE` traffic,
+dialect, accent, gate and swing as plain floats — traffic included, which the old list named and
+never touched — plus `MAP` which-degrees and note-length, `MOD` orb position, `LOOPS` chop order
+and `STEREOROOM` chop places as actions, and the two never-targets. Four are **deliberately left
+out and named in the source**: KEYS zone mapping and attack/release (the instrument is a const
+`shared_ptr`), LOOPS chop pitch and MOD LFO rates (no handle on the processor). A registered
+target that silently does nothing is the bug this replaces.
+
+**`nsr::ChaosTarget` grew an escape hatch** for this: `apply`, `keep` and `giveBack`, for the
+things that are not a single float — a permutation, an integer row, a pair of orb coordinates.
+
+**Jack runs on the message thread**, driven by the panel's timer from a transport position the
+processor publishes. `advance()` walks a vector of `std::function` and can allocate, so it has no
+business in `processBlock`. It seizes parameters, which need the right beat rather than the right
+sample. The retrigger and micro-timing events it reports have **no audio-thread path yet**.
+
+**Pre-existing, found not caused.** MidiJaQ's host test fails 5 of its checks on every seed — and
+fails identically at the commit before any of this work. Notes not sending, accent not changing,
+undo and redo, two lines on their own channels. Unrelated to Jack, and it means pushes have been
+going out with it red.
+
 #### C — IDM Jack. A room. NeoBeat and MidiJaQ, later JaqRack. Not Batchcut.
 
 Switch it on and it takes over: continuous, uncontrollable seizures of every parameter and feature

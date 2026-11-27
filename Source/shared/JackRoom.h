@@ -63,7 +63,7 @@ private:
     // on top of the gems and the TARGETS label on top of that — the same fault BandsRoom had.
     int yAxesLabel = 0, yTargetsLabel = 0;
     int lastFired = 0;
-    double lastFireBeat = -1.0;
+    double lastBeat = -1.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JackRoom)
 };
