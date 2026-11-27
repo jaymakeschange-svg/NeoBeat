@@ -76,6 +76,13 @@ public:
     // the generation's eight tiles, for the tests: tile i spans an eighth of the width (inset 3, 2), and
     // its Keep button is the 44 x 18 at the bottom right of the tile inset by 5 more
     juce::Component& getStrip() noexcept;
+    // what a tile's right-click menu does (the menu's item ids), so the tests can do it without the menu
+    enum TileAction { Hear = 1, KeepIt, SaveAs, SaveAgain, SendKit, SendKeys, SendLoops };
+    void tileAction (int child, int action);
+    void showTileMenu (int child);
+private:
+    bcui::Pill saveAll { "Save all..." };
+    void chooseFolderAndSave (std::vector<int> children);
 private:
     struct Strip;
     std::unique_ptr<Strip> strip;

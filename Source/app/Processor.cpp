@@ -426,7 +426,7 @@ bool BcProcessor::materialOpen (const juce::File& file, juce::String& error)
     if (! m.load (file, error)) return false;
     material = std::move (m);
     loadedBodyValid = bodyFromFile (file, loadedBody);
-    if (! breedBusy()) { breedKept.clear(); breedChildren.clear(); breedKeptFlags.clear(); ++breedGeneration; }   // breeding starts again from here
+    if (! breedBusy()) { breedKept.clear(); breedChildren.clear(); breedKeptFlags.clear(); breedPoolItems.clear(); ++breedGeneration; }   // breeding starts again from here
     materialVoice.prepare (getSampleRate() > 0.0 ? getSampleRate() : 48000.0, 256);
     materialVoice.setMaterial (material);
     lastMessage = "Opened " + material.name + " - " + juce::String (material.numModes) + " modes, rings "
@@ -617,7 +617,7 @@ void BcProcessor::fitCollect()
     if (results.empty()) { lastMessage = "Nothing came of fitting " + fitSource + "."; roomsNotify(); return; }
     // what breeding grows toward from now on
     breedTarget = job->clip(); breedHasTarget = breedTarget.ok(); breedTargetName = fitSource;
-    breedKept.clear(); breedChildren.clear(); breedKeptFlags.clear();
+    breedKept.clear(); breedChildren.clear(); breedKeptFlags.clear(); breedPoolItems.clear();
 
     // one folder per job, so a second fit of the same sound keeps the first's materials
     const auto base = materialsDir();
@@ -743,6 +743,7 @@ void BcProcessor::breedCollect()
     if (! job->error().empty()) { lastMessage = juce::String (job->error()); roomsNotify(); return; }
     breedChildren = job->results();
     breedKeptFlags.assign (breedChildren.size(), 0);
+    breedPoolItems.assign (breedChildren.size(), nullptr);
     ++breedGenerationNumber;
     lastMessage = "Generation " + juce::String (breedGenerationNumber) + ": " + juce::String ((int) breedChildren.size()) + " children"
                 + (breedFromScratch ? " from scratch" : "");
@@ -773,13 +774,15 @@ bool BcProcessor::breedKeep (int child, juce::String& error)
     // a child from scratch is no one's: "scratch g3 2", its material in Materials/scratch
     const bool fromScratch = c.kind == ml::ChildKind::Scratch;
     const auto base = fromScratch ? juce::String ("scratch") : breedTargetName.isNotEmpty() ? breedTargetName : material.name;
-    const auto name = base + " g" + juce::String (breedGenerationNumber) + " " + juce::String (child + 1);
+    const auto name = breedChildName (child);
     float peak = 0.0f; for (float v : c.sound) peak = std::max (peak, std::fabs (v));
     if (peak < 1.0e-6f) { error = "That one is silent."; return false; }
     std::vector<float> l (c.sound.size());
     for (size_t i = 0; i < l.size(); ++i) l[i] = c.sound[i] * (0.89f / peak);
     auto r = l;
     kit.pool.push_back (poolItemFrom (std::move (l), std::move (r), ml::kFitRate, name, "bred:" + name));
+    if (breedPoolItems.size() != breedChildren.size()) breedPoolItems.assign (breedChildren.size(), nullptr);
+    breedPoolItems[(size_t) child] = kit.pool.back();
     juce::String saved;
     if (c.isBody)
     {
@@ -799,6 +802,118 @@ bool BcProcessor::breedKeep (int child, juce::String& error)
     breedKeptFlags[(size_t) child] = 1;
     kitChanged(); stateChanged();
     lastMessage = "Kept " + name + " in the pool" + saved + " - the next generation breeds from what you keep";
+    roomsNotify();
+    return true;
+}
+
+// ------------------------------------------------------------------ MATERIAL's sounds out
+
+juce::String BcProcessor::breedChildName (int child) const
+{
+    if (! juce::isPositiveAndBelow (child, (int) breedChildren.size())) return {};
+    const bool fromScratch = breedChildren[(size_t) child].kind == ml::ChildKind::Scratch;
+    const auto base = fromScratch ? juce::String ("scratch") : breedTargetName.isNotEmpty() ? breedTargetName : material.name;
+    return base + " g" + juce::String (breedGenerationNumber) + " " + juce::String (child + 1);
+}
+
+// As 24-bit WAVs at 48 kHz, each at the pool's level (peak 0.89), named as Keep names them; an existing
+// file is never overwritten (a number is added).
+int BcProcessor::breedSave (const std::vector<int>& children, const juce::File& dir, juce::String& error)
+{
+    if (! dir.createDirectory().wasOk()) { error = "Could not make the folder " + dir.getFullPathName(); return 0; }
+    int written = 0;
+    for (int child : children)
+    {
+        if (! juce::isPositiveAndBelow (child, (int) breedChildren.size())) continue;
+        const auto& c = breedChildren[(size_t) child];
+        float peak = 0.0f; for (float v : c.sound) peak = std::max (peak, std::fabs (v));
+        if (peak < 1.0e-6f) continue;
+        std::vector<float> l (c.sound.size());
+        for (size_t i = 0; i < l.size(); ++i) l[i] = c.sound[i] * (0.89f / peak);
+        const auto file = dir.getNonexistentChildFile (juce::File::createLegalFileName (breedChildName (child) + " " + ml::kindName (c.kind)), ".wav", true);
+        std::string err;
+        if (writeWav (file, l, l, ml::kFitRate, 24, err)) ++written;
+        else error = juce::String (err);
+    }
+    materialSaveDir = dir;
+    if (written > 0) lastMessage = "Saved " + juce::String (written) + (written == 1 ? " sound" : " sounds") + " in " + dir.getFullPathName();
+    else if (error.isEmpty()) error = "Nothing to save.";
+    roomsNotify();
+    return written;
+}
+
+// the child in the pool (kept if it was not), as the given source when one is asked for: KEYS and LOOPS
+// draw from a source, so a sound sent there carries theirs (a kept child sent there is added again with it)
+static std::shared_ptr<bc::PoolItem> sentItem (BcProcessor& p, int child, const char* source, juce::String& error)
+{
+    if (! juce::isPositiveAndBelow (child, (int) p.breedChildren.size())) { error = "Pick a child to send."; return nullptr; }
+    if (p.breedPoolItems.size() != p.breedChildren.size()) p.breedPoolItems.assign (p.breedChildren.size(), nullptr);
+    if (! p.breedKeptFlags[(size_t) child])
+    {
+        juce::String e;
+        if (! p.breedKeep (child, e)) { error = e; return nullptr; }
+    }
+    auto it = p.breedPoolItems[(size_t) child];
+    if (it == nullptr) { error = "That sound is not in the pool."; return nullptr; }
+    if (source == nullptr || it->source == source) return it;
+    if (it->source.rfind ("bred:", 0) == 0) { it->source = source; return it; }     // its first room: take that room's source
+    auto copy = std::make_shared<bc::PoolItem> (*it);
+    copy->source = source;
+    p.kit.pool.push_back (copy);
+    return copy;
+}
+
+bool BcProcessor::breedSendToKit (int child, juce::String& error)
+{
+    auto it = sentItem (*this, child, nullptr, error);
+    if (it == nullptr) return false;
+    int index = -1;
+    for (int i = 0; i < (int) kit.pool.size(); ++i) if (kit.pool[(size_t) i] == it) index = i;
+    // the lane its role suits; if that lane is locked, the next best that is not
+    std::vector<int> order ((size_t) bc::kLanes);
+    for (int i = 0; i < bc::kLanes; ++i) order[(size_t) i] = i;
+    std::stable_sort (order.begin(), order.end(), [&it] (int a, int b) { return it->roles[(size_t) a] > it->roles[(size_t) b]; });
+    int lane = -1;
+    for (int l : order) if (! kit.lanes[(size_t) l].locked) { lane = l; break; }
+    if (lane < 0 || index < 0) { error = "Every lane of the kit is locked."; return false; }
+    kitAssign (lane, 0, index, false);
+    stateChanged();
+    lastMessage = "Sent " + juce::String (it->name) + " to the kit's " + juce::String (nbk::roleName (lane)) + " lane";
+    roomsNotify();
+    return true;
+}
+
+bool BcProcessor::breedSendToKeys (int child, juce::String& error)
+{
+    auto it = sentItem (*this, child, kSentToKeys, error);
+    if (it == nullptr) return false;
+    keysSource.kind = bc::LoopSource::From;
+    keysSource.from = kSentToKeys;
+    keysBuild();
+    kitChanged(); stateChanged();
+    int n = 0; for (const auto& q : kit.pool) n += q->source == kSentToKeys ? 1 : 0;
+    lastMessage = "Sent " + juce::String (it->name) + " to KEYS: its instrument is now the " + juce::String (n)
+                + (n == 1 ? " sound" : " sounds") + " sent there (Undo in KEYS brings back the one before)";
+    roomsNotify();
+    return true;
+}
+
+bool BcProcessor::breedSendToLoops (int child, juce::String& error)
+{
+    auto it = sentItem (*this, child, kSentToLoops, error);
+    if (it == nullptr) return false;
+    kitChanged(); stateChanged();
+    bc::LoopSource src; src.kind = bc::LoopSource::From; src.from = kSentToLoops;
+    int layer = -1;
+    for (int i = 0; i < loops.numLayers; ++i) if (loops.layers[(size_t) i].source == src) layer = i;
+    if (layer < 0)
+    {
+        layer = loopsAddLayer();
+        if (layer < 0) { error = "LOOPS has all 8 layers - remove one there first."; return false; }
+        loops.layers[(size_t) layer].source = src;
+    }
+    loopsRoll (layer, true);
+    lastMessage = "Sent " + juce::String (it->name) + " to LOOPS: layer " + juce::String (layer + 1) + ", rolled from the sounds sent there";
     roomsNotify();
     return true;
 }

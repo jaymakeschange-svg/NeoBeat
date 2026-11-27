@@ -913,6 +913,50 @@ int main (int argc, char** argv)
             CHECK (fitRefused && ! proc->breedBusy() && proc->breedChildren.size() == 8 && proc->breedChildren[0].loss == before && proc->lastMessage.contains ("cancelled"),
                    "a fit waits while breeding; Cancel stops a Grow in %.0f ms and leaves the generation shown", stop2);
             CHECK (proc->kit.pool.size() == poolB + 3, "after four generations the pool holds only the three kept");
+
+            // MATERIAL's sounds out: saved as WAVs (all at once, or one), and sent to KIT, KEYS and LOOPS
+            std::printf ("11c. saving and sending the children\n");
+            const auto out = dir.getChildFile ("material out");
+            juce::String se2;
+            std::vector<int> all; for (int i = 0; i < (int) proc->breedChildren.size(); ++i) all.push_back (i);
+            const int saved = proc->breedSave (all, out, se2);
+            auto wavs = out.findChildFiles (juce::File::findFiles, false, "*.wav");
+            bool readable = wavs.size() == (int) all.size();
+            for (const auto& w : wavs)
+            {
+                std::unique_ptr<juce::AudioFormatReader> rd (proc->formats.createReaderFor (w));
+                readable = readable && rd != nullptr && rd->sampleRate == 48000.0 && rd->bitsPerSample == 24 && rd->lengthInSamples > 1000;
+            }
+            CHECK (saved == (int) all.size() && readable, "Save all: %d WAVs in the folder chosen, 48 kHz, 24-bit (\"%s\")", saved, wavs.isEmpty() ? "" : wavs[0].getFileName().toRawUTF8());
+            room.tileAction (2, MaterialRoom::SaveAgain);
+            CHECK (out.findChildFiles (juce::File::findFiles, false, "*.wav").size() == (int) all.size() + 1, "one more by its menu, into the same folder, nothing overwritten");
+            // to KIT: the lane its role suits
+            const size_t poolS = proc->kit.pool.size();
+            const int k1 = 4;
+            room.tileAction (k1, MaterialRoom::SendKit);
+            const auto item = proc->breedPoolItems.size() > (size_t) k1 ? proc->breedPoolItems[(size_t) k1] : nullptr;
+            int lane = -1, at = -1;
+            for (int i = 0; i < (int) proc->kit.pool.size(); ++i) if (proc->kit.pool[(size_t) i] == item) at = i;
+            for (int l = 0; l < bc::kLanes; ++l) if (proc->kit.lanes[(size_t) l].layers[0].item == at && at >= 0) lane = l;
+            CHECK (item != nullptr && proc->breedKeptFlags[(size_t) k1] && proc->kit.pool.size() == poolS + 1 && lane >= 0
+                   && (proc->kit.lanes[(size_t) lane].locked || item->roles[(size_t) lane] == *std::max_element (item->roles.begin(), item->roles.end())),
+                   "Send to KIT: kept, and on the %s lane, the one its sound suits (\"%s\")", lane >= 0 ? nbk::roleName (lane) : "-", proc->lastMessage.toRawUTF8());
+            // to KEYS, twice: the instrument is what was sent there
+            room.tileAction (5, MaterialRoom::SendKeys);
+            const size_t keys1 = proc->keysSounds().size();
+            room.tileAction (6, MaterialRoom::SendKeys);
+            const size_t keys2 = proc->keysSounds().size();
+            CHECK (proc->keysSource.kind == bc::LoopSource::From && proc->keysSource.from == BcProcessor::kSentToKeys && keys1 == 1 && keys2 == 2,
+                   "Send to KEYS: its instrument is the sounds sent there (%zu, then %zu)", keys1, keys2);
+            // to LOOPS: a layer of its own, rolled from what was sent there
+            const int layers0 = proc->loops.numLayers;
+            room.tileAction (7, MaterialRoom::SendLoops);
+            int lay = -1; for (int i = 0; i < proc->loops.numLayers; ++i) if (proc->loops.layers[(size_t) i].source.from == BcProcessor::kSentToLoops) lay = i;
+            bool onlySent = lay >= 0 && ! proc->loops.layers[(size_t) lay].hits.empty();
+            if (lay >= 0) for (const auto& h : proc->loops.layers[(size_t) lay].hits) onlySent = onlySent && h.sound != nullptr && h.sound->source == BcProcessor::kSentToLoops;
+            room.tileAction (6, MaterialRoom::SendLoops);           // a child already sent to KEYS: added again with LOOPS' source
+            int sentL = 0; for (const auto& q : proc->kit.pool) sentL += q->source == BcProcessor::kSentToLoops ? 1 : 0;
+            CHECK (onlySent && proc->loops.numLayers == layers0 + 1 && sentL == 2, "Send to LOOPS: one layer of its own, its chops all from what was sent there (%d sent)", sentL);
         }
 
         // Fit on a pool sound, then Cancel, both by their buttons
@@ -1041,7 +1085,11 @@ int main (int argc, char** argv)
                         case 0: { juce::String e; if (r.nextInt (4) == 0) { if (r.nextInt (3) == 0) proc->breedScratch (e); else proc->breedStart (r.nextInt (3) == 0, e); } break; }
                         case 1: proc->breedCancel(); break;
                         case 2: if (! proc->breedChildren.empty()) proc->breedPlay (r.nextInt ((int) proc->breedChildren.size())); break;
-                        case 3: { juce::String e; if (! proc->breedChildren.empty() && r.nextInt (3) == 0) proc->breedKeep (r.nextInt ((int) proc->breedChildren.size()), e); break; }
+                        case 3: { juce::String e; if (! proc->breedChildren.empty() && r.nextInt (3) == 0)
+                                  { const int c = r.nextInt ((int) proc->breedChildren.size());
+                                    switch (r.nextInt (4)) { case 0: proc->breedKeep (c, e); break; case 1: proc->breedSendToKit (c, e); break;
+                                                             case 2: proc->breedSendToKeys (c, e); break; default: proc->breedSendToLoops (c, e); break; } }
+                                  break; }
                         default: proc->breedReach = r.nextFloat(); break;
                     }
                     break;

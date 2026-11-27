@@ -224,6 +224,10 @@ metal, plastic or rubber rings when it is hit, kept as a `.json` material file.
   how far the children go. They appear along the bottom of the picture, with how close each came to the sound:
   click one to hear it, **KEEP** the ones you like - a kept child goes into the pool (and a kept material into a
   material file beside the fits), and the next generation breeds from what you kept.
+* **Saving and sending the children.** **SAVE ALL...** (on the line under the picture) saves every child shown as a
+  WAV (24-bit, 48 kHz) in a folder you choose. Right-click a child to hear, keep or save just that one, or to
+  send it to **KIT** (onto the lane its sound suits), **KEYS** (the instrument becomes the sounds sent there) or
+  **LOOPS** (a layer rolled from the sounds sent there).
 
 ## MIDI
 

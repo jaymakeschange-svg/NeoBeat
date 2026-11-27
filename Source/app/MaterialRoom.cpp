@@ -40,6 +40,7 @@ struct MaterialRoom::Strip final : public juce::Component
     {
         for (int i = 0; i < count(); ++i)
         {
+            if (e.mods.isPopupMenu() && tile (i).contains (e.getPosition())) { owner.showTileMenu (i); return; }
             if (keep (i).contains (e.getPosition()))
             {
                 juce::String error;
@@ -221,6 +222,14 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
     };
 
     cancel.onClick = [this] { proc.fitCancel(); proc.breedCancel(); say ("Stopping..."); };
+    addChildComponent (saveAll);
+    saveAll.setTooltip ("Save every child of this generation as a WAV in a folder you choose (right-click a child for one, or to send it to KIT, KEYS or LOOPS)");
+    saveAll.onClick = [this]
+    {
+        std::vector<int> all;
+        for (int i = 0; i < (int) proc.breedChildren.size(); ++i) all.push_back (i);
+        chooseFolderAndSave (all);
+    };
     seenBreed = proc.breedGeneration;
 
     startTimerHz (8);
@@ -229,6 +238,64 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
 MaterialRoom::~MaterialRoom() { list.setModel (nullptr); }
 
 juce::Component& MaterialRoom::getStrip() noexcept { return *strip; }
+
+// A child's right-click menu: hear it, keep it, save it, or send it to another room.
+void MaterialRoom::showTileMenu (int child)
+{
+    if (! juce::isPositiveAndBelow (child, (int) proc.breedChildren.size())) return;
+    const bool kept = child < (int) proc.breedKeptFlags.size() && proc.breedKeptFlags[(size_t) child];
+    juce::PopupMenu m;
+    m.addSectionHeader (proc.breedChildName (child));
+    m.addItem (Hear, "Hear it");
+    m.addItem (KeepIt, kept ? "Kept" : "Keep", ! kept, kept);
+    m.addSeparator();
+    m.addItem (SaveAs, "Save as WAV in a folder...");
+    if (proc.materialSaveDir.isDirectory()) m.addItem (SaveAgain, "Save as WAV in " + proc.materialSaveDir.getFileName());
+    m.addSeparator();
+    m.addItem (SendKit, "Send to KIT (the lane its sound suits)");
+    m.addItem (SendKeys, "Send to KEYS");
+    m.addItem (SendLoops, "Send to LOOPS");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (strip.get()),
+                     [safe = juce::Component::SafePointer<MaterialRoom> (this), child] (int r) { if (safe != nullptr && r > 0) safe->tileAction (child, r); });
+}
+
+void MaterialRoom::tileAction (int child, int action)
+{
+    juce::String error;
+    bool ok = true;
+    switch (action)
+    {
+        case Hear:      proc.breedPlay (child); return;
+        case KeepIt:    ok = proc.breedKeep (child, error); break;
+        case SaveAs:    chooseFolderAndSave ({ child }); return;
+        case SaveAgain: ok = proc.breedSave ({ child }, proc.materialSaveDir, error) > 0; break;
+        case SendKit:   ok = proc.breedSendToKit (child, error); break;
+        case SendKeys:  ok = proc.breedSendToKeys (child, error); break;
+        case SendLoops: ok = proc.breedSendToLoops (child, error); break;
+        default: return;
+    }
+    say (ok ? proc.lastMessage : error);
+    if (onChanged) onChanged();
+    refresh();
+}
+
+// The folder comes from you: it opens where you saved last, or else at the Neosystem's assigned WAV folder.
+void MaterialRoom::chooseFolderAndSave (std::vector<int> children)
+{
+    if (children.empty()) return;
+    const auto start = proc.materialSaveDir.isDirectory() ? proc.materialSaveDir : shared::Settings::load().folder (shared::Folder::Wav);
+    auto chooser = std::make_shared<juce::FileChooser> (children.size() == 1 ? "The folder to save it in" : "The folder to save them in", start);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                          [safe = juce::Component::SafePointer<MaterialRoom> (this), chooser, children] (const juce::FileChooser& fc)
+                          {
+                              const auto dir = fc.getResult();
+                              if (safe == nullptr || dir == juce::File()) return;
+                              juce::String error;
+                              const int n = safe->proc.breedSave (children, dir, error);
+                              safe->say (n > 0 ? safe->proc.lastMessage : error);
+                              safe->refresh();
+                          });
+}
 
 void MaterialRoom::say (const juce::String& s) { message.setText (s, juce::dontSendNotification); }
 
@@ -272,6 +339,7 @@ void MaterialRoom::refresh()
     const bool busy = proc.fitBusy() || proc.breedBusy();
     fit.setEnabled (! proc.kit.pool.empty() && ! busy);
     cancel.setVisible (busy);
+    saveAll.setVisible (! busy && ! proc.breedChildren.empty());
     wander.setEnabled (! busy && (proc.loadedBodyValid || proc.breedHasTarget || ! proc.breedKept.empty()));
     scratch.setEnabled (! busy);
     grow.setEnabled (! busy && proc.breedHasTarget && (proc.loadedBodyValid || ! proc.breedKept.empty()));
@@ -395,6 +463,7 @@ void MaterialRoom::resized()
     auto bottom = r.removeFromBottom (92);
     auto line = r.removeFromBottom (22);
     cancel.setBounds (line.removeFromRight (80).reduced (0, 1));
+    saveAll.setBounds (cancel.getBounds().withLeft (cancel.getRight() - 96));           // in Cancel's place: never both
     line.removeFromRight (8);
     message.setBounds (line);
 

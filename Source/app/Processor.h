@@ -161,6 +161,17 @@ public:
     double breedSecondsLeft() const;
     bool breedPlay (int child);
     bool breedKeep (int child, juce::String& error);
+    // MATERIAL's sounds out (asked 27 Nov, 22:06: save to a folder, all at once or one by right-click,
+    // and send a sound to KIT, KEYS or LOOPS). A child sent anywhere is kept.
+    std::vector<std::shared_ptr<bc::PoolItem>> breedPoolItems;   // per child: its pool sound, once kept
+    juce::File materialSaveDir;                  // the folder last saved to (this session)
+    juce::String breedChildName (int child) const;
+    int  breedSave (const std::vector<int>& children, const juce::File& dir, juce::String& error);   // WAVs written
+    bool breedSendToKit (int child, juce::String& error);
+    bool breedSendToKeys (int child, juce::String& error);
+    bool breedSendToLoops (int child, juce::String& error);
+    static constexpr const char* kSentToKeys = "MATERIAL to KEYS";    // the pool source KEYS and LOOPS draw them from
+    static constexpr const char* kSentToLoops = "MATERIAL to LOOPS";
 
     BcProcessor();
     ~BcProcessor() override;
