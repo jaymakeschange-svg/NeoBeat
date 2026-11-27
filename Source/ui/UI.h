@@ -1,9 +1,9 @@
 // NeoBeat 3.0 — the interface. One shell in every room:
 //   left       the tree: where you are
-//   middle     the room (SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP): drawing and playing only
+//   middle     the room (SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP, JACK): drawing and playing only
 //
 // The words, everywhere:
-//   Room    one of the four tabs.            Lane   one of the 16 rows of the sequencer, and its sound.
+//   Room    one of the five tabs.            Lane   one of the 16 rows of the sequencer, and its sound.
 //   Node    a box in a sequencer that holds a hit. A node can be sent to an effect; until it is, it is Init.
 //   Send    to give a node, a lane or a row an effect.     Scene  one of the four patterns, A to D.
 //   right      the inspector: whatever is selected (SOUND / FX / MOD)
@@ -82,7 +82,7 @@ struct Ctx
     explicit Ctx (NeoBeatProcessor& p) : proc (p) {}
     NeoBeatProcessor& proc;
     nb::Project& P() { return proc.project; }
-    int room = 0;            // 0 SEQUENCER, 1 MATRIXXXER, 2 LAYERMAX, 3 KEY MAP
+    int room = 0;            // 0 SEQUENCER, 1 MATRIXXXER, 2 LAYERMAX, 3 KEY MAP, 4 JACK
     int gridRow = 0;         // the Layermax row last touched (the inspector shows what it follows)
     int scene() const { return proc.scene(); }
     // the part of the scene the step grids show: `viewBars` bars from bar `viewBar`
@@ -198,7 +198,7 @@ private:
     bool keyPressed (const juce::KeyPress&) override;
     void mouseUp (const juce::MouseEvent&) override;      // (every child's: the end of a gesture is an undo step)
     std::unique_ptr<juce::Component> header, tree, inspector, dock, routeList, fsWindow, bdWindow;
-    std::array<std::unique_ptr<juce::Component>, 4> rooms;
+    std::array<std::unique_ptr<juce::Component>, 5> rooms;
     std::array<std::unique_ptr<juce::Component>, 5> overlays;   // export, MIDI, import, default prompt, notice
     std::vector<Part*> parts;
     int shownRoom = -1, sinceCommit = 0;
@@ -214,6 +214,7 @@ std::unique_ptr<juce::Component> makeKitRoom (Ctx&);
 std::unique_ptr<juce::Component> makeMatrixRoom (Ctx&);
 std::unique_ptr<juce::Component> makeGridRoom (Ctx&);
 std::unique_ptr<juce::Component> makeKeyMapRoom (Ctx&);
+std::unique_ptr<juce::Component> makeJackRoom (Ctx&);
 std::unique_ptr<juce::Component> makeFrictionWindow (Ctx&);
 std::unique_ptr<juce::Component> makeBounceWindow (Ctx&);
 std::unique_ptr<juce::Component> makeRouteList (Ctx&);

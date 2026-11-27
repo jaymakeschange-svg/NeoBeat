@@ -454,6 +454,7 @@ public:
         sr = sampleRate;
         mixL.assign ((size_t) kMixBlock, 0.0f); mixR.assign ((size_t) kMixBlock, 0.0f);
         routeL.fill (nullptr); routeR.fill (nullptr);
+        limiter.prepare (sr, 120.0f);
         for (auto& v : voices) v.prepare (sr);
         bus.prepare (sr);
         library.tables.materialNoise->prepare (sr);
@@ -707,6 +708,11 @@ public:
             if (addL != nullptr) { L += addL[i]; R += addR[i]; }
             L *= master; R *= master;
             bus.process (L, R, glue);
+            // IDM Jack can push the kit well over: seizures stack. While it is working, a limiter
+            // takes the level down ahead of the knee, so a seizure keeps its shape instead of
+            // being squashed into the knee's tanh. Off, this line does nothing and nothing else in
+            // NeoBeat changes. Zero latency, so nothing in the mix is delayed for it.
+            if (limiting) { const float g = limiter.gain (std::max (std::fabs (L), std::fabs (R))); L *= g; R *= g; }
             left[i] += safety (L);
             right[i] += safety (R);
         }
@@ -732,6 +738,8 @@ public:
     std::array<std::atomic<uint32_t>, kPads> hitCounter {};
     std::array<Gesture, kNumPlaces + 1> gestures {};   // the strokes the pads can follow (editable: the Matrixxxer draws them)
     float master = 0.35f;  // -9 dB: kick, snare and hats landing together stay clear of the knee
+    bool limiting = false;         // set by the workstation while IDM Jack is working
+    nsr::PeakLimiter limiter;
     float glue = 0.4f;     // kit-bus glue compression and saturation
 
 private:

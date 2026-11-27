@@ -16,7 +16,7 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Build plugin, standalone and tools
-        run: cmake --build build --config Release --parallel --target NeoBeat_VST3 NeoBeat_Standalone NeoBeatFriction_VST3 NeoBeatFriction_Standalone NeoBeatBounce_VST3 NeoBeatBounce_Standalone neobeat_cli test_sequencer test_workstation test_fx test_livefx test_analysis
+        run: cmake --build build --config Release --parallel --target NeoBeat_VST3 NeoBeat_Standalone NeoBeatFriction_VST3 NeoBeatFriction_Standalone NeoBeatBounce_VST3 NeoBeatBounce_Standalone neobeat_cli test_sequencer test_workstation test_jack test_fx test_livefx test_analysis
 
       - name: Sequencer timing test
         run: build\Release\test_sequencer.exe
@@ -29,6 +29,9 @@ jobs:
 
       - name: Workstation tests (live effects, scenes, MIDI out, Layermax, export, key map, modulation, threads)
         run: build\Release\test_workstation.exe
+
+      - name: IDM Jack through the workstation (overlay never written back, include list, replace, seed, release, transport, limiter)
+        run: build\Release\test_jack.exe
 
       - name: Effect plugin tests (Friction Stretch and Bounce Delay on their own)
         run: build\Release\test_fx.exe

@@ -12,6 +12,7 @@
 #pragma once
 
 #include "Engine.h"
+#include "../shared/JackCore.h"
 #include "FxUnits.h"
 #include "LiveState.h"
 #include "MarkSynth.h"
@@ -153,6 +154,30 @@ public:
         playing = seqOn; blockPpq = ppq0;
         computeFrame (frame, liveMod, ppq0, bpm);
 
+        // ---- IDM Jack: settings, held or let go, and how hard its offsets apply this block
+        {
+            nsr::JackSettings js;
+            if (jackSettings.read (js)) jack.setSettings (js);
+            const bool want = jackHold.load (std::memory_order_relaxed);
+            if (want && ! jack.isHeld())
+            {
+                jack.engage (ppq0);
+                jackPendingCount = 0;
+                jackBursts.store (0, std::memory_order_relaxed);
+                jackSeized.store (0, std::memory_order_relaxed);
+            }
+            else if (! want && jack.isHeld())
+            {
+                jack.release (ppq0);
+                if (! jack.isRecovering()) jackPendingCount = 0;     // a hard cut: nothing left over
+            }
+            if (jack.isRecovering() && ! seqOn) { jack.cut(); jackPendingCount = 0; }   // no transport, no recovery
+            jackScaleNow = jack.scaleAt (ppq0);
+            jackMaskNow = jackMask.load (std::memory_order_relaxed);
+            jackReplacing = jack.isHeld() && jack.settings().replace;
+            jackState.store (jack.isHeld() ? 1 : (jack.isRecovering() ? 2 : 0), std::memory_order_relaxed);
+        }
+
         // the scene: a change waits for the next bar while the sequencer runs
         {
             const int want = std::max (0, std::min (bp.scene, kNumScenes - 1));
@@ -206,6 +231,54 @@ public:
         if (bp.mode == 1 && heldKeys > 0 && ! tr.hostPlaying) keyPpq += ppqPerSample * n;
         transposeSemis = semis;
 
+        // ---- IDM Jack's bursts. Only with a transport: the lattice is musical time.
+        if (seqOn && jack.isHeld() && ppqPerSample > 0.0)
+        {
+            int64_t k = jack.pendingStep();
+            // A transport jump - a loop, a locate - re-aims the lattice where the transport now is.
+            // Playing on, k is the first step at or after this block's start. Jumped forwards, k is
+            // well behind it; jumped back, the step before k is already ahead of it. (A step a hair
+            // behind is rounding between hosts' block positions, and still plays.)
+            if (jack.beatOfStep (k) < ppq0 - 0.25 || jack.beatOfStep (k - 1) >= ppq0 + 1.0e-6) k = jack.firstStepAtOrAfter (ppq0);
+            while (jack.beatOfStep (k) < ppq1)
+            {
+                nsr::JackFigure f;
+                if (jack.planStep (k, jackMaskNow, kNumPads, f))
+                {
+                    jackBursts.fetch_add (1, std::memory_order_relaxed);
+                    const double b0 = jack.beatOfStep (k), len = jack.stepBeats (k);
+                    for (int i = 0; i < f.count && jackPendingCount < (int) jackPending.size(); ++i)
+                    {
+                        const auto& h = f.hits[i];
+                        auto& p = jackPending[(size_t) jackPendingCount++];
+                        p.at = jackAbs + (int64_t) std::llround ((b0 + (double) h.at * len - ppq0) / ppqPerSample)
+                             + (int64_t) ((double) h.timingMs * 0.001 * sr);
+                        p.pad = h.pad; p.vel = h.velocity;
+                        std::copy (h.off, h.off + nsr::JoCount, p.off);
+                    }
+                }
+                ++k;
+            }
+            jack.setPendingStep (k);
+        }
+        jackDueCount = 0;
+        for (int i = 0; i < jackPendingCount; )
+        {
+            const auto& p = jackPending[(size_t) i];
+            if (p.at < jackAbs + n)
+            {
+                if (jackDueCount < (int) jackDue.size())
+                {
+                    const int off = (int) std::max<int64_t> (0, p.at - jackAbs);
+                    std::copy (p.off, p.off + nsr::JoCount, jackDue[(size_t) jackDueCount].begin());
+                    addEvent ({ off, Ev::JackHit, p.pad, 0, p.vel, semis, 0, jackDueCount, ppq0 + off * ppqPerSample, 0 });
+                    ++jackDueCount;
+                }
+                jackPending[(size_t) i] = jackPending[(size_t) --jackPendingCount];
+            }
+            else ++i;
+        }
+
         std::stable_sort (events.begin(), events.end(), [] (const Ev& a, const Ev& b) { return a.offset < b.offset; });
 
         // controls that moved reach the effects that are sounding
@@ -230,10 +303,29 @@ public:
             if (o.samplesLeft < n) { if (midiOut.size() < midiOut.capacity()) midiOut.push_back ({ std::max (0, o.samplesLeft), false, o.note, 0, o.channel }); o.note = -1; }
             else o.samplesLeft -= n;
         }
+        // the limiter is in while Jack works and for a second after, so a release under a ringing
+        // tail is not left to the knee
+        if (jack.active()) jackTail = (int) sr;
+        else jackTail = std::max (0, jackTail - n);
+        engine->limiting = jack.active() || jackTail > 0;
+        jackAbs += n;
+
         cur = nullptr; live = nullptr;
         livePublisher.endBlock();
         publisher.endBlock();
     }
+
+    // ---- IDM Jack. Spec: docs/PROPOSED-FEATURES.md, "IDM Jack" - the user's.
+    //
+    // The message thread writes these; the audio thread reads them at the top of each block. Jack
+    // never writes a stored parameter: its offsets go onto the copy of a hit's settings that hitPad
+    // already makes, so releasing it is the return to the original by construction.
+    nsr::TripleBuffer<nsr::JackSettings> jackSettings;
+    std::atomic<bool> jackHold { false };
+    std::atomic<uint32_t> jackMask { 0xffffu };        // which lanes it may grab: bit p is lane p
+    std::atomic<int> jackState { 0 };                  // 0 idle, 1 held, 2 recovering - for the UI
+    std::atomic<int> jackBursts { 0 };                 // bursts fired since it was engaged
+    std::atomic<int> jackSeized { 0 };                 // hits that carried offsets since it was engaged
 
     // UI feedback
     std::atomic<int> playStep { -1 }, gridCol { -1 }, playScene { 0 }, queuedScene { -1 }, playLink { -1 };
@@ -249,7 +341,7 @@ public:
 private:
     struct Ev
     {
-        enum Kind : uint8_t { NoteOn, NoteOff, SeqNote, PadDirect, GridCol, Mark, PreHit, Follow };
+        enum Kind : uint8_t { NoteOn, NoteOff, SeqNote, PadDirect, GridCol, Mark, PreHit, Follow, JackHit };
         int offset; Kind kind; int a; int b; float vel; float semis; int sub; int c; double ppq; int scene;
     };
     void addEvent (const Ev& e) noexcept { if (events.size() < events.capacity()) events.push_back (e); }
@@ -395,8 +487,19 @@ private:
     // ---------------------------------------------------------------- events
     void handle (const Ev& e, std::vector<MidiOut>& midiOut) noexcept
     {
+        // replace: while Jack holds, the written pattern does not play - the kit runs on Jack alone.
+        // KEY MAP marks are left playing: they are held notes with their own endings, and cutting
+        // them here could leave one sounding.
+        if (jackReplacing && (e.kind == Ev::SeqNote || e.kind == Ev::PreHit || e.kind == Ev::GridCol || e.kind == Ev::Follow))
+            return;
         switch (e.kind)
         {
+            case Ev::JackHit:
+                if (mute[(size_t) e.a]) break;
+                jackHitOff = jackDue[(size_t) e.c].data();
+                hitPad (e.a, e.vel, e.semis, 0.0f, 0.0f, false, 0, 0, kPadNoteBase + e.a, -1, e.ppq, 0, -1);
+                jackHitOff = nullptr;
+                break;
             case Ev::NoteOn: noteOn (e.a, e.vel, 0.0f, false, 0, 0, blockPpq, 0, -1); break;
             case Ev::NoteOff: noteOff (e.a); break;
             case Ev::PadDirect: hitPad (e.a, e.vel, 0.0f, 0.0f, 0.0f, false, 0, 0, kPadNoteBase + e.a, -1, blockPpq, 0, -1); break;
@@ -669,6 +772,26 @@ private:
         const LiveState* lv = live;
         PadSettings ps = engine->pads[(size_t) pad];
         ps.levelDb += gainDb; ps.pan = std::max (-1.0f, std::min (1.0f, ps.pan + panAdd));
+        // IDM Jack: this hit's own offsets, on this copy only. A burst hit brings the offsets it was
+        // planned with; any other hit of an included lane gets fresh ones. A pattern hit's are keyed
+        // on where it falls, so the same pass plays the same way twice and the copy an effect
+        // prepares ahead gets the same offsets as the hit. A hit played by hand has no position to
+        // key on - every one arrives at the block's - so it is keyed on the hit count as well, or
+        // each key press on a lane would get the same offsets.
+        if (jackScaleNow > 0.0f && ((jackMaskNow >> pad) & 1u))
+        {
+            float own[nsr::JoCount];
+            const float* o = jackHitOff;
+            float s = 1.0f;
+            if (o == nullptr)
+            {
+                const uint64_t where = (uint64_t) std::llround (ppq * 960.0) * 31u + (uint64_t) pad;
+                jack.hitOffsets (fromSeq ? where : where ^ ((uint64_t) (hitSeed + 1u) << 32), own);
+                o = own; s = jackScaleNow;
+            }
+            applyJack (ps, semis, o, s);
+            if (real) jackSeized.fetch_add (1, std::memory_order_relaxed);
+        }
         // a node on this hit
         const LiveNode* node = lv != nullptr && fromSeq && sub == 0 && lv->oneShotOn ? lv->nodeAt (scene, pad, step) : nullptr;
         int prepared = -1;                                            // a node made ahead (Friction Stretch)
@@ -945,5 +1068,40 @@ private:
     std::atomic<float> pendingNoteVel { 0.8f };
     struct PendingOff { int note = -1; int channel = 1; int samplesLeft = 0; };
     std::array<PendingOff, 128> pendingOffs {};
+
+    // ---- IDM Jack, audio thread only
+    nsr::JackCore jack;
+    // A burst subdivides a lattice step, and a step is far longer than a block, so its hits are
+    // planned when the step is reached and held here until their sample comes round.
+    struct JackPending { int64_t at = 0; int pad = 0; float vel = 0.0f; float off[nsr::JoCount] {}; };
+    std::array<JackPending, 256> jackPending {};
+    int jackPendingCount = 0;
+    std::array<std::array<float, nsr::JoCount>, 64> jackDue {};    // this block's burst hits, by event
+    int jackDueCount = 0;
+    int64_t jackAbs = 0;                 // samples since the start: the clock the pending hits wait on
+    int jackTail = 0;                    // the limiter stays on this long after Jack stops
+    float jackScaleNow = 0.0f;
+    uint32_t jackMaskNow = 0;
+    bool jackReplacing = false;
+    const float* jackHitOff = nullptr;   // set while a burst hit is being played
+
+    // This hit's offsets, onto this copy of its settings. Pitch goes into the hit's transpose and
+    // level and pan into the copy, so they reach every path a hit can take, prepared copies
+    // included. Decay, tone, drive, hollow, evolve and width shape the synthesis itself, so they
+    // reach a live voice only: a lane whose effects are fed a copy prepared in advance hears pitch,
+    // pan and level from Jack and not the rest.
+    static void applyJack (PadSettings& ps, float& semis, const float* o, float s) noexcept
+    {
+        auto cl = [] (float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); };
+        semis     += o[nsr::JoTune] * 12.0f * s;
+        ps.decay   = cl (ps.decay * std::pow (2.0f, o[nsr::JoDecay] * 1.5f * s), 0.1f, 8.0f);
+        ps.tone    = cl (ps.tone + o[nsr::JoTone] * s, -1.0f, 1.0f);
+        ps.drive   = cl (ps.drive + o[nsr::JoDrive] * s, 0.0f, 1.0f);
+        ps.hollow  = cl (ps.hollow + o[nsr::JoHollow] * s, 0.0f, 1.0f);
+        ps.evolve  = cl (ps.evolve + o[nsr::JoEvolve] * s, 0.0f, 1.0f);
+        ps.pan     = cl (ps.pan + o[nsr::JoPan] * s, -1.0f, 1.0f);
+        ps.width   = cl (ps.width + o[nsr::JoWidth] * s, 0.0f, 2.0f);
+        ps.levelDb += o[nsr::JoLevel] * 6.0f * s;
+    }
 };
 } // namespace nb

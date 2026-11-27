@@ -1,6 +1,7 @@
 // NeoBeat 2.0 — a stress host: the whole plugin (processor and editor) driven like a DAW would,
 // with random edits everywhere, MIDI, transport jumps, sample-rate and block-size changes, state
 // round trips and the editor opened, used and closed while it plays. Usage: NeoBeatHostTest [seconds]
+#include <typeinfo>
 #include <cstdlib>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Source/plugin/PluginProcessor.h"
@@ -10,12 +11,16 @@
 static int failures = 0;
 #define CHECK(cond, msg) do { if (! (cond)) { std::printf ("  FAIL: %s\n", msg); ++failures; } else std::printf ("  ok:   %s\n", msg); } while (0)
 
+// the random edits' seed: NeoBeatHostTest [seconds] [seed]
+static juce::int64 gSeed = 1234;
+
 struct Host
 {
     NeoBeatProcessor& p;
     double sr = 48000.0; int block = 512; double ppq = 0.0; bool playing = true; double bpm = 120.0;
     float maxAbs = 0.0f; bool bad = false;
-    juce::Random rnd { 1234 };
+    std::string where;           // what was last done: printed once, the first time the output goes bad
+    juce::Random rnd { gSeed };
 
     struct PH : juce::AudioPlayHead
     {
@@ -53,7 +58,16 @@ struct Host
                 for (int i = 0; i < n; ++i)
                 {
                     const float x = buf.getSample (c, i);
-                    if (! std::isfinite (x)) bad = true;
+                    if (! std::isfinite (x))
+                    {
+                        if (! bad)
+                        {
+                            std::printf ("     first non-finite sample after: %s (jack state %d, held %d)\n", where.c_str(), p.jackState(), (int) p.jackHeldParam());
+                            juce::MemoryBlock st; p.getStateInformation (st);
+                            juce::File ("/tmp/nb_nan_state.bin").replaceWithData (st.getData(), st.getSize());
+                        }
+                        bad = true;
+                    }
                     maxAbs = std::max (maxAbs, std::fabs (x));
                 }
             if (playing) ppq += bpm / 60.0 * n / sr;
@@ -68,8 +82,24 @@ static void randomEdit (NeoBeatProcessor& p, juce::Random& r)
 {
     auto& P = p.project;
     nb::Pattern pat; p.snapshotPattern (pat);
-    switch (r.nextInt (14))
+    switch (r.nextInt (17))
     {
+        // the randomiser, IDM Jack held or let go, and its settings and lanes
+        case 14: p.roll(); break;
+        case 15: p.jackSetHeld (r.nextBool()); break;
+        case 16:
+        {
+            auto& j = p.jack;
+            j.density = r.nextFloat(); j.extremity = r.nextFloat(); j.repeatProb = r.nextFloat() * 0.95f;
+            j.windowSteps = 2 + r.nextInt (31); j.recallProb = r.nextFloat() * 0.95f; j.memory = 1 + r.nextInt (16);
+            j.division = (int[]) { 4, 6, 8, 12 } [r.nextInt (4)]; j.maxRetriggers = r.nextInt (9);
+            j.timingMaxMs = 1.0f + r.nextFloat() * 99.0f; j.replace = r.nextBool(); j.recoveryBars = r.nextBool() ? 0.0f : r.nextFloat() * 4.0f;
+            j.selfRandomise = r.nextFloat(); for (auto& a : j.axis) a = r.nextBool();
+            auto& t = p.chaos.allTargets(); t[(size_t) r.nextInt ((int) t.size())].on = r.nextBool();
+            p.jackLockSeed = r.nextBool();
+            p.jackApply();
+            break;
+        }
         case 0: P.matrix.oneShot = nb::makeOneShot (r.nextInt (33), pat); break;
         case 1: P.matrix.seq = nb::makeSeq (r.nextInt (32)); break;
         case 2: P.matrix.sample = nb::makeSample (r.nextInt (32)); break;
@@ -106,7 +136,31 @@ int main (int argc, char** argv)
    #endif
 
     juce::ScopedJuceInitialiser_GUI init;
+    // NeoBeatHostTest --state file.bin [strip]: play a saved state for 30 s and report the first
+    // non-finite sample - for replaying what a failed run saved. strip: routes, inserts, bd, fs
+    if (argc > 2 && juce::String (argv[1]) == "--state")
+    {
+        juce::MemoryBlock mb; juce::File (argv[2]).loadFileAsData (mb);
+        auto pr = std::make_unique<NeoBeatProcessor>();
+        pr->setStateInformation (mb.getData(), (int) mb.getSize());
+        const juce::String strip = argc > 3 ? argv[3] : "";
+        if (strip.contains ("routes")) pr->project.mod.routes.clear();
+        if (strip.contains ("inserts")) for (auto& f : pr->project.padFx) for (auto& c : f.inserts) c = nb::CellFx();
+        if (strip.contains ("bd")) for (auto& b : pr->project.bd) b.on = false;
+        if (strip.contains ("fs")) for (auto& f : pr->project.fs) f.on = false;
+        if (strip.contains ("oneshot")) pr->project.matrix.oneShot.cells.clear();
+        if (strip.contains ("nojack")) pr->jackSetHeld (false);
+        if (strip.contains ("jack")  && ! strip.contains ("nojack")) pr->jackSetHeld (true);
+        if (strip.contains ("hostmode")) pr->setParam ("mode", 0.0f);
+        pr->projectChanged();
+        Host h (*pr); h.prepare (48000.0, 512);
+        for (int i = 0; i < 300 && ! h.bad; ++i) { h.where = "second " + std::to_string (i * 0.1); h.run (0.1, true); }
+        std::printf ("%s, peak %.3f\n", h.bad ? "NON-FINITE" : "finite", h.maxAbs);
+        return h.bad ? 1 : 0;
+    }
     const double seconds = argc > 1 ? std::atof (argv[1]) : 20.0;
+    if (argc > 2) gSeed = std::atoll (argv[2]);
+    std::printf ("seed %lld\n", (long long) gSeed);
     auto proc = std::make_unique<NeoBeatProcessor>();
     Host host (*proc);
 
@@ -130,7 +184,7 @@ int main (int argc, char** argv)
         {
             switch (host.rnd.nextInt (9))
             {
-                case 0: ctx.room = host.rnd.nextInt (4); ctx.refreshNow(); break;
+                case 0: ctx.room = host.rnd.nextInt (5); ctx.refreshNow(); break;
                 case 1: ctx.select ({ ui::Sel::Pad, host.rnd.nextInt (16) }, host.rnd.nextInt (3)); break;
                 case 2: ctx.room = 1; proc->project.matrix.view = host.rnd.nextInt (3); ctx.select ({ ui::Sel::None, 0 }, host.rnd.nextInt (3)); break;
                 case 3: if (! proc->project.matrix.oneShot.cells.empty()) { ctx.room = 1; proc->project.matrix.view = 1; ctx.select ({ ui::Sel::Cell, host.rnd.nextInt ((int) proc->project.matrix.oneShot.cells.size()) }, host.rnd.nextInt (3)); } break;
@@ -161,6 +215,7 @@ int main (int argc, char** argv)
 
     std::printf ("4. state: save, load into a new instance, save again: the same\n");
     for (int i = 0; i < 6; ++i) randomEdit (*proc, host.rnd);
+    proc->jackSetHeld (false);          // a state opens with Jack let go, so compare it let go
     juce::MemoryBlock a, b;
     proc->getStateInformation (a);
     auto proc2 = std::make_unique<NeoBeatProcessor>();
@@ -171,6 +226,15 @@ int main (int argc, char** argv)
     const bool same = xa && xb && xa->isEquivalentTo (xb.get(), false);
     if (! same && xa && xb) { xa->writeTo (juce::File ("/tmp/state_a.xml")); xb->writeTo (juce::File ("/tmp/state_b.xml")); }
     CHECK (same, "the state survives a round trip");
+    {
+        // saved mid-seizure, it opens let go
+        proc->jackSetHeld (true);
+        juce::MemoryBlock held; proc->getStateInformation (held);
+        auto proc3 = std::make_unique<NeoBeatProcessor>();
+        proc3->setStateInformation (held.getData(), (int) held.getSize());
+        CHECK (! proc3->jackHeldParam(), "a state saved with IDM Jack held opens with it let go");
+        proc->jackSetHeld (false);
+    }
     // a truncated or foreign state must not crash
     proc2->setStateInformation (a.getData(), (int) a.getSize() / 2);
     const char junk[] = "not a state at all";
@@ -200,7 +264,7 @@ int main (int argc, char** argv)
         int events = 0;
         for (int it = 0; it < 900 && shell != nullptr; ++it)
         {
-            if (it % 60 == 0) { shell->ctx.room = it / 60 % 4; shell->ctx.refreshNow(); }
+            if (it % 60 == 0) { shell->ctx.room = it / 60 % 5; shell->ctx.refreshNow(); }
             std::vector<juce::Component*> all;
             std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
             {
@@ -226,6 +290,13 @@ int main (int argc, char** argv)
             const auto now = juce::Time::getCurrentTime();
             auto ev = [&] (juce::Point<float> p, bool dragged) { return juce::MouseEvent (src, p, mods, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, target, target, now, p0, now, 1, dragged); };
             const int kind = host.rnd.nextInt (10);
+            {
+                juce::String w = "monkey " + juce::String (it) + ", room " + juce::String (shell->ctx.room) + ", kind " + juce::String (kind) + ", "
+                               + juce::String (typeid (*target).name());
+                if (auto* b = dynamic_cast<juce::Button*> (target)) w << " '" << b->getButtonText() << "'";
+                if (auto* par = target->getParentComponent()) w << " in " << typeid (*par).name();
+                host.where = w.toStdString();
+            }
             if (kind == 0 && safe) { juce::MouseWheelDetails w { 0.0f, host.rnd.nextFloat() - 0.5f, false, false, false }; target->mouseWheelMove (ev (p0, false), w); }
             else if (kind == 1 && safe) { target->mouseDown (ev (p0, false)); if (safe) target->mouseUp (ev (p0, false)); if (safe) target->mouseDoubleClick (ev (p0, false)); }
             else if (safe)

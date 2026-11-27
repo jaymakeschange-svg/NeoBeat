@@ -391,8 +391,13 @@ private:
             sumD2 += (double) direct[i] * direct[i];
         }
         const float source = (float) std::sqrt (sumD2 + 1.0e-20) * (1.0f - std::exp (-t / m.tau_c));
-        const float energy = (float) sumD2 / (energy1 + 1.0e-20f);
-        const float elastic = 0.5f * std::log1p (std::min (3.0f, std::max (-0.9f, m.G)) * energy);
+        // Bounded, because the reference can vanish: transposed far enough up (about +72 st, found
+        // by NeoBeat's host test in KEY mode), every mode is damped to nothing by frame 1, energy1
+        // floors at 1e-20, this ratio runs to 1e19, and with a negative G log1p is handed less
+        // than -1 - NaN, through the whole mix. In range neither bound does anything: frame 0
+        // carries at most about 1.3x frame 1's energy, and no learned G comes near -0.9.
+        const float energy = std::min (4.0f, (float) sumD2 / (energy1 + 1.0e-20f));
+        const float elastic = 0.5f * std::log1p (std::max (-0.95f, std::min (3.0f, std::max (-0.9f, m.G)) * energy));
         const float strike = 1.0f - std::exp (-t / m.tau_a);
         const float rockPhase = std::cos (6.28318530718f * m.lb_rate * t);
         bool alive = false;

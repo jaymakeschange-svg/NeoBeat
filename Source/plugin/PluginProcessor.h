@@ -11,6 +11,7 @@
 #include "../engine/Workstation.h"
 #include "../shared/Learner.h"
 #include "../shared/Njq.h"
+#include "../shared/Chaos.h"
 
 // The four scenes the editor edits and the audio thread plays, shared without locks.
 struct PatternStore
@@ -73,7 +74,8 @@ public:
     static constexpr int kPads = nb::kNumPads;
     static constexpr int kPadNoteBase = 36;
     static constexpr int kKeyRoot = 60;
-    static constexpr int kRooms = 4;      // SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP
+    static constexpr int kRooms = 5;      // SEQUENCER, MATRIXXXER, LAYERMAX, KEY MAP, JACK
+    static constexpr int kJackRoom = 4;
 
     NeoBeatProcessor();
     ~NeoBeatProcessor() override;
@@ -141,6 +143,40 @@ public:
     void undo (int room);
     void redo (int room);
 
+    // ---- the global randomiser. Spec: docs/DECISIONS.md, "B - the global randomiser".
+    //
+    // One press rolls every included pad once: all of its own parameters, and the parameters of
+    // the effects on its lane. It writes values, deliberately - the randomiser is a destination,
+    // for auditioning: press, listen, press again. Each press is one undo step in the JACK room, so
+    // rolling past something good costs nothing.
+    //
+    // Its target list is sixteen pads, one action each, and the same list is IDM Jack's include
+    // list: choosing a pad puts all of its parameters in. Jack does NOT use roll() or write
+    // anything - the spec requires its parameter chaos to be a per-hit overlay at playback.
+    nsr::Chaos chaos;
+    void roll();
+    void refreshPadTargetNames();                  // pad names follow the sounds loaded on them
+    bool padIncluded (int pad) const noexcept;
+    void includeAll (bool on);
+
+    // ---- IDM Jack. Spec: docs/PROPOSED-FEATURES.md, "IDM Jack"; decisions: docs/DECISIONS.md.
+    //
+    // The engine is in the workstation, on the audio thread. Here: the panel's settings, and the
+    // pass that will play next. ON is the host parameter "jack", so a controller or automation can
+    // hold it; the audio thread reads it every block, so engaging is never late by a timer tick.
+    // The next pass - its seed, and its settings after self-randomise - is prepared ahead, when the
+    // previous one is let go, so it is already waiting when ON arrives.
+    nsr::JackSettings jack;                         // what the panel shows
+    nsr::JackSettings jackPlaying;                  // what plays: `jack`, self-randomised for this pass
+    bool jackLockSeed = false;                      // off: each switch-on a new pass; on: the same again
+    void jackApply();                               // settings and include list to the audio thread
+    void jackSetHeld (bool on);                     // the panel's ON (sets the host parameter)
+    bool jackHeldParam() const noexcept { return jackParam != nullptr && jackParam->load() > 0.5f; }
+    int jackState() const noexcept { return ws->jackState.load (std::memory_order_relaxed); }
+    int jackBursts() const noexcept { return ws->jackBursts.load (std::memory_order_relaxed); }
+    int jackSeized() const noexcept { return ws->jackSeized.load (std::memory_order_relaxed); }
+    uint32_t jackMask() const noexcept;
+
     // ---- .NJQ: a kit and its sequence in one file
     bool saveNjq (const juce::File& file, const juce::String& name, juce::String& error);
     bool loadNjq (const juce::File& file, juce::String& error);
@@ -204,6 +240,8 @@ private:
     void setPadSample (int pad, std::shared_ptr<const nb::SampleData> ptr);
     std::shared_ptr<const nb::SampleData> resolveSample (const juce::String& key);
     void publishLive();
+    void registerPadTargets();
+    void rollPad (int pad, gen::Rng& rng);
 
     // undo
     using Sections = std::map<juce::String, juce::MemoryBlock>;
@@ -240,7 +278,10 @@ private:
 
     struct PadParams { std::atomic<float>* sound, * tune, * decay, * tone, * drive, * hollow, * evolve, * pan, * level, * choke, * mute, * width; };
     std::array<PadParams, kPads> padParams {};
-    std::atomic<float>* masterParam = nullptr, * swingParam = nullptr, * tempoParam = nullptr, * modeParam = nullptr, * runParam = nullptr, * sceneParam = nullptr;
+    std::atomic<float>* masterParam = nullptr, * swingParam = nullptr, * tempoParam = nullptr, * modeParam = nullptr, * runParam = nullptr, * sceneParam = nullptr, * jackParam = nullptr;
+    int jackSeenState = 0;
+    uint64_t jackPasses = 0;
+    void jackNextPass();
 
     // export (its own thread)
     struct ExportThread;

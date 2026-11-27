@@ -29,6 +29,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeoBeatProcessor::createLayo
                                                        AudioParameterFloatAttributes().withLabel ("BPM")));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "mode", 1 }, "Play Mode", StringArray { "Host", "Key", "Pads" }, 0));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "run", 1 }, "Run (standalone)", false));
+    // IDM Jack, held: on while it is on. A host parameter so it can be mapped and automated.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "jack", 1 }, "IDM Jack", false));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "scene", 1 }, "Scene", StringArray { "A", "B", "C", "D" }, 0));
 
     StringArray soundNames;
@@ -73,6 +75,7 @@ NeoBeatProcessor::NeoBeatProcessor()
     tempoParam = apvts.getRawParameterValue ("tempo");
     modeParam = apvts.getRawParameterValue ("mode");
     runParam = apvts.getRawParameterValue ("run");
+    jackParam = apvts.getRawParameterValue ("jack");
     sceneParam = apvts.getRawParameterValue ("scene");
     for (int p = 0; p < kPads; ++p)
     {
@@ -86,8 +89,171 @@ NeoBeatProcessor::NeoBeatProcessor()
     for (int s = 1; s < nb::kNumScenes; ++s) { nb::Pattern empty; empty.length = nb::presets()[0].pattern.length; pattern.loadScene (s, empty); }
     midiIn.reserve (1024);
     midiOut.reserve (2048);
+    registerPadTargets();
+    jackNextPass();
     publishLive();
     startTimer (30);
+}
+
+// ------------------------------------------------------------------------- the global randomiser
+//
+// What each pad's roll reaches, and how far. Ranges are read from the host parameters themselves
+// rather than written out again here, so the randomiser can never disagree with the parameter it is
+// moving. Reach is how much of that range one press may cover, as a window around where the
+// parameter already sits.
+//
+// Left out on purpose: sound (which sound is on the lane is a different decision from how it is
+// set), choke and mute (structure, not character).
+namespace
+{
+// reach: how far one press moves a parameter from where it is. lo < hi instead: a fixed window,
+// picked fresh each press wherever the parameter was - for a value that must not wander.
+struct PadRoll { const char* name; float reach; float lo = 0.0f, hi = 0.0f; };
+constexpr PadRoll kPadRoll[] = {
+    { "tune",   0.50f },     // a window of +-12 st: two octaves of travel stays musical enough to audition
+    { "decay",  0.80f },
+    { "tone",   1.00f },
+    { "drive",  0.80f },
+    { "hollow", 0.80f },
+    { "evolve", 1.00f },
+    { "pan",    0.60f },
+    { "width",  0.70f },
+    // Level is a window, not a walk. As a walk (first build: reach 0.2, about +-6 dB from wherever
+    // it was) a dozen presses drift some lanes towards silence and pin others at +6 dB - the test
+    // snapshot landed one on +6.0 at the first press. A roll that silences a lane or blows it up
+    // is not an audition.
+    { "level",  1.00f, -9.0f, 1.0f },
+};
+} // namespace
+
+void NeoBeatProcessor::registerPadTargets()
+{
+    chaos.clearTargets();
+    for (int p = 0; p < kPads; ++p)
+    {
+        nsr::ChaosTarget t;
+        t.room = "LANE " + std::to_string (p + 1);
+        t.name = padName (p).toStdString();
+        t.reach = 1.0f;
+        t.on = true;
+        t.apply = [this, p] (float, gen::Rng& rng) { rollPad (p, rng); };
+        chaos.addTarget (std::move (t));
+    }
+}
+
+void NeoBeatProcessor::refreshPadTargetNames()
+{
+    auto& list = chaos.allTargets();
+    for (int p = 0; p < kPads && p < (int) list.size(); ++p)
+        list[(size_t) p].name = padName (p).toStdString();
+}
+
+void NeoBeatProcessor::includeAll (bool on)
+{
+    for (auto& t : chaos.allTargets()) if (! t.never) t.on = on;
+    jackApply();
+}
+
+uint32_t NeoBeatProcessor::jackMask() const noexcept
+{
+    uint32_t m = 0;
+    for (int p = 0; p < kPads; ++p) if (padIncluded (p)) m |= 1u << p;
+    return m;
+}
+
+void NeoBeatProcessor::jackApply()
+{
+    jackPlaying = jack;
+    if (jack.selfRandomise > 0.001f)
+    {
+        // seeded by the pass, so the same seed rolls the same settings: a locked pass replays whole
+        gen::Rng rng (gen::Rng::mix (jack.seed, 0x5e1f5e1full));
+        nsr::jackSelfRandomise (jackPlaying, rng);
+    }
+    // NeoBeat has no effect parameter for Jack to move (docs/DECISIONS.md), so that axis is off
+    // here rather than a switch that does nothing - and at least one axis stays on.
+    jackPlaying.axis[(int) nsr::ChaosAxis::Effect] = false;
+    bool any = false;
+    for (int i = 0; i < (int) nsr::ChaosAxis::Count; ++i) any = any || jackPlaying.axis[i];
+    if (! any) jackPlaying.axis[(int) nsr::ChaosAxis::Parameter] = true;
+    ws->jackSettings.write (jackPlaying);
+    ws->jackMask.store (jackMask(), std::memory_order_relaxed);
+}
+
+void NeoBeatProcessor::jackNextPass()
+{
+    if (! jackLockSeed)
+        jack.seed = gen::Rng::mix ((uint64_t) juce::Time::currentTimeMillis(), ++jackPasses) | 1u;
+    jackApply();
+}
+
+void NeoBeatProcessor::jackSetHeld (bool on)
+{
+    if (auto* p = apvts.getParameter ("jack"))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (on ? 1.0f : 0.0f);
+        p->endChangeGesture();
+    }
+}
+
+bool NeoBeatProcessor::padIncluded (int pad) const noexcept
+{
+    const auto& list = chaos.allTargets();
+    return pad >= 0 && pad < (int) list.size() && list[(size_t) pad].on && ! list[(size_t) pad].never;
+}
+
+void NeoBeatProcessor::rollPad (int pad, gen::Rng& rng)
+{
+    // the lane's own parameters, through the host parameters so the host sees the change
+    for (const auto& r : kPadRoll)
+    {
+        const auto id = paramId (pad, r.name);
+        if (auto* prm = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (id)))
+        {
+            const auto& range = prm->getNormalisableRange();
+            const float v = r.lo < r.hi ? rng.unif (std::max (range.start, r.lo), std::min (range.end, r.hi))
+                                        : nsr::chaosVisit (rng, getParam (id), range.start, range.end, r.reach);
+            setParam (id, v);
+        }
+    }
+
+    // and the parameters of the effects already on its lane. Which effects are there is left
+    // alone: changing the chain is rebuilding the lane, not auditioning it.
+    for (auto& c : project.padFx[(size_t) pad].inserts)
+    {
+        if (c.kind == nb::CellFx::Library)
+        {
+            const auto& info = nb::matrixFxInfo()[(size_t) c.fx].params;
+            for (size_t i = 0; i < info.size() && i < c.settings.p.size(); ++i)
+                c.settings.p[i] = nsr::chaosVisit (rng, c.settings.p[i], info[i].lo, info[i].hi, 0.8f);
+        }
+        else if (c.kind == nb::CellFx::BounceDelayFx)
+        {
+            auto& b = c.bounce;
+            b.bounciness = nsr::chaosVisit (rng, b.bounciness, 0.3f, 0.95f, 0.6f);
+            b.distStart  = nsr::chaosVisit (rng, b.distStart, 0.5f, 10.0f, 0.6f);
+            b.distEnd    = nsr::chaosVisit (rng, b.distEnd, 1.0f, 30.0f, 0.6f);
+            b.speed      = nsr::chaosVisit (rng, b.speed, 0.0f, 1.0f, 0.6f);
+            b.panRandom  = nsr::chaosVisit (rng, b.panRandom, 0.0f, 1.0f, 0.8f);
+        }
+        else if (c.kind == nb::CellFx::FrictionStretchFx)
+        {
+            auto& s = c.stretch;
+            s.stretch  = nsr::chaosVisit (rng, s.stretch, 1.0f, 12.0f, 0.6f);
+            s.creep    = nsr::chaosVisit (rng, s.creep, 0.0f, 1.0f, 0.8f);
+            s.holdFade = nsr::chaosVisit (rng, s.holdFade, 0.0f, 1.0f, 0.8f);
+            s.snap     = nsr::chaosVisit (rng, s.snap, 0.0f, 1.0f, 0.8f);
+        }
+    }
+}
+
+void NeoBeatProcessor::roll()
+{
+    refreshPadTargetNames();
+    chaos.rollOnce();
+    projectChanged();               // the lane effects
+    undoCommit (kJackRoom);         // one press, one step back
 }
 
 NeoBeatProcessor::~NeoBeatProcessor()
@@ -195,6 +361,7 @@ void NeoBeatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     nb::BlockParams bp;
     bp.mode = (int) modeParam->load();
     bp.run = runParam->load() > 0.5f;
+    ws->jackHold.store (jackParam->load() > 0.5f, std::memory_order_relaxed);
     bp.swing = swingParam->load();
     bp.tapPad = selectedPad.load();
     bp.scene = juce::jlimit (0, nb::kNumScenes - 1, (int) std::lround (sceneParam->load()));
@@ -253,6 +420,12 @@ std::unique_ptr<nb::RenderInputs> NeoBeatProcessor::renderInputs() const
 void NeoBeatProcessor::timerCallback()
 {
     if (publishedVersion != projectVersion.load()) publishLive();
+    // IDM Jack: a pass has ended (released, and any recovery run out) - get the next one ready
+    {
+        const int st = jackState();
+        if (jackSeenState != 0 && st == 0 && ! jackHeldParam()) jackNextPass();
+        jackSeenState = st;
+    }
     // a new instance (no saved state came from the host) opens with the default sequence, if one was chosen
     if (! startupDone && ++ticks > 12)
     {
@@ -1110,6 +1283,22 @@ void NeoBeatProcessor::getStateInformation (juce::MemoryBlock& destData)
     for (int pad = 0; pad < kPads; ++pad)
         if (useSample[(size_t) pad].load() && samples[(size_t) pad]) smp->setAttribute ("p" + juce::String (pad), juce::String (samples[(size_t) pad]->path));
     xml->addChildElement (io::toXml (project).release());
+    {
+        // IDM Jack's panel and the include list it shares with ROLL. Whether it is held is the host
+        // parameter "jack", saved with the others - and let go again on load (setStateInformation).
+        auto* j = xml->createNewChildElement ("JACK");
+        j->setAttribute ("density", jack.density);     j->setAttribute ("extremity", jack.extremity);
+        j->setAttribute ("swing", jack.swing);         j->setAttribute ("repeat", jack.repeatProb);
+        j->setAttribute ("window", jack.windowSteps);  j->setAttribute ("recall", jack.recallProb);
+        j->setAttribute ("memory", jack.memory);       j->setAttribute ("division", jack.division);
+        j->setAttribute ("retrig", jack.maxRetriggers); j->setAttribute ("timingMax", jack.timingMaxMs);
+        j->setAttribute ("replace", jack.replace);     j->setAttribute ("recovery", jack.recoveryBars);
+        j->setAttribute ("self", jack.selfRandomise);  j->setAttribute ("seed", juce::String ((juce::int64) jack.seed));
+        j->setAttribute ("lock", jackLockSeed);
+        int axes = 0; for (int i = 0; i < (int) nsr::ChaosAxis::Count; ++i) axes |= jack.axis[i] ? (1 << i) : 0;
+        j->setAttribute ("axes", axes);
+        j->setAttribute ("lanes", (int) jackMask());
+    }
     copyXmlToBinary (*xml, destData);
 }
 
@@ -1146,9 +1335,38 @@ void NeoBeatProcessor::setStateInformation (const void* data, int sizeInBytes)
     else project = nb::Project();
     std::unique_ptr<juce::XmlElement> smpCopy;
     if (auto* smp = xml->getChildByName ("SAMPLES")) smpCopy = std::make_unique<juce::XmlElement> (*smp);
-    for (auto* name : { "PATTERN", "SCENES", "META", "SAMPLES", "PROJECT" })
+    if (auto* j = xml->getChildByName ("JACK"))
+    {
+        nsr::JackSettings d;
+        jack.density = (float) j->getDoubleAttribute ("density", d.density);
+        jack.extremity = (float) j->getDoubleAttribute ("extremity", d.extremity);
+        jack.swing = (float) j->getDoubleAttribute ("swing", d.swing);
+        jack.repeatProb = (float) j->getDoubleAttribute ("repeat", d.repeatProb);
+        jack.windowSteps = j->getIntAttribute ("window", d.windowSteps);
+        jack.recallProb = (float) j->getDoubleAttribute ("recall", d.recallProb);
+        jack.memory = j->getIntAttribute ("memory", d.memory);
+        jack.division = j->getIntAttribute ("division", d.division);
+        jack.maxRetriggers = j->getIntAttribute ("retrig", d.maxRetriggers);
+        jack.timingMaxMs = (float) j->getDoubleAttribute ("timingMax", d.timingMaxMs);
+        jack.replace = j->getBoolAttribute ("replace", d.replace);
+        jack.recoveryBars = (float) j->getDoubleAttribute ("recovery", d.recoveryBars);
+        jack.selfRandomise = (float) j->getDoubleAttribute ("self", d.selfRandomise);
+        jack.seed = (uint64_t) j->getStringAttribute ("seed", "1").getLargeIntValue();
+        jackLockSeed = j->getBoolAttribute ("lock", false);
+        const int axes = j->getIntAttribute ("axes", 0x1f);
+        for (int i = 0; i < (int) nsr::ChaosAxis::Count; ++i) jack.axis[i] = (axes >> i) & 1;
+        const uint32_t lanes = (uint32_t) j->getIntAttribute ("lanes", 0xffff);
+        auto& list = chaos.allTargets();
+        for (int p = 0; p < kPads && p < (int) list.size(); ++p) list[(size_t) p].on = (lanes >> p) & 1u;
+        jackApply();
+    }
+    for (auto* name : { "PATTERN", "SCENES", "META", "SAMPLES", "PROJECT", "JACK" })
         while (auto* c = xml->getChildByName (name)) xml->removeChildElement (c, true);
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    // IDM Jack is held through a host parameter, and host parameters are saved with the session, so
+    // a session saved mid-seizure would open seizing. It opens let go; automation, if there is any,
+    // takes it from there.
+    if (auto* jp = apvts.getParameter ("jack")) jp->setValueNotifyingHost (0.0f);
     for (int pad = 0; pad < kPads; ++pad)
     {
         std::shared_ptr<const nb::SampleData> ptr;

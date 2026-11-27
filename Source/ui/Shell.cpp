@@ -7,7 +7,7 @@ namespace ui
 class Header final : public juce::Component, public Part
 {
 public:
-    explicit Header (Ctx& c) : ctx (c), rooms ({ "SEQUENCER", "MATRIXXXER", "LAYERMAX", "KEY MAP" }),
+    explicit Header (Ctx& c) : ctx (c), rooms ({ "SEQUENCER", "MATRIXXXER", "LAYERMAX", "KEY MAP", "JACK" }),
                                master (c, "MASTER", -30.0f, 6.0f, 0.0f)
     {
         addAndMakeVisible (rooms);
@@ -597,7 +597,7 @@ Shell::Shell (NeoBeatProcessor& p) : ctx (p)
     look.apply();
     setLookAndFeel (&look);
     header = makeHeader (ctx); tree = makeTree (ctx); inspector = makeInspector (ctx); dock = makeDock (ctx);
-    rooms[0] = makeKitRoom (ctx); rooms[1] = makeMatrixRoom (ctx); rooms[2] = makeGridRoom (ctx); rooms[3] = makeKeyMapRoom (ctx);
+    rooms[0] = makeKitRoom (ctx); rooms[1] = makeMatrixRoom (ctx); rooms[2] = makeGridRoom (ctx); rooms[3] = makeKeyMapRoom (ctx); rooms[4] = makeJackRoom (ctx);
     fsWindow = makeFrictionWindow (ctx); bdWindow = makeBounceWindow (ctx); routeList = makeRouteList (ctx);
     overlays[0] = makeExportPanel (ctx); overlays[1] = makeMidiPanel (ctx); overlays[2] = makeImportPanel (ctx); overlays[3] = makeDefaultPrompt (ctx); overlays[4] = makeNotice (ctx);
     for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get() }) addAndMakeVisible (c);
@@ -607,7 +607,7 @@ Shell::Shell (NeoBeatProcessor& p) : ctx (p)
     addMouseListener (this, true);       // every child's mouse-up ends a gesture
     setWantsKeyboardFocus (true);
     lateSeen = ctx.proc.lateHits();
-    for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get(), rooms[0].get(), rooms[1].get(), rooms[2].get(), rooms[3].get(), fsWindow.get(), bdWindow.get(), routeList.get() })
+    for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get(), rooms[0].get(), rooms[1].get(), rooms[2].get(), rooms[3].get(), rooms[4].get(), fsWindow.get(), bdWindow.get(), routeList.get() })
         if (auto* part = dynamic_cast<Part*> (c)) parts.push_back (part);
     ctx.refreshAll = [this] { triggerAsyncUpdate(); };
     ctx.refreshNow = [this] { cancelPendingUpdate(); refresh(); };
@@ -667,7 +667,7 @@ void Shell::mouseUp (const juce::MouseEvent&)
 
 void Shell::refresh()
 {
-    for (int i = 0; i < 4; ++i) rooms[(size_t) i]->setVisible (i == ctx.room);
+    for (int i = 0; i < (int) rooms.size(); ++i) rooms[(size_t) i]->setVisible (i == ctx.room);
     fsWindow->setVisible (ctx.fsOpen);
     bdWindow->setVisible (ctx.bdOpen);
     routeList->setVisible (ctx.listOpen);
