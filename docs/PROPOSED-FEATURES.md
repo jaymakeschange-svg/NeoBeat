@@ -305,6 +305,40 @@ reference before the next starts:**
 | 6, finding | **The learner's fit is path-dependent.** Adam moves every parameter by about its rate however small its gradient, so parameters whose gradient is at roundoff level step whichever way roundoff says; any change of rounding parts the paths after 3-5 steps and the fits end in different places. Measured: the learner itself in double precision ends PVC at 0.672, or 1.096 with the window and start rounded to float32 (its recorded float32 run: 0.671). The port, nudging the start by 1e-7 six times: PVC 0.583-1.073 (three runs near 0.58, three near 1.0; recorded 0.671), tin can 1.166-1.422 (recorded 1.381), tube clank 2.420-2.538 over four runs (recorded 2.644). So the port fits as well as the learner, and the learner's recorded results are one draw each. **Decided by the user, 27 Nov:** *"Several, all into the pool"* - Batchcut runs several fits of a dropped file side by side (e.g. 4, one per core), each nudged at the start, and every one lands in the pool as its own material, ranked by loss, the closest the default. The spread becomes variants |
 | 7. Into Batchcut | next |
 
+**Stage 7 handoff (27 Nov, evening).** The user moved the rest of stage 7 to a fresh chat to save
+usage. Where it stands and what comes next, in order:
+
+- *Written, compiles, not yet tested:* `Source/neobeat/shared/learner/FitJob.h` -
+  `prepareClip` (mono to 48 kHz with a windowed-sinc resampler; `strikeStart`, the learner's
+  `trim_to_strike`; at most 1.5 s with a 30 ms fade, as `crop_hit`; `noiseFloorDb`, the quietest 5%
+  of the 10 ms / 5 ms RMS envelope against its loudest frame, which reproduces the three training
+  targets' `noise_floor_db` within 0.9 dB: -59.6 / -45.4 / -29.5), `noiseBands` (the learner's band
+  colour; Box-Muller on the ported PCG64 generator, so the same on every computer, not numpy's draw),
+  `ringSeconds`, `renderStrike`, and `FitJob` (analysis once, then N fits on worker threads, fit 0 at
+  the learner's own start and the others nudged by 1e-7; progress, cancel, results best first).
+- *7a next:*
+  1. Test `FitJob` in `tools/test_learner.cpp`: `strikeStart` against the learner's trim on the three
+     training WAVs (the golden `x.npy` starts at the learner's cut); `noiseFloorDb` against the
+     targets; one whole job (2 fits x 300 steps, PVC) finishing with results sorted.
+  2. Speed, if needed: the render's sin/cos per mode per sample dominate a step (tube: 0.64 s for
+     value and gradient). A per-frame phase rotation would cut that several times; hold the stage
+     2/5b checks while doing it.
+  3. `BcProcessor`: a `std::unique_ptr<ml::FitJob>`; start from a dropped file or a pool sound;
+     poll on the message thread. When finished: write each fit as a learner-format material
+     (`name`, `loss`, `start_loss`, `seconds`, `info` {source, fit, of, noise_floor_db, made_by},
+     `n_samples`, `params` with every key of engine2) to Documents/Marbelite/Materials/<source>/;
+     render each with `renderStrike` (ring time + 0.1 s, at most 6 s) into the pool as
+     "<source> fit k", best first; open that folder in the room.
+  4. MATERIAL room (`Source/app/MaterialRoom.*`): accept audio files on drop as well as .json and
+     folders; a Fit button for the chosen pool sound; progress and Cancel on the message line.
+     Fits per file 4, threads = cores - 1, at least 1, at most 4. Existing buttons unchanged.
+  5. Host test and snapshot for the new path; docs; commit `[skip ci]`. A Batchcut download only
+     when the user asks.
+- *7b:* before building, show the user a breeding design (how a generation is made, how favourites
+  are kept and bred) across the material model, NeoBeat's voices and transforms of the file.
+- *Reference data* is not in the repository: rebuild it with `tools/learner_ref/README.md` (needs the
+  user's `MaterialLab.zip` and the training clips and targets from their Learner folder, and JAX).
+
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
 **Asked (the user, 27 Nov):** *"did you include the techno and house new presets for batchcut and
