@@ -290,7 +290,7 @@ reference before the next starts:**
 7. Into Batchcut: drop any file, it fits in the background, the material lands in the pool; then the
    variant search across the material model, NeoBeat's voices and transforms of the file itself.
 
-**Progress, 27 Nov** (updated 27 Nov, stages 4-5a; code: `Source/neobeat/shared/learner/` in Batchcut's tree; checks:
+**Progress, 27 Nov** (updated 27 Nov, stages 4-6; code: `Source/neobeat/shared/learner/` in Batchcut's tree; checks:
 `tools/test_learner.cpp`; the reference scripts: `tools/learner_ref/`):
 
 | Stage | Result |
@@ -300,9 +300,10 @@ reference before the next starts:**
 | 3. The loss (`Loss2.h`) | The learner's render scores the same here as in the learner to six decimals (PVC 3.155455 / 0.668609; tin can 5.208192 / 1.379871) |
 | 4. Analysis and starting point (`Analysis2.h`, `NumpyRandom.h`) | `partials.py` and `initial_params` ported: partial tracking finds the same tracks (28 / 214 / 1161; frequencies within 2e-13), the residual and noise match, the tube clank's **4 sweeps and contact stop (0.805 s, 300 Hz) are found** as in the learner, and the starting body matches the learner's to 1.2e-6 (27 / 124 / 130 modes). numpy's random generator reproduced bit for bit |
 | 5a. The loss's gradient (`Loss2::valueAndGrad`) | Written by hand, term by term. Equal to JAX's double-precision gradient: spectral 3e-9, envelope 2e-15, transport 4e-9, attack 2e-16 (relative), all three clips, start and fitted. Against the learner's own float32 gradient: cosine 0.99989-1.0 - float32 STFT noise flips the sign of the log-spectral term in near-silent bins. The window is rounded to float32 as the learner does (that rounding alone moves the gradient 0.5%) |
-| 5b. Back through the body to the parameters | next: against the learner's `g_*` at the same points |
-| 6. Adam | after 5 |
-| 7. Into Batchcut | after 6 |
+| 5b. Back through the body to the parameters (`Grad2.h`) | Written by hand, line by line in reverse through the render (one extra pass over the samples; phases recomputed, not stored). Against JAX's gradient of the learner's objective in double precision: **all parameters (278 to 1102) within 3e-7**, PVC, tin can and tube clank, start and fitted (contact damping exercised on the tube). One value and gradient: 0.19 s (PVC) to 0.64 s (tube) |
+| 6. Adam (`Fit2.h`) | Level match, Adam with the learner's rates (0.04, logf 0.002), schedule, regularisation, freeze mask and best-point keeping. Step for step against the learner run in double precision: the first three steps agree to 1e-7 on all three clips. A whole 300-step fit: 60 s (PVC), 74 s (tin can), 210 s (tube), one core |
+| 6, finding | **The learner's fit is path-dependent.** Adam moves every parameter by about its rate however small its gradient, so parameters whose gradient is at roundoff level step whichever way roundoff says; any change of rounding parts the paths after 3-5 steps and the fits end in different places. Measured: the learner itself in double precision ends PVC at 0.672, or 1.096 with the window and start rounded to float32 (its recorded float32 run: 0.671). The port, nudging the start by 1e-7 six times: PVC 0.583-1.073 (three runs near 0.58, three near 1.0; recorded 0.671), tin can 1.166-1.422 (recorded 1.381), tube clank 2.420-2.538 over four runs (recorded 2.644). So the port fits as well as the learner, and the learner's recorded results are one draw each. Open question for the user: whether Batchcut should run several fits and keep the best (a change to the learner's method) |
+| 7. Into Batchcut | next |
 
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
