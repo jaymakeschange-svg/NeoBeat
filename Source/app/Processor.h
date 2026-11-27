@@ -152,7 +152,9 @@ public:
     int breedGenerationNumber = 0;               // the g<n> in a kept child's name
     int breedGeneration = 0;                     // changes when a job starts or ends, for the room to notice
     bool breedGrowing = false;                   // the job running (or last run) is a Grow
+    bool breedFromScratch = false;               // ... or a Scratch
     bool breedStart (bool grow, juce::String& error);
+    bool breedScratch (juce::String& error);     // eight materials from nothing, one of each shape (REACH: how wild)
     void breedCancel();
     bool breedBusy() const noexcept { return breedJob != nullptr; }
     double breedProgress() const;

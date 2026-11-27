@@ -218,6 +218,11 @@ int main (int argc, char** argv)
         for (int i = 0; i < 6000 && proc->breedBusy(); ++i) pump (*proc, 100);
         pump (*proc, 300);
         shot (*ed, outDir, "23_material_grown");
+        proc->breedReach = 0.6f;
+        proc->breedScratch (e);
+        for (int i = 0; i < 3000 && proc->breedBusy(); ++i) pump (*proc, 100);
+        pump (*proc, 300);
+        shot (*ed, outDir, "24_material_scratch");
     }
 
     ed.reset();

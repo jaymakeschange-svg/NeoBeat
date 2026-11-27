@@ -60,8 +60,8 @@ struct MaterialRoom::Strip final : public juce::Component
             g.setColour (nsui::C::dim());
             g.setFont (nsui::font (11.5f));
             g.drawFittedText (owner.proc.breedBusy() ? "Breeding..." :
-                              "Wander makes eight variants of the loaded material and the sound it was fitted to; "
-                              "Grow climbs toward the sound from what is loaded or kept. They appear here.",
+                              "Scratch makes eight materials from nothing; Wander makes eight variants of the loaded material and the "
+                              "sound it was fitted to; Grow climbs toward the sound from what is loaded or kept. They appear here.",
                               getLocalBounds().reduced (12, 4), juce::Justification::centred, 2);
             return;
         }
@@ -120,7 +120,7 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
 {
     strip = std::make_unique<Strip> (*this);
     addAndMakeVisible (*strip);
-    for (auto* b : { &wander, &grow }) addAndMakeVisible (*b);
+    for (auto* b : { &scratch, &wander, &grow }) addAndMakeVisible (*b);
     addAndMakeVisible (reachKnob);
     reachLabel.setText ("Reach", juce::dontSendNotification);
     reachLabel.setFont (nsui::font (11.0f));
@@ -129,7 +129,11 @@ MaterialRoom::MaterialRoom (BcProcessor& p, std::function<void()> changed)
     reachKnob.setRange (0.0, 1.0, 0.01);
     reachKnob.setValue (proc.breedReach, juce::dontSendNotification);
     reachKnob.onValueChange = [this] { proc.breedReach = (float) reachKnob.getValue(); };
-    reachKnob.setTooltip ("How far the children go from their parents: low for variants you would mistake for the parent, high for wild ones");
+    reachKnob.setTooltip ("How far the children go from their parents: low for variants you would mistake for the parent, high for wild ones. "
+                          "For Scratch, how far past real objects they go");
+    scratch.setTooltip ("Make eight materials from nothing, one of each shape: a metal bar, a plate, a drum skin, a tube, a closed tube, "
+                        "a bell, metal junk and rubber. Keep one, and Grow climbs from it toward the fitted sound");
+    scratch.onClick = [this] { juce::String e; if (proc.breedScratch (e)) say (proc.lastMessage); else say (e); refresh(); };
     wander.setTooltip ("Make eight variants of the loaded material (or what you kept) and of the sound it was fitted to. "
                        "Click one to hear it; Keep the ones to breed from next. Only kept ones go into the pool");
     grow.setTooltip ("Climb toward the fitted sound from the loaded material (or what you kept), twelve generations on its own, "
@@ -269,6 +273,7 @@ void MaterialRoom::refresh()
     fit.setEnabled (! proc.kit.pool.empty() && ! busy);
     cancel.setVisible (busy);
     wander.setEnabled (! busy && (proc.loadedBodyValid || proc.breedHasTarget || ! proc.breedKept.empty()));
+    scratch.setEnabled (! busy);
     grow.setEnabled (! busy && proc.breedHasTarget && (proc.loadedBodyValid || ! proc.breedKept.empty()));
     strip->repaint();
     repaint();
@@ -309,7 +314,7 @@ void MaterialRoom::timerCallback()
     }
     else if (proc.breedBusy())
     {
-        say ((proc.breedGrowing ? "Growing toward " + proc.breedTargetName : juce::String ("Wandering")) + " - "
+        say ((proc.breedGrowing ? "Growing toward " + proc.breedTargetName : juce::String (proc.breedFromScratch ? "Making from scratch" : "Wandering")) + " - "
              + juce::String (juce::roundToInt (100.0 * proc.breedProgress())) + "%" + timeLeft (proc.breedSecondsLeft()));
         repaint (message.getBounds().expanded (0, 4));
     }
@@ -400,6 +405,8 @@ void MaterialRoom::resized()
     grow.setBounds (row1.removeFromRight (80).reduced (0, 2));
     row1.removeFromRight (8);
     wander.setBounds (row1.removeFromRight (90).reduced (0, 2));
+    row1.removeFromRight (8);
+    scratch.setBounds (row1.removeFromRight (90).reduced (0, 2));
     row1.removeFromRight (10);
     reachKnob.setBounds (row1.removeFromRight (30));
     reachLabel.setBounds (row1.removeFromRight (46));

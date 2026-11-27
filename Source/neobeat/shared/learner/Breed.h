@@ -10,12 +10,17 @@
 //   File     a sound parent (the dropped sound, or a kept File child) transformed: stretched with its
 //            pitch kept, a spectral effect or a granular one from the Matrixxxer's library
 //   Through  a sound parent sent through a material, as the MATERIAL room's Send through does
-// REACH (0..1) is how far a child goes from its parents.
+//   Scratch  no parent at all: a material made from one of eight physical shapes (scratchBody, below) -
+//            asked for by the user on 27 Nov ("I want to make children from scratch") in place of
+//            NeoBeat's voices
+// REACH (0..1) is how far a child goes from its parents - and, from scratch, how wild it is.
 //
 // Two ways to run it, the two tools the user named:
 //   Wander (Synplant's branches)  one generation from the parents the user kept
 //   Grow   (Petri's "four takes climb toward it")  generations on their own, keeping the closest
 //          each time, so the material converges on the dropped sound
+//   Scratch  one generation of eight materials from nothing, one of each shape (Synplant's and
+//          Petri's random seeds): keep one, and Grow climbs from it toward the sound
 //
 // Closeness is the learner's loss against the dropped sound, on noise the child was not fitted to:
 // a fit is partly a fit to its own noise draw (docs, "Found: a fit is partly a fit to its own
@@ -43,11 +48,15 @@ struct Source
     std::vector<float> sound;        // 48 kHz mono: the material's strike, or the sound itself
 };
 
-enum class ChildKind { Body, Cross, File, Through };
+enum class ChildKind { Body, Cross, File, Through, Scratch };
 
 inline const char* kindName (ChildKind k)
 {
-    switch (k) { case ChildKind::Body: return "body"; case ChildKind::Cross: return "cross"; case ChildKind::File: return "file"; default: return "through"; }
+    switch (k)
+    {
+        case ChildKind::Body: return "body"; case ChildKind::Cross: return "cross"; case ChildKind::File: return "file";
+        case ChildKind::Through: return "through"; default: return "scratch";
+    }
 }
 
 struct Child : Source
@@ -194,6 +203,158 @@ inline Body crossBodies (const Body& a, const Body& b, double reach, BreedRandom
     std::snprintf (t, sizeof t, "split at %.0f Hz", split);
     how = t;
     return physical (u);
+}
+
+// ------------------------------------------------------------------ materials from scratch
+
+// A material with no parent: one of eight physical shapes, with its own partial ratios (the textbook
+// ones: free-free bar, simply supported plate, ideal circular membrane, stiff and closed tubes, a church
+// bell, a cluster of metal junk, a rubber body that drops in pitch), and the learner's laws drawn
+// around what its fits found in real objects (MaterialLab engine_v3: base damping 13-65, cascade
+// 0.4-1.0, a click 0.1-1% of the loudest mode, beating mostly under 1 Hz). WILD (0..1) pushes past
+// physics: partials stretched and jittered, big shared glides, tension that bends the pitch with the
+// energy, beating and swelling far beyond any real object, highs that ring longer than lows.
+enum class Shape { Bar, Plate, Membrane, Tube, ClosedTube, Bell, Junk, Rubber, Count };
+
+inline const char* shapeName (Shape s)
+{
+    static const char* n[] = { "metal bar", "plate", "drum skin", "tube", "closed tube", "bell", "metal junk", "rubber" };
+    return n[(int) s];
+}
+
+inline Body scratchBody (BreedRandom& r, double wild, std::string& how, int shape = -1)
+{
+    const auto sh = shape >= 0 ? (Shape) shape : (Shape) r.below ((int) Shape::Count);
+    auto logU = [&r] (double lo, double hi) { return std::exp (r.uni (std::log (lo), std::log (hi))); };
+    // the partials, as ratios to the lowest
+    std::vector<double> ratio;
+    double f0 = 200.0;
+    switch (sh)
+    {
+        case Shape::Bar:
+        {
+            f0 = logU (150, 1500);
+            const double beta[] = { 4.7300, 7.8532, 10.9956, 14.1372, 17.2788, 20.4204, 23.5619, 26.7035 };
+            for (double b : beta) ratio.push_back ((b / 4.7300) * (b / 4.7300));
+            break;
+        }
+        case Shape::Plate:
+        {
+            f0 = logU (80, 600);
+            const double asp = r.uni (0.6, 1.6);
+            for (int m = 1; m <= 9; ++m) for (int n = 1; n <= 9; ++n) ratio.push_back ((m * m + n * n * asp * asp) / (1.0 + asp * asp));
+            std::sort (ratio.begin(), ratio.end());
+            ratio.resize ((size_t) (30 + r.below (40)));
+            break;
+        }
+        case Shape::Membrane:
+        {
+            f0 = logU (50, 300);
+            const double z[] = { 2.4048, 3.8317, 5.1356, 5.5201, 6.3802, 7.0156, 7.5883, 8.4172, 8.6537, 8.7715, 9.7610, 9.9361, 10.1735, 11.0647, 11.0864, 11.6198 };
+            for (double v : z) ratio.push_back (v / 2.4048);
+            break;
+        }
+        case Shape::Tube:
+        {
+            f0 = logU (60, 800);
+            const double B = logU (1e-5, 0.01);
+            const int k = 16 + r.below (32);
+            for (int n = 1; n <= k; ++n) ratio.push_back (n * std::sqrt (1.0 + B * n * n) / std::sqrt (1.0 + B));
+            break;
+        }
+        case Shape::ClosedTube:
+        {
+            f0 = logU (80, 600);
+            const int k = 12 + r.below (20);
+            for (int n = 0; n < k; ++n) ratio.push_back (2 * n + 1);
+            break;
+        }
+        case Shape::Bell:
+        {
+            f0 = logU (150, 900);
+            const double b[] = { 0.5, 1.0, 1.183, 1.506, 2.0, 2.514, 2.662, 3.011, 4.166, 5.433, 6.796, 8.215, 9.83 };
+            for (double v : b) ratio.push_back (v / 0.5);
+            break;
+        }
+        case Shape::Junk:
+        {
+            f0 = logU (150, 900);
+            const int k = 40 + r.below (60);
+            ratio.push_back (1.0);
+            for (int i = 1; i < k; ++i) ratio.push_back (std::exp (r.uni (0.0, std::log (40.0))));
+            std::sort (ratio.begin(), ratio.end());
+            break;
+        }
+        case Shape::Rubber:
+        default:
+        {
+            f0 = logU (40, 250);
+            const int k = 6 + r.below (9);
+            for (int i = 0; i < k; ++i) ratio.push_back ((i + 1) * r.uni (0.85, 1.25));
+            std::sort (ratio.begin(), ratio.end());
+            break;
+        }
+    }
+    // WILD: partials stretched and jittered away from the shape's own
+    const double stretch = 1.0 + wild * r.uni (-0.35, 0.35);
+    Body p;
+    const double strikeAt = r.uni (0.05, 0.5), tilt = r.uni (0.2, 1.2);
+    for (size_t i = 0; i < ratio.size(); ++i)
+    {
+        const double f = f0 * std::pow (ratio[i], stretch) * std::exp (0.04 * wild * r.gauss());
+        if (f > 18000.0 || f < 25.0) continue;
+        double a = 0.3 * std::pow ((double) i + 1.0, -tilt) * std::exp (0.4 * r.gauss());
+        if (sh == Shape::Bar || sh == Shape::Tube || sh == Shape::ClosedTube) a *= std::fabs (std::sin (an::kPi * (double) (i + 1) * strikeAt)) + 0.1;
+        p.f.push_back (f); p.a.push_back (a);
+    }
+    if (p.f.empty()) { p.f.push_back (f0); p.a.push_back (0.3); }
+    const int k = p.modes();
+    // the damping law by what the shape is made of
+    const bool soft = sh == Shape::Rubber || sh == Shape::Membrane || (sh == Shape::Tube && r.uni() < 0.3);
+    if (sh == Shape::Rubber)        { p.b1 = logU (25, 80);  p.b3 = logU (1, 10); }
+    else if (soft)                  { p.b1 = logU (10, 40);  p.b3 = logU (0.5, 5); }
+    else if (sh == Shape::Plate || sh == Shape::Junk) { p.b1 = logU (5, 40); p.b3 = logU (0.001, 0.5); }
+    else                            { p.b1 = logU (1.5, 20); p.b3 = logU (0.001, 0.3); }
+    // WILD: highs that ring longer than lows
+    const double rhoSlope = wild * r.uni (-1.5, 0.5);
+    for (int m = 0; m < k; ++m)
+    {
+        p.rho.push_back (0.5 * r.gauss() + rhoSlope * std::log (p.f[(size_t) m] / p.f[0]) / std::log (20.0));
+        const double d = r.uni() < 0.15 + 0.3 * wild ? r.uni (2.0, 10.0 + 20.0 * wild) : -0.4 * std::log (std::max (1e-6, r.uni()));
+        p.delta.push_back (std::min (39.0, d));
+        p.beta.push_back (std::min (0.49, r.uni (0.0, 0.15 + 0.3 * wild)));
+        p.eps.push_back (r.gauss());
+        p.glide.push_back (0.15 * r.gauss());
+        p.tau_g.push_back (logU (0.01, 0.08));
+    }
+    p.C = logU (0.3, 1.2 + 2.0 * wild); p.gamma = r.uni (-0.8, 0.5); p.tau_c = r.uni (0.03, 0.3);
+    p.G = std::max (-0.9, std::min (3.0, r.uni (-0.25, 0.4) * (1.0 + 3.0 * wild)));
+    p.tau_a = r.uni (0.002, 0.004);
+    p.cx_amt = 0.002; p.cx_t = 2.5; p.cx_f = 500.0;
+    std::string extra;
+    if (r.uni() < 0.2 + 0.3 * wild) { p.cx_t = r.uni (0.1, 1.2); p.cx_amt = logU (5, 100); p.cx_f = logU (60, 800); extra += ", hand-stopped"; }
+    p.lb_m = logU (0.005, 0.5); p.lb_rate = r.uni (1.5, 7.0); p.lb_f = logU (100, 2000);
+    p.tau_n = logU (0.004, 0.03);
+    // one glide shared by every partial: rubber always drops; anything else, now and then, more with WILD
+    if (sh == Shape::Rubber || r.uni() < 0.15 + 0.5 * wild)
+    {
+        const double g = sh == Shape::Rubber ? r.uni (0.3, 1.2) : r.sign() * r.uni (0.1, 0.4 + 1.2 * wild);
+        const double tg = logU (0.04, 0.2 + 0.4 * wild);
+        for (int m = 0; m < k; ++m) { p.glide[(size_t) m] += g; p.tau_g[(size_t) m] = tg; }
+        extra += g > 0 ? ", drops in pitch" : ", rises in pitch";
+    }
+    double amax = 0.0; for (double a : p.a) amax = std::max (amax, a);
+    const double click = logU (0.0005, 0.01), dense = logU (0.003, 0.08), slope = r.uni (-0.15, 0.15);
+    for (int b = 0; b < kBands; ++b)
+    {
+        p.noise[(size_t) b] = amax * click * std::exp (slope * (b - 8) + 0.3 * r.gauss());
+        p.dn[(size_t) b] = amax * dense * std::exp (slope * (b - 8) + 0.3 * r.gauss());
+        p.dn_rho[(size_t) b] = 0.9 * r.gauss();
+    }
+    char t[96];
+    std::snprintf (t, sizeof t, "%s, %.0f Hz%s", shapeName (sh), p.f[0], extra.c_str());
+    how = t;
+    return physical (unconstrained (p));      // inside the learner's bounds, so it fits, grows and saves like any material
 }
 
 // ------------------------------------------------------------------ sound children
@@ -478,7 +639,7 @@ inline std::vector<ChildKind> generationPlan (int bodyParents, int soundParents,
 
 struct BreedRequest
 {
-    enum Mode { Wander, Grow } mode = Wander;
+    enum Mode { Wander, Grow, Scratch } mode = Wander;
     std::vector<Source> parents;     // materials and sounds to breed from
     bool hasTarget = false;
     Clip target;                     // the dropped sound, prepared (closeness is measured against it)
@@ -528,7 +689,9 @@ private:
     {
         std::unique_ptr<Scorer> sc;
         if (q.hasTarget && q.target.ok()) sc = std::make_unique<Scorer> (q.target);
-        if (q.mode == BreedRequest::Grow) grow (sc.get()); else wander (sc.get());
+        if (q.mode == BreedRequest::Grow) grow (sc.get());
+        else if (q.mode == BreedRequest::Scratch) scratch (sc.get());
+        else wander (sc.get());
         done.store (true);
     }
 
@@ -561,6 +724,39 @@ private:
         for (size_t i = 0; i < kids.size(); ++i) if (ok[i]) made.push_back (std::move (kids[i]));
         if (sc != nullptr) std::stable_sort (made.begin(), made.end(), [] (const Child& a, const Child& b) { return a.loss < b.loss; });
         if (made.empty()) fail ("No child came out playable - try a smaller REACH.");
+        std::lock_guard<std::mutex> l (m);
+        out = std::move (made);
+    }
+
+    // Scratch: eight materials from nothing, one of each shape in an order of the run's own, WILD = REACH.
+    void scratch (const Scorer* sc)
+    {
+        constexpr int count = (int) Shape::Count;
+        workTotal.store (count);
+        std::vector<int> order ((size_t) count);
+        for (int i = 0; i < count; ++i) order[(size_t) i] = i;
+        BreedRandom shuffle (childSeed (q.seed, 0, 99));
+        for (int i = count - 1; i > 0; --i) std::swap (order[(size_t) i], order[(size_t) shuffle.below (i + 1)]);
+        std::vector<Child> kids ((size_t) count);
+        std::vector<char> ok ((size_t) count, 0);
+        parallel (count, [&] (int i)
+        {
+            for (int attempt = 0; attempt < 4 && ! ok[(size_t) i]; ++attempt)
+            {
+                BreedRandom r (childSeed (q.seed, attempt, i));
+                Child c; c.kind = ChildKind::Scratch; c.isBody = true; c.name = "scratch";
+                c.body = scratchBody (r, q.reach, c.how, order[(size_t) i]);
+                if (! strikeOf (c.body, childSeed (q.seed, 500 + attempt, i), c.sound)) continue;
+                if (sc != nullptr) c.loss = sc->body (c.body, 1);
+                kids[(size_t) i] = std::move (c); ok[(size_t) i] = 1;
+            }
+            ++workDone;
+        });
+        if (stop.load()) return;
+        std::vector<Child> made;
+        for (int i = 0; i < count; ++i) if (ok[(size_t) i]) made.push_back (std::move (kids[(size_t) i]));
+        if (sc != nullptr) std::stable_sort (made.begin(), made.end(), [] (const Child& a, const Child& b) { return a.loss < b.loss; });
+        if (made.empty()) fail ("Nothing playable came of it - try again.");
         std::lock_guard<std::mutex> l (m);
         out = std::move (made);
     }

@@ -17,7 +17,9 @@
 //
 // And breeding (7b): Wander makes eight variants of the loaded material and the fitted sound - the
 // material moved and crossed, the sound stretched, smeared, granulated and sent through it; Grow climbs
-// toward the sound from what is loaded or kept, generation after generation. They appear in a strip
+// toward the sound from what is loaded or kept, generation after generation; Scratch makes eight
+// materials from nothing, one of each shape (bar, plate, drum skin, tube, closed tube, bell, metal
+// junk, rubber), REACH setting how wild. They appear in a strip
 // along the bottom of the picture: click one to hear it, Keep the ones to breed from next. Only a kept
 // child goes into the pool.
 
@@ -65,7 +67,7 @@ private:
     int seenGeneration = 0;
 
     // breeding
-    bcui::Pill wander { "Wander" }, grow { "Grow" };
+    bcui::Pill wander { "Wander" }, grow { "Grow" }, scratch { "Scratch" };
     juce::Slider reachKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::Label reachLabel;
     int seenBreed = 0;

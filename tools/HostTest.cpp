@@ -840,7 +840,7 @@ int main (int argc, char** argv)
             const bool began = proc->breedBusy();
             const double tw = waitBreed();
             const auto& kids = proc->breedChildren;
-            int kinds[4] = {}; bool sorted = true, finite = true;
+            int kinds[5] = {}; bool sorted = true, finite = true;
             for (size_t i = 0; i < kids.size(); ++i) { ++kinds[(int) kids[i].kind]; finite = finite && std::isfinite (kids[i].loss) && ! kids[i].sound.empty(); if (i > 0) sorted = sorted && kids[i].loss >= kids[i - 1].loss; }
             CHECK (began && kids.size() == 8 && sorted && finite, "Wander: eight children in %.1f s, closest first (\"%s\")", tw, proc->lastMessage.toRawUTF8());
             CHECK (kinds[0] == 5 && kinds[2] == 2 && kinds[3] == 1, "from the closest fit and the sound: five body children, two of the sound, one through the material");
@@ -872,13 +872,33 @@ int main (int argc, char** argv)
             for (const auto& c : proc->breedChildren) if (c.kind == ml::ChildKind::Body) { ++bodies; fromKept += c.name == keptName.toStdString() ? 1 : 0; }
             CHECK (proc->breedChildren.size() == 8 && proc->breedGenerationNumber == 2 && bodies > 0 && fromKept == bodies,
                    "the next generation's material children all come from the kept material (%d of %d)", fromKept, bodies);
-            // Grow: from the kept material toward the sound
+            // Scratch: eight materials from nothing, one of each shape; keep one
+            auto* sb = button ("Scratch");
+            if (sb != nullptr) sb->onClick();
+            const double ts = waitBreed();
+            int scratchKids = 0, shapesSeen = 0;
+            for (int sh = 0; sh < (int) ml::Shape::Count; ++sh)
+                for (const auto& c : proc->breedChildren) if (c.how.rfind (ml::shapeName ((ml::Shape) sh), 0) == 0) { ++shapesSeen; break; }
+            for (const auto& c : proc->breedChildren) scratchKids += c.kind == ml::ChildKind::Scratch && std::isfinite (c.loss) ? 1 : 0;
+            CHECK (sb != nullptr && scratchKids == 8 && shapesSeen == 8, "Scratch: eight materials from nothing in %.1f s, one of each shape (\"%s\")", ts, proc->lastMessage.toRawUTF8());
+            click (strip, keepAt (0));
+            pump (*proc, 50);
+            const auto scratchName = "scratch g" + juce::String (proc->breedGenerationNumber) + " 1";
+            const auto scratchFile = BcProcessor::materialsDir().getChildFile ("scratch").getChildFile (scratchName + ".json");
+            nsr::Material sm; juce::String se;
+            CHECK (juce::String (proc->kit.pool.back()->name) == scratchName && scratchFile.existsAsFile() && sm.load (scratchFile, se),
+                   "a kept one goes into the pool as \"%s\", its material in Materials/scratch", scratchName.toRawUTF8());
+            const double scratchLoss = proc->breedChildren.empty() ? 0.0 : proc->breedChildren[0].loss;
+
+            // Grow: from the kept materials (one bred, one from scratch) toward the sound
             if (gb != nullptr) gb->onClick();
             const bool growing = proc->breedBusy() && proc->breedGrowing;
             const double tg = waitBreed();
             bool allBody = proc->breedChildren.size() == 8, gsorted = true;
             for (size_t i = 0; i < proc->breedChildren.size(); ++i) { allBody = allBody && proc->breedChildren[i].kind == ml::ChildKind::Body; if (i > 0) gsorted = gsorted && proc->breedChildren[i].loss >= proc->breedChildren[i - 1].loss; }
             CHECK (growing && allBody && gsorted, "Grow: twelve generations in %.0f s, the eight closest materials shown (\"%s\")", tg, proc->lastMessage.toRawUTF8());
+            CHECK (! proc->breedChildren.empty() && proc->breedChildren[0].loss < scratchLoss, "closer than the kept scratch material was (%.2f against %.2f)",
+                   proc->breedChildren.empty() ? 0.0 : proc->breedChildren[0].loss, scratchLoss);
             // a Grow cancelled: stops, and the generation shown stays
             const auto before = proc->breedChildren.size() > 0 ? proc->breedChildren[0].loss : 0.0;
             if (gb != nullptr) gb->onClick();
@@ -892,7 +912,7 @@ int main (int argc, char** argv)
             pump (*proc, 300);          // the room's own timer (8 a second) brings its buttons back
             CHECK (fitRefused && ! proc->breedBusy() && proc->breedChildren.size() == 8 && proc->breedChildren[0].loss == before && proc->lastMessage.contains ("cancelled"),
                    "a fit waits while breeding; Cancel stops a Grow in %.0f ms and leaves the generation shown", stop2);
-            CHECK (proc->kit.pool.size() == poolB + 2, "after three generations the pool holds only the two kept");
+            CHECK (proc->kit.pool.size() == poolB + 3, "after four generations the pool holds only the three kept");
         }
 
         // Fit on a pool sound, then Cancel, both by their buttons
@@ -1018,7 +1038,7 @@ int main (int argc, char** argv)
                 case 40:            // breeding: generations started and stopped, children heard and kept
                     switch (r.nextInt (5))
                     {
-                        case 0: { juce::String e; if (r.nextInt (4) == 0) proc->breedStart (r.nextInt (3) == 0, e); break; }
+                        case 0: { juce::String e; if (r.nextInt (4) == 0) { if (r.nextInt (3) == 0) proc->breedScratch (e); else proc->breedStart (r.nextInt (3) == 0, e); } break; }
                         case 1: proc->breedCancel(); break;
                         case 2: if (! proc->breedChildren.empty()) proc->breedPlay (r.nextInt ((int) proc->breedChildren.size())); break;
                         case 3: { juce::String e; if (! proc->breedChildren.empty() && r.nextInt (3) == 0) proc->breedKeep (r.nextInt ((int) proc->breedChildren.size()), e); break; }

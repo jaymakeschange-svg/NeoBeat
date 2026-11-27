@@ -698,10 +698,29 @@ bool BcProcessor::breedStart (bool grow, juce::String& error)
     q.generations = 12;
     q.seed = (uint32_t) juce::Random::getSystemRandom().nextInt (0x7fffffff) + 1u;
     q.threads = juce::jlimit (1, 4, juce::SystemStats::getNumCpus() - 1);
-    breedGrowing = grow;
+    breedGrowing = grow; breedFromScratch = false;
     breedJob = std::make_unique<ml::BreedJob> (std::move (q));
     ++breedGeneration;
     lastMessage = grow ? "Growing toward " + breedTargetName : "Wandering";
+    roomsNotify();
+    return true;
+}
+
+bool BcProcessor::breedScratch (juce::String& error)
+{
+    if (breedJob != nullptr) { error = "A generation is already on its way - let it finish, or Cancel it."; return false; }
+    if (fitJob != nullptr) { error = "Wait for the fit to finish first."; return false; }
+    ml::BreedRequest q;
+    q.mode = ml::BreedRequest::Scratch;
+    q.hasTarget = breedHasTarget;
+    if (breedHasTarget) q.target = breedTarget;
+    q.reach = juce::jlimit (0.0, 1.0, (double) breedReach);
+    q.seed = (uint32_t) juce::Random::getSystemRandom().nextInt (0x7fffffff) + 1u;
+    q.threads = juce::jlimit (1, 4, juce::SystemStats::getNumCpus() - 1);
+    breedGrowing = false; breedFromScratch = true;
+    breedJob = std::make_unique<ml::BreedJob> (std::move (q));
+    ++breedGeneration;
+    lastMessage = "Making from scratch";
     roomsNotify();
     return true;
 }
@@ -720,12 +739,13 @@ void BcProcessor::breedCollect()
     if (breedJob == nullptr || ! breedJob->finished()) return;
     const auto job = std::move (breedJob);
     ++breedGeneration;
-    if (job->wasCancelled()) { lastMessage = breedGrowing ? "Grow cancelled." : "Cancelled."; roomsNotify(); return; }
+    if (job->wasCancelled()) { lastMessage = breedGrowing ? "Grow cancelled." : breedFromScratch ? "Scratch cancelled." : "Cancelled."; roomsNotify(); return; }
     if (! job->error().empty()) { lastMessage = juce::String (job->error()); roomsNotify(); return; }
     breedChildren = job->results();
     breedKeptFlags.assign (breedChildren.size(), 0);
     ++breedGenerationNumber;
-    lastMessage = "Generation " + juce::String (breedGenerationNumber) + ": " + juce::String ((int) breedChildren.size()) + " children";
+    lastMessage = "Generation " + juce::String (breedGenerationNumber) + ": " + juce::String ((int) breedChildren.size()) + " children"
+                + (breedFromScratch ? " from scratch" : "");
     if (! breedChildren.empty() && std::isfinite (breedChildren.front().loss))
         lastMessage << ", the closest " << juce::String (breedChildren.front().loss, 2) << " from " << breedTargetName;
     lastMessage << " - click one to hear it, Keep the ones to breed from";
@@ -750,7 +770,9 @@ bool BcProcessor::breedKeep (int child, juce::String& error)
     if (! juce::isPositiveAndBelow (child, (int) breedChildren.size())) { error = "Pick a child to keep."; return false; }
     if (breedKeptFlags[(size_t) child]) { error = "Already kept."; return false; }
     const auto& c = breedChildren[(size_t) child];
-    const auto base = breedTargetName.isNotEmpty() ? breedTargetName : material.name;
+    // a child from scratch is no one's: "scratch g3 2", its material in Materials/scratch
+    const bool fromScratch = c.kind == ml::ChildKind::Scratch;
+    const auto base = fromScratch ? juce::String ("scratch") : breedTargetName.isNotEmpty() ? breedTargetName : material.name;
     const auto name = base + " g" + juce::String (breedGenerationNumber) + " " + juce::String (child + 1);
     float peak = 0.0f; for (float v : c.sound) peak = std::max (peak, std::fabs (v));
     if (peak < 1.0e-6f) { error = "That one is silent."; return false; }
@@ -761,7 +783,7 @@ bool BcProcessor::breedKeep (int child, juce::String& error)
     juce::String saved;
     if (c.isBody)
     {
-        auto dir = fitFolder.isDirectory() ? fitFolder : materialsDir().getChildFile (juce::File::createLegalFileName (base));
+        auto dir = fitFolder.isDirectory() && ! fromScratch ? fitFolder : materialsDir().getChildFile (juce::File::createLegalFileName (base));
         if (dir.createDirectory().wasOk())
         {
             ml::MaterialInfo info;

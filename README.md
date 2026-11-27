@@ -215,7 +215,9 @@ metal, plastic or rubber rings when it is hit, kept as a `.json` material file.
   room opens them with the closest loaded. Progress and **CANCEL** are on the line under the picture. A fit takes
   the first strike in the sound and the 1.5 s after it, and takes about a minute (longer for a long, bright metal
   ring); it carries on with the window closed. MaterialLab opens these files as its own.
-* **Breeding.** **WANDER** makes eight variants of the loaded material and of the sound it was fitted to: the
+* **Breeding.** **SCRATCH** makes eight materials from nothing, one of each shape - a metal bar, a plate, a drum
+  skin, a tube, a closed tube, a bell, metal junk and rubber - with **REACH** setting how far past real objects they
+  go (stretched partials, big glides, highs that ring longer than lows). **WANDER** makes eight variants of the loaded material and of the sound it was fitted to: the
   material moved (transposed, more metallic, ringing longer, beating more...) or crossed with another, the sound
   stretched, smeared, granulated or sent through the material. **GROW** climbs toward the sound from the loaded
   material (or what you kept), twelve generations on its own, and shows the eight closest it made. **REACH** sets

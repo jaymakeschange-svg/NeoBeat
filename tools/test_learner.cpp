@@ -705,7 +705,7 @@ static void stage7b (const std::string& g, const std::string& other)
             runs[t] = job.results();
         }
         bool sorted = true, same = runs[0].size() == runs[1].size(), finite = true;
-        int kinds[4] = {};
+        int kinds[5] = {};
         for (size_t i = 0; i < runs[0].size(); ++i)
         {
             const auto& c = runs[0][i];
@@ -727,6 +727,40 @@ static void stage7b (const std::string& g, const std::string& other)
         while (! j2.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (10));
         int crosses = 0; for (const auto& c : j2.results()) crosses += c.kind == ChildKind::Cross ? 1 : 0;
         CHECK (j2.results().size() == 8 && crosses == 4, "two materials kept: four of the eight are crosses (%d)", crosses);
+    }
+
+    // From scratch: every shape plays at every WILD, keeps its own partials when not wild, and a Scratch
+    // generation is one of each shape, closest first, the same on any number of threads
+    {
+        int playable = 0, made = 0;
+        for (int sh = 0; sh < (int) Shape::Count; ++sh)
+            for (double wild : { 0.0, 0.5, 1.0 })
+                for (int k = 0; k < 4; ++k)
+                {
+                    BreedRandom r (childSeed (31, sh * 10 + (int) (wild * 4), k)); std::string how;
+                    const Body b = scratchBody (r, wild, how, sh);
+                    std::vector<float> y; ++made;
+                    playable += strikeOf (b, 9, y) && b.modes() > 0 ? 1 : 0;
+                }
+        auto second = [] (int sh) { BreedRandom r (childSeed (5, 0, sh)); std::string how; const Body b = scratchBody (r, 0.0, how, sh); return b.f[1] / b.f[0]; };
+        const double bar = second ((int) Shape::Bar), skin = second ((int) Shape::Membrane), closed = second ((int) Shape::ClosedTube);
+        std::printf ("  from scratch: %d of %d playable (8 shapes x WILD 0, 0.5, 1 x 4); second partial over the first, not wild: bar %.4f, drum skin %.4f, closed tube %.4f\n",
+                     playable, made, bar, skin, closed);
+        CHECK (playable == made && std::fabs (bar - 2.7565) < 1e-3 && std::fabs (skin - 1.5933) < 1e-3 && std::fabs (closed - 3.0) < 1e-9,
+               "every shape plays at every WILD, and keeps its own partials when not wild (beam, Bessel, odd harmonics)");
+        BreedRequest q; q.mode = BreedRequest::Scratch; q.reach = 0.5; q.seed = 21; q.hasTarget = true; q.target = target;
+        std::vector<Child> runs[2];
+        for (int t = 0; t < 2; ++t) { q.threads = t + 1; BreedJob job (q); while (! job.finished()) std::this_thread::sleep_for (std::chrono::milliseconds (10)); runs[t] = job.results(); }
+        std::vector<int> shapes ((size_t) Shape::Count, 0);
+        bool sorted = true, same = runs[0].size() == runs[1].size();
+        for (size_t i = 0; i < runs[0].size(); ++i)
+        {
+            for (int sh = 0; sh < (int) Shape::Count; ++sh) if (runs[0][i].how.rfind (shapeName ((Shape) sh), 0) == 0) ++shapes[(size_t) sh];
+            if (i > 0) sorted = sorted && runs[0][i].loss >= runs[0][i - 1].loss;
+            if (same) same = runs[0][i].loss == runs[1][i].loss && runs[0][i].sound == runs[1][i].sound;
+        }
+        bool each = runs[0].size() == 8; for (int n : shapes) each = each && n == 1;
+        CHECK (each && sorted && same, "a Scratch generation: one of each shape, closest first, the same on one thread or two");
     }
 
     // Grow: generations on their own toward the clip, from somewhere else - the tin can - as Petri's
