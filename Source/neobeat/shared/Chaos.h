@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,22 @@ struct ChaosTarget
     // Where it was before the engine took hold. Captured on engage, written back on release, so
     // "landing back on the original" is exact rather than approximate.
     float original = 0.0f;
+
+    // ------------------------------------------------------------------ the escape hatch
+    //
+    // Not everything worth seizing is a float. A chop order is a permutation, a map mark is an
+    // integer row, a place is a struct, an orb is a pair. For those, leave `value` null and give
+    // these instead: `apply` is handed how hard this seizure hit and a seeded generator, `keep`
+    // is called on engage to save whatever the plugin needs, and `giveBack` restores it.
+    //
+    // The float path stays for the simple majority, because a std::function per parameter per
+    // lattice step is a lot of indirection for something that is usually one multiply.
+    std::function<void (float amount, gen::Rng&)> apply;
+    std::function<void()> keep;
+    std::function<void()> giveBack;
+
+    bool isAction() const noexcept { return value == nullptr && apply != nullptr; }
+    bool usable() const noexcept { return value != nullptr || apply != nullptr; }
 };
 
 // The three axes from the brief, plus the two the lattice adds. Each can be switched off, so a
@@ -140,8 +157,9 @@ public:
         gen::Rng rng (params.seed ^ 0x9e3779b9u);
         for (auto& t : targets)
         {
-            if (! t.on || t.never || t.value == nullptr) continue;
-            *t.value = visited (rng, t);
+            if (! t.on || t.never || ! t.usable()) continue;
+            if (t.isAction()) t.apply (t.reach, rng);
+            else              *t.value = visited (rng, t);
         }
         ++params.seed;          // so the next press is a different sound, as auditioning requires
     }
@@ -151,7 +169,10 @@ public:
     {
         if (held) return;
         for (auto& t : targets)
+        {
             if (t.value != nullptr) t.original = *t.value;
+            if (t.keep) t.keep();
+        }
 
         if (params.selfRandomise > 0.001f) rollOwnSettings();
 
@@ -240,7 +261,11 @@ public:
     void restore()
     {
         for (auto& t : targets)
-            if (t.value != nullptr && ! t.never) *t.value = t.original;
+        {
+            if (t.never) continue;
+            if (t.value != nullptr) *t.value = t.original;
+            if (t.giveBack) t.giveBack();
+        }
         recovering = false;
     }
 
@@ -307,8 +332,10 @@ private:
         if (params.axis[(int) ChaosAxis::Parameter] || params.axis[(int) ChaosAxis::Effect])
             for (auto& t : targets)
             {
-                if (! t.on || t.never || t.value == nullptr) continue;
-                if (rng.chance (0.5)) *t.value = rolled (rng, t, amount);
+                if (! t.on || t.never || ! t.usable()) continue;
+                if (! rng.chance (0.5)) continue;
+                if (t.isAction()) t.apply (amount * t.reach, rng);
+                else              *t.value = rolled (rng, t, amount);
             }
 
         ChaosEvent e;

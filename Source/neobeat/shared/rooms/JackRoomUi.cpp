@@ -70,7 +70,7 @@ bc::JackRoom::JackRoom (nsr::Chaos& e, std::function<double()> bt)
     pillOn.onClick = [this]
     {
         const double b = beats ? beats() : 0.0;
-        if (pillOn.getToggleState()) chaos.engage (b);
+        if (pillOn.getToggleState()) { chaos.engage (b); lastBeat = b; }
         else                         chaos.release (b);
         repaint();
     };
@@ -99,8 +99,20 @@ void bc::JackRoom::refresh() { repaint(); }
 
 void bc::JackRoom::timerCallback()
 {
-    // only redraw while it is doing something
-    if (chaos.engaged() || chaos.isRecovering()) repaint();
+    if (! chaos.engaged() && ! chaos.isRecovering()) return;
+
+    // Jack is driven from here rather than from the audio thread, deliberately. advance() walks a
+    // vector of std::function and can allocate, so it has no business in processBlock. What it
+    // mostly does is seize parameters, and a parameter does not need sample accuracy - it needs
+    // to land on the right beat, which this does. The retrigger and micro-timing events it
+    // reports would need an audio-thread path, and do not have one yet.
+    const double now = beats ? beats() : 0.0;
+    if (lastBeat < 0.0) lastBeat = now;
+    const double span = now - lastBeat;
+    if (span > 0.0 && span < 8.0)          // a transport jump is not a span to fill with events
+        lastFired = (int) chaos.advance (lastBeat, span).size();
+    lastBeat = now;
+    repaint();
 }
 
 void bc::JackRoom::push()
