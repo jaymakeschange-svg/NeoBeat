@@ -44,7 +44,6 @@ set (MIDIJAQ_APP_SOURCES
     Source/app/CutRoom.cpp
     Source/app/MapRoom.cpp
     Source/app/ModRoom.cpp
-    Source/app/RandomRoom.cpp
     Source/app/StereoRoomUi.cpp
     Source/neobeat/shared/rooms/CutRooms.cpp
     Source/neobeat/shared/rooms/KitRooms.cpp
@@ -53,7 +52,8 @@ set (MIDIJAQ_APP_SOURCES
     Source/neobeat/shared/rooms/PresetBar.cpp
     Source/neobeat/shared/rooms/KitRoomUi.cpp
     Source/neobeat/shared/rooms/LoopsRoomUi.cpp
-    Source/neobeat/shared/rooms/KeysRoomUi.cpp)
+    Source/neobeat/shared/rooms/KeysRoomUi.cpp
+    Source/neobeat/shared/rooms/JackRoomUi.cpp)
 
 set (MIDIJAQ_DEFINITIONS
     JUCE_WEB_BROWSER=0

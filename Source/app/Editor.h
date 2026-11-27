@@ -7,7 +7,7 @@
 // MidiJaQ's window: seven rooms along the top, one of them showing.
 //
 // CUT, LOOPS and KEYS are the same code Batchcut runs, not a copy of it - a raw file becomes
-// something playable in the same few moves in either plugin. MAP, MOD, RANDOM and the Stereoroom
+// something playable in the same few moves in either plugin. MAP, MOD, JACK and the Stereoroom
 // are MidiJaQ's own, and are what makes it a melodic sampling sequencer rather than a slicer.
 //
 // The interface this replaces had one window with a sequencer in it and everything else folded
@@ -38,7 +38,7 @@ public:
     void fileDragExit (const juce::StringArray&) override { dropping = false; repaint(); }
     void paintOverChildren (juce::Graphics&) override;
 
-    // 0 CUT, 1 LOOPS, 2 KEYS, 3 MAP, 4 MOD, 5 RANDOM, 6 STEREOROOM
+    // 0 CUT, 1 LOOPS, 2 KEYS, 3 MAP, 4 MOD, 5 JACK, 6 STEREOROOM
     void showRoom (int which);
     int currentRoom() const noexcept { return room; }
 

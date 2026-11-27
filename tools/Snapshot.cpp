@@ -106,7 +106,7 @@ int main (int argc, char** argv)
     ed->refresh();
     pump (150);
 
-    const char* names[] = { "1_cut", "2_loops", "3_keys", "4_map", "5_mod", "6_random", "7_stereoroom" };
+    const char* names[] = { "1_cut", "2_loops", "3_keys", "4_map", "5_mod", "6_jack", "7_stereoroom" };
     for (int i = 0; i < 7; ++i)
     {
         ed->showRoom (i);

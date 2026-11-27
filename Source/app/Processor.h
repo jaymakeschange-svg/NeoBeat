@@ -6,6 +6,7 @@
 
 #include "../neobeat/shared/rooms/Rooms.h"
 #include "../neobeat/shared/StereoRoom.h"
+#include "../neobeat/shared/Chaos.h"
 #include "../core/Map.h"
 #include "../core/Inst.h"
 #include "../neobeat/dsp/LiveFx.h"
@@ -51,24 +52,21 @@ public:
     void clearOrb();
     void setOrbGrip (float grip);
 
-    // ---- RANDOM: one roll that reaches every room
-    struct RandomTarget
-    {
-        const char* room;
-        const char* name;
-        float reach = 0.4f;
-        bool on = false;
-        bool never = false;      // a mono lock, the low end, or the randomiser itself
-    };
-    const std::vector<RandomTarget>& randomTargets() const noexcept { return randTargets; }
-    void toggleRandomTarget (int index);
-    void rollRandom();
+    // ---- IDM Jack, and the global randomiser: one engine, two entry points
+    //
+    // chaos.rollOnce() is the randomiser - one press, everything once, for auditioning.
+    // chaos.engage()/release() is Jack - held chaos on the lattice, original back on release.
+    // The targets are registered in registerChaosTargets(); see docs/DECISIONS.md.
+    nsr::Chaos chaos;
+    void registerChaosTargets();
+
+    // Where the transport is, published from processBlock so the editor can read it. Jack's
+    // lattice is in musical time, so it needs this; an atomic because the two threads differ.
+    std::atomic<double> beatsNow { 0.0 };
+    double transportBeats() const noexcept { return beatsNow.load (std::memory_order_relaxed); }
+    void rollEverything() { chaos.rollOnce(); sendChangeMessage(); }
     void holdRandom();
     int heldRolls() const noexcept { return (int) held.size(); }
-
-    bool randomOnKey = false, randomOnGrid = false, randomFree = false;
-    int randomEvery = 4;
-    float randomAmount = 0.45f;
 
     struct StereoState
     {
@@ -86,9 +84,13 @@ public:
     nsr::BassMono bassMono;                           // the safety net: the low end stays in the middle
     mjq::PlayNote keysCarry[64] {};                   // note-offs a map mark started in an earlier block
     int numKeysCarry = 0;
-    std::vector<RandomTarget> randTargets;
     std::vector<mjq::MapPattern> held;                // rolls kept with HOLD
-    int sinceRoll = 0;
+
+    // What Jack saved on engage, so release can give it back exactly. These are the things that
+    // are not a single float and so cannot be restored by the engine itself.
+    mjq::MapPattern mapKept;
+    std::vector<nsr::Place> placesKept;
+    float orbKeptX = 0.0f, orbKeptY = 0.0f;
     int chosenSlot() const noexcept { return song.selected; }
     int chosenTrack() const noexcept { return song.selectedTrack; }
     void chooseSlot (int index);

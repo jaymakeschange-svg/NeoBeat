@@ -5,28 +5,11 @@
 // in one place, rather than being guarded at every point that rolls: a mono lock, and the
 // randomiser's own controls. Randomising a mono lock turns a mix inside out and has to be undone by
 // hand; letting it reach its own rate means its rate randomises its rate.
-static std::vector<MjqProcessor::RandomTarget> makeRandomTargets()
-{
-    return {
-        { "KEYS",       "Zone mapping",     0.35f, true,  false },
-        { "KEYS",       "Attack / release", 0.20f, true,  false },
-        { "LOOPS",      "Chop order",       0.60f, true,  false },
-        { "LOOPS",      "Chop pitch",       0.25f, true,  false },
-        { "MAP",        "Which degrees",    0.45f, true,  false },
-        { "MAP",        "Note length",      0.30f, true,  false },
-        { "MAP",        "Traffic",          0.50f, true,  false },
-        { "MOD",        "Orb position",     0.70f, true,  false },
-        { "MOD",        "LFO rates",        0.15f, false, false },
-        { "STEREOROOM", "Chop places",      0.40f, true,  false },
-        { "STEREOROOM", "Mono locks",       0.00f, false, true  },
-        { "RANDOM",     "Its own controls", 0.00f, false, true  }
-    };
-}
 
 MjqProcessor::MjqProcessor()
     : juce::AudioProcessor (BusesProperties().withOutput ("Out", juce::AudioChannelSet::stereo(), true))
 {
-    randTargets = makeRandomTargets();
+    registerChaosTargets();
 
     line = song.current().tracks[0].line;
     rebuildSession (true);
@@ -521,6 +504,7 @@ void MjqProcessor::processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuff
             host.ppq = pos->getPpqPosition().orFallback (0.0);
             host.bpm = pos->getBpm().orFallback (120.0);
         }
+    beatsNow.store (host.ppq, std::memory_order_relaxed);
 
     // Split at bar boundaries so changing a slot never fires notes from the next slot early.
     // Every line has its own player and MIDI channel; the players share the host clock.
@@ -1619,63 +1603,118 @@ void MjqProcessor::setOrbGrip (float grip)
 }
 
 // ---------------------------------------------------------------- RANDOM
-void MjqProcessor::toggleRandomTarget (int index)
+// ---------------------------------------------------------------- what IDM Jack may seize here
+//
+// Spec: docs/DECISIONS.md. Every entry below actually does something, which the list it replaces
+// could not claim: of its twelve targets, KEYS Zone mapping, KEYS Attack/release and MAP Traffic
+// had no handler at all, and LOOPS Chop pitch and MOD LFO rates fell into their siblings'
+// branches and duplicated them. Six of ten were dead or wrong, which is why the thing "wasn't
+// really controlling much". A registered target that silently does nothing is worse than an
+// absent one, so the four that cannot be reached cleanly from here are left out and named.
+void MjqProcessor::registerChaosTargets()
 {
-    if (index < 0 || index >= (int) randTargets.size()) return;
-    auto& t = randTargets[(size_t) index];
-    if (t.never) return;                                 // not negotiable
-    t.on = ! t.on;
-    stateChanged();
-}
+    chaos.clearTargets();
 
-// Rolls everything that is switched on, as far as its reach allows. The two kinds of target that
-// are never touched are refused when the list is built, not here, so there is one place to look.
-void MjqProcessor::rollRandom()
-{
-    for (const auto& t : randTargets)
+    auto simple = [this] (const char* room, const char* name, float* v,
+                          float lo, float hi, float reach, bool on)
     {
-        if (! t.on || t.never) continue;
-        const float reach = juce::jlimit (0.0f, 1.0f, t.reach * randomAmount);
-        const juce::String room (t.room), name (t.name);
+        nsr::ChaosTarget t;
+        t.room = room; t.name = name; t.value = v;
+        t.lo = lo; t.hi = hi; t.reach = reach; t.on = on;
+        chaos.addTarget (std::move (t));
+    };
 
-        if (room == "MAP" && name.startsWith ("Which"))
-        {
-            for (auto& m : map.marks)
-                if (m.source == mjq::MarkSource::Keys && juce::Random::getSystemRandom().nextFloat() < reach)
-                    m.row = juce::jlimit (0, mjq::kMapRows - 1,
-                                          m.row + (juce::Random::getSystemRandom().nextBool() ? 1 : -1));
-            mapChanged();
-        }
-        else if (room == "MAP" && name.startsWith ("Note"))
-        {
-            for (auto& m : map.marks)
-                if (juce::Random::getSystemRandom().nextFloat() < reach)
-                    m.len = juce::jlimit (1, 8, m.len + (juce::Random::getSystemRandom().nextBool() ? 1 : -1));
-            mapChanged();
-        }
-        else if (room == "MOD")
-        {
-            const float x = juce::jlimit (-1.0f, 1.0f, song.orbX + reach * (juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f));
-            const float y = juce::jlimit (-1.0f, 1.0f, song.orbY + reach * (juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f));
-            moveOrb (x, y);
-        }
-        else if (room == "STEREOROOM")
-        {
-            for (auto& pl : places)
+    // The line's own feel. These are plain floats and need no escape hatch.
+    simple ("LINE", "traffic", &line.traffic, 0.0f, 1.0f, 0.50f, true);
+    simple ("LINE", "dialect", &line.dialect, 0.0f, 1.0f, 0.45f, true);
+    simple ("LINE", "accent",  &line.accent,  0.0f, 1.0f, 0.40f, true);
+    simple ("LINE", "gate",    &line.gate,    0.1f, 2.0f, 0.30f, true);
+    simple ("LINE", "swing",   &line.swing,   0.5f, 0.70f, 0.20f, false);
+
+    auto action = [this] (const char* room, const char* name, float reach, bool on,
+                          std::function<void (float, gen::Rng&)> apply,
+                          std::function<void()> keep, std::function<void()> giveBack)
+    {
+        nsr::ChaosTarget t;
+        t.room = room; t.name = name; t.reach = reach; t.on = on;
+        t.apply = std::move (apply); t.keep = std::move (keep); t.giveBack = std::move (giveBack);
+        chaos.addTarget (std::move (t));
+    };
+
+    // MAP: which degrees the marks sit on, and how long each is.
+    action ("MAP", "which degrees", 0.45f, true,
+            [this] (float amount, gen::Rng& rng)
             {
-                if (pl.locked) continue;                 // a locked element is never moved, by anything
-                pl.on = true;
-                pl.x = juce::jlimit (-1.0f, 1.0f, pl.x + reach * (juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f));
-            }
-            stereoChanged();
-        }
-        else if (room == "LOOPS")
-        {
-            if (juce::Random::getSystemRandom().nextFloat() < reach) loopsRoll (-1, true);
-        }
+                for (auto& m : map.marks)
+                    if (m.source == mjq::MarkSource::Keys && rng.chance ((double) amount))
+                        m.row = std::max (0, std::min (mjq::kMapRows - 1,
+                                                       m.row + (rng.chance (0.5) ? 1 : -1)));
+                mapChanged();
+            },
+            [this] { mapKept = map; },
+            [this] { map = mapKept; mapChanged(); });
+
+    action ("MAP", "note length", 0.30f, true,
+            [this] (float amount, gen::Rng& rng)
+            {
+                for (auto& m : map.marks)
+                    if (rng.chance ((double) amount))
+                        m.len = std::max (1, std::min (8, m.len + (rng.chance (0.5) ? 1 : -1)));
+                mapChanged();
+            },
+            nullptr, nullptr);          // the mark snapshot above already covers this
+
+    // MOD: the orb, which is two numbers rather than one.
+    action ("MOD", "orb position", 0.70f, true,
+            [this] (float amount, gen::Rng& rng)
+            {
+                const float x = std::max (-1.0f, std::min (1.0f, song.orbX + amount * rng.unif (-1.0f, 1.0f)));
+                const float y = std::max (-1.0f, std::min (1.0f, song.orbY + amount * rng.unif (-1.0f, 1.0f)));
+                moveOrb (x, y);
+            },
+            [this] { orbKeptX = song.orbX; orbKeptY = song.orbY; },
+            [this] { moveOrb (orbKeptX, orbKeptY); });
+
+    // LOOPS: the chop order, which is a permutation.
+    action ("LOOPS", "chop order", 0.60f, true,
+            [this] (float amount, gen::Rng& rng)
+            {
+                if (rng.chance ((double) amount)) loopsRoll (-1, true);
+            },
+            nullptr, nullptr);
+
+    // STEREOROOM: where each chop stands. A locked place is never moved, by anything.
+    action ("STEREOROOM", "chop places", 0.40f, true,
+            [this] (float amount, gen::Rng& rng)
+            {
+                for (auto& pl : places)
+                {
+                    if (pl.locked) continue;
+                    pl.on = true;
+                    pl.x = std::max (-1.0f, std::min (1.0f, pl.x + amount * rng.unif (-1.0f, 1.0f)));
+                }
+                stereoChanged();
+            },
+            [this] { placesKept = places; },
+            [this] { places = placesKept; stereoChanged(); });
+
+    // The two that must never be reached, listed so the panel can show them struck through
+    // rather than leaving the reason invisible. Randomising a mono lock turns a mix inside out
+    // and has to be undone by hand; letting it reach its own rate means its rate randomises its
+    // rate.
+    {
+        nsr::ChaosTarget t;
+        t.room = "STEREOROOM"; t.name = "mono locks"; t.never = true; t.on = false;
+        chaos.addTarget (t);
+        t.room = "JACK"; t.name = "its own controls";
+        chaos.addTarget (t);
     }
-    sinceRoll = 0;
-    sendChangeMessage();
+
+    // Left out deliberately, because nothing here can reach them cleanly yet and a target that
+    // silently does nothing is the bug this replaces:
+    //   KEYS zone mapping, KEYS attack/release - the instrument is held as a const shared_ptr
+    //   LOOPS chop pitch                       - no per-chop pitch handle on this side
+    //   MOD LFO rates                          - no LFO bank exposed on the processor
 }
 
 void MjqProcessor::holdRandom()

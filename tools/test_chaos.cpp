@@ -323,6 +323,56 @@ int main()
         ok (s.chaos.getParams().density == sWas.density, "off means off");
     }
 
+    // ------------------------------------------------------------------------- action targets
+    //
+    // Not everything worth seizing is a float: a chop order is a permutation, a map mark an
+    // integer row. Those register an action instead, and must behave like any other target -
+    // honour on/never, and give their state back on release.
+    {
+        heading ("targets that are not floats");
+
+        std::vector<int> order { 0, 1, 2, 3, 4, 5, 6, 7 }, saved;
+        int applied = 0, kept = 0, gave = 0;
+
+        nsr::Chaos c;
+        nsr::ChaosTarget t;
+        t.room = "LOOPS"; t.name = "chop order"; t.reach = 1.0f;
+        t.apply = [&] (float, gen::Rng& rng)
+        {
+            ++applied;
+            for (int i = (int) order.size() - 1; i > 0; --i) std::swap (order[(size_t) i], order[(size_t) rng.below (i + 1)]);
+        };
+        t.keep     = [&] { ++kept; saved = order; };
+        t.giveBack = [&] { ++gave; order = saved; };
+        c.addTarget (t);
+
+        // one that must never fire, to check the never-flag reaches the action path too
+        nsr::ChaosTarget blocked;
+        blocked.room = "ROOM"; blocked.name = "mono locks"; blocked.never = true; blocked.on = false;
+        bool blockedFired = false;
+        blocked.apply = [&] (float, gen::Rng&) { blockedFired = true; };
+        c.addTarget (blocked);
+
+        auto p2 = c.getParams();
+        p2.density = 1.0f;
+        c.setParams (p2);
+
+        const auto before = order;
+        c.rollOnce();
+        ok (applied == 1, "rollOnce reaches an action target");
+        ok (order != before, "and the action actually did something");
+        ok (! blockedFired, "a never-target's action is not called");
+
+        const auto afterRoll = order;
+        c.engage (0.0);
+        ok (kept == 1, "engage asks the action target to save its state");
+        for (int i = 0; i < 24; ++i) c.advance ((double) i * 0.25, 0.25);
+        ok (applied > 1, "and it is seized while held");
+        c.release (6.0);
+        ok (gave == 1 && order == afterRoll,
+            "release gives it back exactly, as with any other target");
+    }
+
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }

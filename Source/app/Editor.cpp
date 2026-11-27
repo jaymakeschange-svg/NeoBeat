@@ -1,20 +1,20 @@
 // MidiJaQ's window.
 //
 // Seven rooms along the top. CUT, LOOPS and KEYS are Batchcut's, running the same code rather than
-// a copy of it. MAP, MOD, RANDOM and the Stereoroom are MidiJaQ's own.
+// a copy of it. MAP, MOD, JACK and the Stereoroom are MidiJaQ's own.
 
 #include "Editor.h"
 #include "CutRoom.h"
 #include "MapRoom.h"
 #include "ModRoom.h"
-#include "RandomRoom.h"
+#include "../neobeat/shared/rooms/JackRoom.h"
 #include "StereoRoomUi.h"
 
 using namespace mjqui;
 
 namespace
 {
-const juce::StringArray kRoomNames { "CUT", "LOOPS", "KEYS", "MAP", "MOD", "RANDOM", "STEREOROOM" };
+const juce::StringArray kRoomNames { "CUT", "LOOPS", "KEYS", "MAP", "MOD", "JACK", "STEREOROOM" };
 
 const char* kRoomTips[] = {
     "Recordings in, and cut into sounds.",
@@ -22,7 +22,7 @@ const char* kRoomTips[] = {
     "Those sounds as an instrument across the keys.",
     "One grid where loops and keys play together.",
     "The Orb, the shapes, and where they go.",
-    "Rolls the whole instrument while you play.",
+    "Takes over and seizes everything, on the lattice, until you let go. ROLL rolls the whole instrument once.",
     "Where every chop stands, and how it moves."
 };
 }
@@ -30,8 +30,9 @@ const char* kRoomTips[] = {
 struct MjqEditor::Parts
 {
     explicit Parts (MjqEditor& e)
-        : rooms ({ "CUT", "LOOPS", "KEYS", "MAP", "MOD", "RANDOM", "STEREOROOM" }),
-          cut (e), loops (e), keys (e), map (e), mod (e), random (e), stage (e)
+        : rooms ({ "CUT", "LOOPS", "KEYS", "MAP", "MOD", "JACK", "STEREOROOM" }),
+          cut (e), loops (e), keys (e), map (e), mod (e),
+          jack (e.proc.chaos, [&e] { return e.proc.transportBeats(); }), stage (e)
     {
         juce::ignoreUnused (e);
     }
@@ -51,7 +52,7 @@ struct MjqEditor::Parts
     bc::KeysRoom keys;
     MapRoom map;
     ModRoom mod;
-    RandomRoom random;
+    bc::JackRoom jack;
     StereoRoomUi stage;
 };
 
@@ -78,7 +79,7 @@ MjqEditor::MjqEditor (MjqProcessor& p)
     q.presetNext.setTooltip ("The next preset, straight away.");
     q.presetBrowse.setTooltip ("Every preset, auditioned as you move over them.");
 
-    for (auto* c : std::initializer_list<juce::Component*> { &q.cut, &q.loops, &q.keys, &q.map, &q.mod, &q.random, &q.stage })
+    for (auto* c : std::initializer_list<juce::Component*> { &q.cut, &q.loops, &q.keys, &q.map, &q.mod, &q.jack, &q.stage })
         addChildComponent (c);
 
     // what the rooms call when something they changed needs to show
@@ -106,7 +107,7 @@ void MjqEditor::showRoom (int which)
     auto& q = *parts;
     q.rooms.setSelected (room);
 
-    juce::Component* all[] = { &q.cut, &q.loops, &q.keys, &q.map, &q.mod, &q.random, &q.stage };
+    juce::Component* all[] = { &q.cut, &q.loops, &q.keys, &q.map, &q.mod, &q.jack, &q.stage };
     for (int i = 0; i < 7; ++i) all[i]->setVisible (i == room);
 
     // a key held in one room is let go on leaving it, or it rings on in the next
@@ -136,7 +137,7 @@ void MjqEditor::refresh()
         case 2: q.keys.refresh(); break;
         case 3: q.map.refresh(); break;
         case 4: q.mod.refresh(); break;
-        case 5: q.random.refresh(); break;
+        case 5: q.jack.refresh(); break;
         case 6: q.stage.refresh(); break;
         default: break;
     }
@@ -185,7 +186,7 @@ void MjqEditor::resized()
     q.rooms.setBounds (strip.removeFromLeft (660));
 
     const auto body = r.reduced (10);
-    for (auto* c : std::initializer_list<juce::Component*> { &q.cut, &q.loops, &q.keys, &q.map, &q.mod, &q.random, &q.stage })
+    for (auto* c : std::initializer_list<juce::Component*> { &q.cut, &q.loops, &q.keys, &q.map, &q.mod, &q.jack, &q.stage })
         c->setBounds (body);
 }
 
@@ -203,7 +204,7 @@ bool MjqEditor::keyPressed (const juce::KeyPress& k)
         case 1: return q.loops.key (k);
         case 2: return q.keys.key (k);
         case 3: return q.map.key (k);
-        case 5: return q.random.key (k);
+        case 5: return false;   // the panel has no key handling of its own
         case 6: return q.stage.key (k);
         default: break;
     }
