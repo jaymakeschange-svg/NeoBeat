@@ -43,6 +43,8 @@ constexpr double kFitRate = 48000.0;
 // lower Nyquist. The learner uses scipy's resample_poly; any clean resampler serves. The Kaiser window
 // is read from a table (linear between 8192 points, within 2e-7 of the exact window): computing its
 // Bessel function for every tap of every sample made a second of audio take a second.
+constexpr int kKaiserTable = 8192;          // (outside the function: MSVC will not let the table's lambda use a local constant uncaptured)
+
 inline std::vector<float> resample (const float* x, int n, double from, double to)
 {
     if (n <= 0) return {};
@@ -51,13 +53,13 @@ inline std::vector<float> resample (const float* x, int n, double from, double t
     const int out = (int) std::floor (n * ratio);
     const double cut = 0.97 * std::min (1.0, ratio);         // of the input's Nyquist
     const int half = (int) std::ceil (32.0 / cut);
-    constexpr int kTable = 8192;
+    constexpr int kTable = kKaiserTable;
     static const std::vector<double> kaiser = []
     {
         auto bessel0 = [] (double v) { double s = 1.0, t = 1.0; for (int k = 1; k < 30; ++k) { t *= (v / (2.0 * k)) * (v / (2.0 * k)); s += t; } return s; };
         const double beta = 9.0, i0b = bessel0 (beta);
-        std::vector<double> t ((size_t) kTable + 2);
-        for (int i = 0; i <= kTable + 1; ++i) { const double r = std::min (1.0, (double) i / kTable); t[(size_t) i] = bessel0 (beta * std::sqrt (1.0 - r * r)) / i0b; }
+        std::vector<double> t ((size_t) kKaiserTable + 2);
+        for (int i = 0; i <= kKaiserTable + 1; ++i) { const double r = std::min (1.0, (double) i / kKaiserTable); t[(size_t) i] = bessel0 (beta * std::sqrt (1.0 - r * r)) / i0b; }
         return t;
     }();
     std::vector<float> y ((size_t) out);
