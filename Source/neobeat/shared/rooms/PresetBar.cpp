@@ -6,10 +6,10 @@
 class bc::PresetBar::List final : public juce::Component
 {
 public:
-    List (PresetBar& o, const juce::Array<juce::File>& f, int selected)
-        : owner (o), files (f), current (selected)
+    List (PresetBar& o, const juce::StringArray& n, int selected)
+        : owner (o), names (n), current (selected)
     {
-        setSize (kWidth, std::min (kMaxRows, files.size()) * kRowH + 8);
+        setSize (kWidth, std::min (kMaxRows, names.size()) * kRowH + 8);
         setWantsKeyboardFocus (true);
     }
 
@@ -18,32 +18,32 @@ public:
     int rowAt (juce::Point<int> p) const
     {
         const int r = (p.y - 4) / kRowH + scroll;
-        return juce::isPositiveAndBelow (r, files.size()) && p.y >= 4 ? r : -1;
+        return juce::isPositiveAndBelow (r, names.size()) && p.y >= 4 ? r : -1;
     }
 
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
         nsui::paintPlate (g, b, 8.0f);
-        const int rows = std::min (kMaxRows, files.size());
+        const int rows = std::min (kMaxRows, names.size());
         for (int i = 0; i < rows; ++i)
         {
             const int f = i + scroll;
-            if (! juce::isPositiveAndBelow (f, files.size())) break;
+            if (! juce::isPositiveAndBelow (f, names.size())) break;
             juce::Rectangle<int> r (4, 4 + i * kRowH, getWidth() - 8, kRowH);
             const bool isHover = f == hover, isCur = f == current;
             if (isHover) { g.setColour (nsui::C::teal().withAlpha (0.22f)); g.fillRoundedRectangle (r.toFloat(), 4.0f); }
             else if (isCur) { g.setColour (nsui::C::teal().withAlpha (0.10f)); g.fillRoundedRectangle (r.toFloat(), 4.0f); }
             g.setColour (isCur ? nsui::C::teal() : nsui::C::text());
             g.setFont (nsui::font (12.0f, isCur));
-            g.drawText (files[f].getFileNameWithoutExtension(), r.reduced (8, 0), juce::Justification::centredLeft, true);
+            g.drawText (names[f], r.reduced (8, 0), juce::Justification::centredLeft, true);
         }
-        if (files.size() > kMaxRows)
+        if (names.size() > kMaxRows)
         {
             g.setColour (nsui::C::dim());
             g.setFont (nsui::font (9.0f));
-            g.drawText (juce::String (scroll + 1) + "-" + juce::String (std::min (files.size(), scroll + kMaxRows))
-                        + " of " + juce::String (files.size()),
+            g.drawText (juce::String (scroll + 1) + "-" + juce::String (std::min (names.size(), scroll + kMaxRows))
+                        + " of " + juce::String (names.size()),
                         getLocalBounds().removeFromBottom (12).reduced (8, 0), juce::Justification::centredRight, false);
         }
     }
@@ -67,13 +67,13 @@ public:
     }
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
     {
-        if (files.size() <= kMaxRows) return;
-        scroll = juce::jlimit (0, files.size() - kMaxRows, scroll - (int) std::round (w.deltaY * 4.0f));
+        if (names.size() <= kMaxRows) return;
+        scroll = juce::jlimit (0, names.size() - kMaxRows, scroll - (int) std::round (w.deltaY * 4.0f));
         repaint();
     }
 
     PresetBar& owner;
-    juce::Array<juce::File> files;
+    juce::StringArray names;
     int current = -1, hover = -1, scroll = 0;
 };
 
@@ -94,13 +94,33 @@ bc::PresetBar::~PresetBar() { closeList (false); }
 
 void bc::PresetBar::setFolder (const juce::File& dir, const juce::String& wildcard)
 {
+    itemMode = false;
     folder = dir;
     pattern = wildcard;
     rescan();
 }
 
+void bc::PresetBar::setItems (const juce::StringArray& itemNames, int currentIndex)
+{
+    itemMode = true;
+    folder = juce::File(); files.clear();
+    names = itemNames;
+    current = juce::isPositiveAndBelow (currentIndex, names.size()) ? currentIndex : -1;
+    message.clear();
+    repaint();
+}
+
+void bc::PresetBar::setCurrent (int index)
+{
+    const int c = juce::isPositiveAndBelow (index, names.size()) ? index : -1;
+    if (c == current && message.isEmpty()) return;
+    current = c; message.clear();
+    repaint();
+}
+
 void bc::PresetBar::rescan()
 {
+    if (itemMode) { repaint(); return; }      // the list is what the plugin handed over
     const auto was = current >= 0 && current < files.size() ? files[current] : juce::File();
     files.clear();
     if (folder.isDirectory())
@@ -108,6 +128,8 @@ void bc::PresetBar::rescan()
             files.add (f);
     // by name, so stepping is the order you see in the list and in the folder
     files.sort();
+    names.clear();
+    for (const auto& f : files) names.add (f.getFileNameWithoutExtension());
     current = was != juce::File() ? files.indexOf (was) : -1;
     repaint();
 }
@@ -115,30 +137,31 @@ void bc::PresetBar::rescan()
 juce::String bc::PresetBar::currentName() const
 {
     if (message.isNotEmpty()) return message;
-    if (current < 0 || current >= files.size()) return files.isEmpty() ? "no presets in the folder" : "none loaded";
-    return files[current].getFileNameWithoutExtension();
+    if (current < 0 || current >= names.size()) return names.isEmpty() ? (itemMode ? "nothing to load" : "no presets in the folder") : "none loaded";
+    return names[current];
 }
 
 bool bc::PresetBar::loadIndex (int i)
 {
-    if (! juce::isPositiveAndBelow (i, files.size())) return false;
-    if (onLoad == nullptr) return false;
-    const bool ok = onLoad (files[i]);
+    if (! juce::isPositiveAndBelow (i, names.size())) return false;
+    bool ok = false;
+    if (itemMode) { if (onLoadItem == nullptr) return false; ok = onLoadItem (i); }
+    else          { if (onLoad == nullptr) return false; ok = onLoad (files[i]); }
     if (ok) { current = i; message.clear(); }
-    else      message = files[i].getFileNameWithoutExtension() + " would not open";
+    else      message = names[i] + " would not open";
     repaint();
     return ok;
 }
 
 void bc::PresetBar::step (int by)
 {
-    if (files.isEmpty()) { message = "no presets in the folder"; repaint(); return; }
+    if (names.isEmpty()) { message = itemMode ? "nothing to load" : "no presets in the folder"; repaint(); return; }
     // Stepping is a commitment, not a browse, so whatever a hover left behind is finished with.
     before.reset();
-    const int n = files.size();
+    const int n = names.size();
     int at = current < 0 ? (by > 0 ? -1 : 0) : current;
     at = ((at + by) % n + n) % n;      // wraps, so holding an arrow goes round the folder
-    if (loadIndex (at) && onAudition != nullptr) { onAudition(); auditioning = true; startTimer (1200); }
+    if (loadIndex (at) && onAudition != nullptr) { onAudition(); auditioning = true; startTimer (auditionMs); }
 }
 
 void bc::PresetBar::mouseDown (const juce::MouseEvent& e)
@@ -150,13 +173,13 @@ void bc::PresetBar::mouseDown (const juce::MouseEvent& e)
 void bc::PresetBar::openList()
 {
     rescan();
-    if (files.isEmpty()) { message = "no presets in the folder"; repaint(); return; }
+    if (names.isEmpty()) { message = itemMode ? "nothing to load" : "no presets in the folder"; repaint(); return; }
 
     // What the room holds right now, so moving the mouse away puts it back. Without a snapshot the
     // bar still works; it just does not preview, because previewing would be a way to lose work.
     before = onSnapshot != nullptr ? onSnapshot() : nullptr;
 
-    list = std::make_unique<List> (*this, files, current);
+    list = std::make_unique<List> (*this, names, current);
     auto& box = juce::CallOutBox::launchAsynchronously (std::unique_ptr<juce::Component> (list.get()),
                                                         getScreenBounds(), nullptr);
     box.setDismissalMouseClicksAreAlwaysConsumed (false);
@@ -191,7 +214,7 @@ void bc::PresetBar::hoverRow (int row)
         if (auditioning && onAuditionStop != nullptr) onAuditionStop();
         onAudition();
         auditioning = true;
-        startTimer (1200);
+        startTimer (auditionMs);
     }
 }
 
@@ -217,11 +240,11 @@ void bc::PresetBar::paint (juce::Graphics& g)
     g.setFont (nsui::font (12.0f));
     g.drawText (currentName(), r.reduced (8.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft, true);
 
-    if (files.size() > 1 && current >= 0 && message.isEmpty())
+    if (names.size() > 1 && current >= 0 && message.isEmpty())
     {
         g.setColour (nsui::C::lcdDim());
         g.setFont (nsui::font (9.0f));
-        g.drawText (juce::String (current + 1) + "/" + juce::String (files.size()),
+        g.drawText (juce::String (current + 1) + "/" + juce::String (names.size()),
                     r.reduced (8.0f, 0.0f).toNearestInt(), juce::Justification::centredRight, false);
     }
 }

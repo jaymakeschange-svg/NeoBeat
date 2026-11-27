@@ -147,20 +147,21 @@ accumulate.
 
 | Feature | Status | Note |
 |---|---|---|
-| IDM Jack | specced | see above - sound design / capture, not composition |
+| IDM Jack | **built 27 Nov** (JACK room) | see above; DECISIONS.md, "27 November 2026 - the test build" |
 | Stereoroom UI | proposed | engine already in its shared tree; UI not built |
 | Interiority (anti-externalisation) | proposed | see above |
 | Detector-driven placement | proposed | see above |
 | Drag and drop | **unaudited** | may carry the same four bugs MidiJaQ had — see HANDOFF §5 |
-| Preset bar (arrows, hover audition) | proposed | shared component exists, built for Batchcut/MidiJaQ |
+| Preset bar (arrows, hover audition) | **built 27 Nov** | replaces the pattern dropdown; the shared bar gained an item mode for NeoBeat's built-in patterns |
 | MATERIAL engine | available | `nsr::Material` now in the shared tree; no UI in NeoBeat yet |
 | Orb | deferred | from stage 2 |
 | Bounce Delay smoothing | proposed | |
-| Techno and house presets | proposed | grounded in new jack swing |
+| Techno and house presets | **built 27 Nov** - 16 patterns, numbers 129-144 | from the research doc; see DECISIONS.md. Batchcut's still to do (Batchcut section below) |
 | Tiling percussion engine | proposed | from the Chassis `frappe` study — modes from a geometry, the drawing *is* the instrument |
 | Two listening points per voice | proposed | width from the body rather than applied to it |
 | 5×5 pattern grid, x/y reading point | proposed | 25 patterns as a continuous space, bilinear over per-step velocities |
-| Global randomiser | specced 26 Nov | one press, every parameter once, for auditioning. In NeoBeat it reaches each kit sound's parameters and the lane effects. Writes values - a destination, unlike Jack - see DECISIONS.md |
+| Global randomiser | **built 27 Nov** (ROLL, JACK room) | one press, every parameter once, for auditioning. In NeoBeat it reaches each kit sound's parameters and the lane effects. Writes values - a destination, unlike Jack - see DECISIONS.md |
+| BANDS (spectral delay) with per-lane sends | **built 27 Nov** | a window next to FRICTION and BOUNCE; a BANDS knob per lane, and ALL |
 
 ## MidiJaQ
 
@@ -197,6 +198,7 @@ on VCV Rack (GPLv3). See the generative-engines doc §6.
 
 | Feature | Where |
 |---|---|
+| BANDS with per-lane sends and ALL; ROLL; IDM Jack; preset bar; 16 house and techno patterns | NeoBeat, 27 Nov |
 | MATERIAL room — learned objects played, sound run through them | Batchcut, 26 Nov |
 | Per-chop placement in the Stereoroom audio path | MidiJaQ |
 | `nsr::RoomVerb` — depth as a room, not a level | shared |
@@ -217,3 +219,44 @@ Wanted: the learner's 16-band noise restored, so generated sounds are accurate r
 tonally correct. Shares its band layout with `nsr::SpectralDelay`, which already splits 16 log
 spaced bands and is now in the shared tree — the split is the same piece of maths and should not
 be written twice.
+
+## Batchcut: generate pools of variants from any file — requested 27 Nov, after the current NeoBeat build
+
+**Asked (the user, 27 Nov):** *"I want batchcut to be able to generate pools of sounds based on any
+file."* *"The purpose of the room for me is to have a more powerful sound design tool that can
+generate and create variants of my own input like synplant and petri."* To come back to once the
+current NeoBeat build (ROLL, Jack, BANDS, preset bar) is done.
+
+**The gap, plainly.** The MATERIAL room built on 26 Nov opens only the learner's own material files
+(`.json`, written by the MaterialLab learner after it has fitted a recording offline, in Python).
+It cannot take an arbitrary audio file: the fitting - the part that turns a recording into a model -
+is not in Batchcut. So today a new source means a trip through the Python learner first. That is
+not what the room is for.
+
+**What it needs, from the research already done** (`docs/research/Generative engines - Petri,
+PolyNodes, and what to build.md`, in the MidiJaQ tree, §3-4):
+
+- **Analysis of any dropped file inside Batchcut**, so a pool can start from any input without the
+  Python step. Either the learner's fitting ported in, or a search that does not need it.
+- **Box 1 - parameter search against the input** (Petri's "grow", Synplant's Genopatch): breed and
+  mutate patches toward the dropped sound, keeping the variants along the way. The research ranks
+  this first: highest value, short code, no neural network needed.
+- **The output is a pool**: every variant lands in the pool as an ordinary sound, as the MATERIAL
+  room's renders already do, so cutting, kits and .NJQ export work on it unchanged.
+- Related and already listed: the learner's 16-band dense-noise layer (above), without which a
+  fitted body is cleaner than anything physical.
+
+Open, to settle with the user before building: which engines the search breeds (the material model
+only, or NeoBeat's patch voices and samples too), and whether the learner's own fitting is ported
+or replaced by the search.
+
+## Batchcut: house and techno presets — asked 27 Nov, not built
+
+**Asked (the user, 27 Nov):** *"did you include the techno and house new presets for batchcut and
+neobeat?"* - they were in neither. NeoBeat's sixteen were written the same day (NeoBeat table
+above). Batchcut's are still to do: its patterns come from the same pattern bank file as NeoBeat's
+(`PatternBank.h`, which its Kit room uses to audition a kit), so carrying the sixteen across is the
+first step; whether Batchcut also needs loop or KEYS presets in these genres is a question for the
+user. Earlier record of the wish: the plugin-family notes, "techno and house pattern presets in
+Batchcut and NeoBeat too ... while everything stays grounded in new jack swing".
+
