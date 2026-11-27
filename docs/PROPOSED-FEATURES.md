@@ -290,16 +290,17 @@ reference before the next starts:**
 7. Into Batchcut: drop any file, it fits in the background, the material lands in the pool; then the
    variant search across the material model, NeoBeat's voices and transforms of the file itself.
 
-**Progress, 27 Nov** (code: `Source/neobeat/shared/learner/` in Batchcut's tree; checks:
+**Progress, 27 Nov** (updated 27 Nov, stages 4-5a; code: `Source/neobeat/shared/learner/` in Batchcut's tree; checks:
 `tools/test_learner.cpp`; the reference scripts: `tools/learner_ref/`):
 
 | Stage | Result |
 |---|---|
 | 1. The reference | The learner runs here unchanged. Re-scoring the user's fitted PVC pipe gives 0.66861 + 0.00213 regularisation = **0.67074, the recorded loss**. Refitting from scratch lands on **exactly the recorded losses**: PVC pipe 0.67074525 (36 s), tin can 1.38107181 (78 s). Deterministic, so the port can be held to these numbers |
-| 2. The body (`Body2.h`) | Renders the learner's samples from the same parameters and noise: relative rms difference 1.3e-5 (PVC, 27 modes) and 6.2e-5 (tin can, 124 modes) - float32's own precision |
+| 2. The body (`Body2.h`) | Renders the learner's samples from the same parameters and noise. Against the learner run in double precision: 2.6e-8 relative rms on all three clips (PVC 27 modes, tin can 124, tube clank 130 with four glides and a contact stop). Against the learner as it runs (float32): 1.3e-5 / 6.2e-5 / 2.7e-3 - the tube's larger figure is the learner's own float32 drift on gliding phases (its float32 render is 2.7e-3 from its double render) |
 | 3. The loss (`Loss2.h`) | The learner's render scores the same here as in the learner to six decimals (PVC 3.155455 / 0.668609; tin can 5.208192 / 1.379871) |
-| 4. Analysis and starting point | next |
-| 5. Gradients by hand | next |
+| 4. Analysis and starting point (`Analysis2.h`, `NumpyRandom.h`) | `partials.py` and `initial_params` ported: partial tracking finds the same tracks (28 / 214 / 1161; frequencies within 2e-13), the residual and noise match, the tube clank's **4 sweeps and contact stop (0.805 s, 300 Hz) are found** as in the learner, and the starting body matches the learner's to 1.2e-6 (27 / 124 / 130 modes). numpy's random generator reproduced bit for bit |
+| 5a. The loss's gradient (`Loss2::valueAndGrad`) | Written by hand, term by term. Equal to JAX's double-precision gradient: spectral 3e-9, envelope 2e-15, transport 4e-9, attack 2e-16 (relative), all three clips, start and fitted. Against the learner's own float32 gradient: cosine 0.99989-1.0 - float32 STFT noise flips the sign of the log-spectral term in near-silent bins. The window is rounded to float32 as the learner does (that rounding alone moves the gradient 0.5%) |
+| 5b. Back through the body to the parameters | next: against the learner's `g_*` at the same points |
 | 6. Adam | after 5 |
 | 7. Into Batchcut | after 6 |
 
