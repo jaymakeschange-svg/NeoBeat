@@ -1,4 +1,5 @@
-// NeoBeat — 50 new jack swing patterns, all original, 112-126 BPM.
+// NeoBeat — 50 new jack swing patterns, all original, 112-126 BPM; and 16 house and techno
+// patterns, 120-132 BPM (clubDefs, below).
 //
 // Written as step strings, one character per 16th ('|' marks the bar line):
 //   .  rest      x  hit (100)     X  accent (124)     o  ghost (64)    g  soft ghost (42)
@@ -356,6 +357,145 @@ inline const std::vector<Def>& defs()
     };
     return d;
 }
+// ------------------------------------------------------------------ House and Techno (27 Nov 2026)
+// Asked for by the user to make the family more comprehensive while staying grounded in new jack
+// swing. Written from docs/research/New jack swing parts and grooves.md (MidiJaQ tree), "House and
+// techno invert which lane carries the motion" - craft-convention defaults, not measurements, to be
+// trusted less than ears. Swing is NeoBeat's own scale, the MPC one: 0.50 straight, 0.667 triplet.
+// What makes them read as their genre, whatever the sounds:
+//   - the kick on every beat; the open hat on every offbeat eighth (steps 3 7 11 15), full velocity
+//   - the skeleton sits on even 16ths, which swing never moves: only the 16th hats swing
+//   - velocity, not timing, carries the groove in the straight styles (alternating hats)
+//   - garage is the one shuffled style (0.72-0.74), its clap pushed a few ms early, beat 4 of
+//     bar 2 pushed further (the "jack")
+//   - Detroit: two hat layers and cross-rhythm percussion layers; the rim never on a kick
+//   - no fills: a fill every 8 bars is already too many in these idioms
+// The crossovers keep a techno or house skeleton and add new jack swing's own rules: the snare on
+// 2 late and on 4 straight, a swung pickup kick at the tail of the bar, a triplet hat roll at the
+// end of the phrase, and new jack swing's depth of swing.
+inline const std::vector<Def>& clubDefs()
+{
+    static const std::vector<Def> d = {
+    // ------------------------------------------------------------ House
+    { "Chicago Jack", "House", 122, 0.52f, {
+        { K,  "x...x...x...x..o|x...x...x.x.x...", 0 },
+        { S,  "....x.......x...", 0 },
+        { S2, "....X.......X..x", 0 },
+        { CH, "xoxoxoxoxoxoxoxo", 0 },
+        { OH, "..X...X...X...X.", 0 },
+        { RM, ".o.....o...o.o..", 0 } } },
+    { "Piston Floor", "House", 124, 0.54f, {
+        { K,  "x...x...x...x...|x...x...x...x.x.", 0 },
+        { S2, "....X.......X...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo", 0 },
+        { OH, "..X...X...X...X.", 0 },
+        { JK, "...o.......o....|...o.......o..o.", 0 } } },
+    { "Warehouse Stab", "House", 123, 0.53f, {
+        { K,  "x...x...x...x...", 0 },
+        { S2, "....X.......X...", 0 },
+        { CH, "x.x.x.x.x.x.x.x.", 0 },
+        { H3, "gogogogogogogogo", 0 },
+        { OH, "..X...X...X...X.", 0 },
+        { ST, "......x.......x.|..x.......x.....", 0 } } },
+    { "Garage Shuffle", "House", 122, 0.74f, {
+        { K,  "x...x...x...x...", 0 },
+        { K2, "................|..........x.....", 0 },
+        { S2, "....X.......X...|....X...........", -4 },
+        { S,  "................|............X...", -12 },
+        { CH, ".g.o...g.o...o..|.o.g...o.g.o...g", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { FX, ".o..............|................", 0 } } },
+    { "Jersey Sunday", "House", 121, 0.72f, {
+        { K,  "x...x...x...x...", 0 },
+        { K2, "................|..........x.....", 0 },
+        { S2, "....X.......X...|....X...........", -4 },
+        { S,  "................|............X...", -12 },
+        { CH, ".o.g.o...o.g.o..", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { ST, "...x.....x......|...x.....x...x..", 0 } } },
+    { "Night Bus Garage", "House", 123, 0.70f, {
+        { K,  "x...x...x...x...", 0 },
+        { K2, "................|..........x...x.", 0 },
+        { S2, "....X.......X...|....X...........", -4 },
+        { S,  "................|............X...", -12 },
+        { CH, "gogo.ogogo.ogogo", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { DR, "................|.......o........", 0 } } },
+    { "Pearl Basement", "House", 120, 0.56f, {
+        { K,  "x...x...x...x...", 0 },
+        { S2, "....x.......x...", 0 },
+        { CH, "g.g.g.g.g.g.g.g.|g.g.g.g.g.g.g.go", 0 },
+        { OH, "..X...X...X...X.", 0 },
+        { RM, ".o.....o..o..o..|...o..o..o.....o", 0 },
+        { BL, "................|......o.........", 0 } } },
+    { "Swing House", "House", 120, 0.66f, {
+        { K,  "x...x...x...x...|x...x...x...x..x", 0 },
+        { S,  "....X...........", 6 },
+        { S2, "............X...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo|xoxoxoxoxoxot.xo", -2 },
+        { OH, "..X...X...X...X.", 0 },
+        { RM, "...........o....|...o...........o", 0 } } },
+
+    // ------------------------------------------------------------ Techno
+    { "Motor Grid", "Techno", 124, 0.57f, {
+        { K,  "x...x...x...x...", 0 },
+        { S2, "....x.......x...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo", 0 },
+        { H3, "gggggggggggggggg", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { CL, "x..", 0 } } },
+    { "Belleville Steel", "Techno", 122, 0.58f, {
+        { K,  "x...x...x...x...", 0 },
+        { S,  "....x.......x...", 0 },
+        { CH, "x.x.x.x.x.x.x.x.", 0 },
+        { H3, "gogogogogogogogo", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { RM, ".o.....o..o..o..|...o..o..o.....o", 0 },
+        { ST, "x.....x.....x...|..x.....x.....x.", 0 } } },
+    { "Assembly Line", "Techno", 125, 0.56f, {
+        { K,  "x...x...x...x...", 0 },
+        { S2, "....x.......x...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo", 0 },
+        { H3, "g.g.g.g.g.g.g.g.", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { BL, "..o..", 0 },
+        { JK, "...o......o.....|.o......o......o", 0 } } },
+    { "Clank Polymeter", "Techno", 126, 0.58f, {
+        { K,  "x...x...x...x...", 0 },
+        { S2, "....x.......x...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { CL, "x..", 0 },
+        { BL, "..o..", 0 },
+        { JK, "...o...", 0 } } },
+    { "Minimal Rubber", "Techno", 128, 0.55f, {
+        { K,  "x...x...x...x...", 0 },
+        { CH, "x.x.x.x.x.x.x.x.", 0 },
+        { H3, "..g...g...g...g.", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { RM, "...........o....|.......o........", 0 } } },
+    { "Click Floor", "Techno", 130, 0.56f, {
+        { K,  "x...x...x...x...", 0 },
+        { S2, "................|............x...", 0 },
+        { CH, "gogogogogogogogo", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { FX, "................|..............o.", 0 } } },
+    { "Tunnel Pressure", "Techno", 132, 0.57f, {
+        { K,  "x...x...x...x...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo", 0 },
+        { H3, "gggggggggggggggg", 0 },
+        { OH, "..x...x...x...x.", 0 },
+        { TH, ".o....o...o..oo.", 0 } } },
+    { "Swing Techno", "Techno", 124, 0.62f, {
+        { K,  "x...x...x...x...|x...x...x...x..x", 0 },
+        { S,  "....X...........", 6 },
+        { S2, "............X...", 0 },
+        { CH, "xoxoxoxoxoxoxoxo|xoxoxoxoxoxot.xo", -2 },
+        { OH, "..x...x...x...x.", 0 },
+        { CL, "x..", 0 } } },
+    };
+    return d;
+}
 // clang-format on
 
 inline void parseLine (Pattern& p, int track, const std::string& raw, int nudge)
@@ -387,21 +527,34 @@ inline void parseLine (Pattern& p, int track, const std::string& raw, int nudge)
 }
 } // namespace presetdata
 
+namespace presetdata
+{
+inline std::vector<Preset> build (const std::vector<Def>& defs)
+{
+    std::vector<Preset> out;
+    for (const auto& d : defs)
+    {
+        Preset p;
+        p.name = d.name; p.family = d.family; p.tempo = d.tempo; p.swing = d.swing;
+        p.pattern.length = 32;
+        for (const auto& l : d.lines) presetdata::parseLine (p.pattern, l.track, l.steps, l.nudge);
+        out.push_back (p);
+    }
+    return out;
+}
+} // namespace presetdata
+
+// The 50 new jack swing patterns. The 78 variations in PatternBank.h are made from these alone.
 inline const std::vector<Preset>& presets()
 {
-    static const std::vector<Preset> list = []
-    {
-        std::vector<Preset> out;
-        for (const auto& d : presetdata::defs())
-        {
-            Preset p;
-            p.name = d.name; p.family = d.family; p.tempo = d.tempo; p.swing = d.swing;
-            p.pattern.length = 32;
-            for (const auto& l : d.lines) presetdata::parseLine (p.pattern, l.track, l.steps, l.nudge);
-            out.push_back (p);
-        }
-        return out;
-    }();
+    static const std::vector<Preset> list = presetdata::build (presetdata::defs());
+    return list;
+}
+
+// The house and techno patterns, after the 128: numbered from 129, so no existing number moves.
+inline const std::vector<Preset>& clubPresets()
+{
+    static const std::vector<Preset> list = presetdata::build (presetdata::clubDefs());
     return list;
 }
 

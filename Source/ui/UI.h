@@ -110,7 +110,7 @@ struct Ctx
     int tab = 0;             // inspector tab: 0 SOUND, 1 FX, 2 MOD
     nb::ModSrc dockSrc = nb::ModSrc::Lfo1;
     int fsSlot = 0, bdSlot = 0;
-    bool fsOpen = false, bdOpen = false, listOpen = false;
+    bool fsOpen = false, bdOpen = false, listOpen = false, bandsOpen = false;
     int winCell = -1;        // the windows edit this One Shot cell's effect instead of a slot
     int brush = 3;           // One Shot / Sample brush: an fxIndex
     int markBrush = 0;       // Sequencer view: 0 dot, 1 dash, 2 warble, 3 tick, 4 spray, 5 erase, 6 select
@@ -197,7 +197,7 @@ private:
     Look look;
     bool keyPressed (const juce::KeyPress&) override;
     void mouseUp (const juce::MouseEvent&) override;      // (every child's: the end of a gesture is an undo step)
-    std::unique_ptr<juce::Component> header, tree, inspector, dock, routeList, fsWindow, bdWindow;
+    std::unique_ptr<juce::Component> header, tree, inspector, dock, routeList, fsWindow, bdWindow, bandsWindow;
     std::array<std::unique_ptr<juce::Component>, 5> rooms;
     std::array<std::unique_ptr<juce::Component>, 5> overlays;   // export, MIDI, import, default prompt, notice
     std::vector<Part*> parts;
@@ -217,6 +217,7 @@ std::unique_ptr<juce::Component> makeKeyMapRoom (Ctx&);
 std::unique_ptr<juce::Component> makeJackRoom (Ctx&);
 std::unique_ptr<juce::Component> makeFrictionWindow (Ctx&);
 std::unique_ptr<juce::Component> makeBounceWindow (Ctx&);
+std::unique_ptr<juce::Component> makeBandsWindow (Ctx&);
 std::unique_ptr<juce::Component> makeRouteList (Ctx&);
 std::unique_ptr<juce::Component> makeExportPanel (Ctx&);
 std::unique_ptr<juce::Component> makeMidiPanel (Ctx&);

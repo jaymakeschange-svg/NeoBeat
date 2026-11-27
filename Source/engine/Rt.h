@@ -12,6 +12,21 @@
 
 namespace nb
 {
+// BANDS: where a lane's send goes. Read at the one place each sound path adds its output to the
+// mix - a live voice, a prepared copy, a live effect unit - because that is where the lane is
+// still known. A lane at send s puts s of itself on the bus and keeps `duck` of its direct path:
+// 1 - s (1 - dry). So a lane turned fully up sounds the way the bank was set by ear, wet 1.0 over
+// dry 0.4 (docs/DECISIONS.md, "BANDS - the defaults"); at 0 nothing about the lane changes. A
+// null bus is off.
+struct BandSend
+{
+    const float* send = nullptr;          // per lane, 0..1
+    const float* duck = nullptr;          // per lane
+    float* L = nullptr; float* R = nullptr;
+    int lanes = 0;
+    bool to (int pad) const noexcept { return L != nullptr && pad >= 0 && pad < lanes && send[pad] > 0.0f; }
+};
+
 // A rendered sound at the engine's sample rate.
 struct Rendered
 {

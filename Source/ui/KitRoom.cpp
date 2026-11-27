@@ -1,5 +1,7 @@
 // NeoBeat 3.0 — the SEQUENCER room: the 16 lanes' pads, the four scenes and their nodes.
 #include "UI.h"
+#include "../shared/PresetBar.h"
+#include "../shared/PatternXml.h"
 
 namespace ui
 {
@@ -453,11 +455,52 @@ public:
     explicit KitRoom (Ctx& c) : ctx (c), pads (c), steps (c), strip (c), chainStrip (c), scenes ({ "A", "B", "C", "D" }), zoom ({ "1", "2", "4" }), modes ({ "HOST", "KEY", "PADS" }),
                                 swing (c, "SWING", 0.5f, 0.75f, 0.64f), tempo (c, "TEMPO", 60.0f, 200.0f, 120.0f)
     {
-        addAndMakeVisible (patternBox);
-        patternBox.onChange = [this] { const int id = patternBox.getSelectedId(); if (id > 0 && id <= nb::numPatterns()) { ctx.proc.loadPreset (id - 1); ctx.changed(); } else if (id > 1000) loadUser (id); };
-        for (auto* b : { &prev, &next, &save, &clear, &chain, &followBtn }) addAndMakeVisible (b);
-        prev.onClick = [this] { ctx.proc.loadPreset ((ctx.proc.currentPreset.load() + nb::numPatterns() - 1) % nb::numPatterns()); ctx.changed(); };
-        next.onClick = [this] { ctx.proc.loadPreset ((ctx.proc.currentPreset.load() + 1) % nb::numPatterns()); ctx.changed(); };
+        // The preset bar, Batchcut's (the user's choice, 27 Nov - docs/DECISIONS.md, "Next in the
+        // same build"): the arrows load as you step, and the list plays each pattern as the mouse
+        // passes over it and puts back what was there unless one is clicked. The 128 factory
+        // patterns, then the ones saved here (MINE).
+        addAndMakeVisible (presets);
+        presets.onLoadItem = [this] (int i)
+        {
+            const int n = nb::numPatterns();
+            if (i < n) { ctx.proc.loadPreset (i); userLoaded = -1; }
+            else
+            {
+                const auto user = ctx.proc.userPresets ("Pattern");
+                if (i - n >= user.size() || ! ctx.proc.loadUserPreset ("Pattern", user[i - n])) return false;
+                userLoaded = i - n;
+            }
+            seenPreset = ctx.proc.currentPreset.load();
+            ctx.changed (false);
+            return true;
+        };
+        // what the scene holds before browsing, so hovering costs nothing
+        presets.onSnapshot = [this]
+        {
+            auto x = std::make_unique<juce::XmlElement> ("BROWSE");
+            nb::Pattern pat; ctx.proc.snapshotPattern (pat);
+            io::writePattern (*x->createNewChildElement ("PATTERN"), pat);
+            x->setAttribute ("swing", ctx.proc.getParam ("swing")); x->setAttribute ("tempo", ctx.proc.getParam ("tempo"));
+            x->setAttribute ("preset", ctx.proc.currentPreset.load()); x->setAttribute ("user", userLoaded);
+            return x;
+        };
+        presets.onRestore = [this] (const juce::XmlElement& x)
+        {
+            if (auto* pe = x.getChildByName ("PATTERN")) { nb::Pattern pat; io::readPattern (*pe, pat); ctx.proc.pattern.load (pat); }
+            ctx.proc.setParam ("swing", (float) x.getDoubleAttribute ("swing", 0.64));
+            ctx.proc.setParam ("tempo", (float) x.getDoubleAttribute ("tempo", 120.0));
+            ctx.proc.currentPreset.store (x.getIntAttribute ("preset", 0));
+            seenPreset = ctx.proc.currentPreset.load(); userLoaded = x.getIntAttribute ("user", -1);
+            ctx.changed (false);
+        };
+        // With the host stopped, an audition runs NeoBeat's own transport for about a bar
+        presets.onAudition = [this]
+        {
+            presets.auditionMs = juce::jlimit (800, 6000, (int) (4.0 * 60000.0 / std::max (40.0, ctx.proc.displayBpm.load())));
+            ctx.proc.auditionRun.store (true);
+        };
+        presets.onAuditionStop = [this] { ctx.proc.auditionRun.store (false); };
+        for (auto* b : { &save, &clear, &chain, &followBtn }) addAndMakeVisible (b);
         save.onClick = [this] { saveUser(); };
         clear.onClick = [this] { ctx.proc.clearScene (ctx.scene()); ctx.changed(); };
         clear.setTooltip ("Empty this scene (its nodes and where they are sent)");
@@ -511,12 +554,6 @@ public:
         });
     }
 
-    void loadUser (int id)
-    {
-        const auto names = ctx.proc.userPresets ("Pattern");
-        const int i = id - 1001;
-        if (i >= 0 && i < names.size()) { ctx.proc.loadUserPreset ("Pattern", names[i]); ctx.changed(); }
-    }
     void saveUser()
     {
         auto* w = new juce::AlertWindow ("Save the scene", "A name for this scene's pattern (kept in your NeoBeat presets).\nTo keep the kit and all four scenes in one file, use KIT / FILE > Save as .NJQ.", juce::MessageBoxIconType::NoIcon);
@@ -551,8 +588,7 @@ public:
     void resized() override
     {
         auto top = juce::Rectangle<int> (12, 10, getWidth() - 24, 36);
-        patternBox.setBounds (top.removeFromLeft (232).reduced (0, 3));
-        prev.setBounds (top.removeFromLeft (34).reduced (2, 3)); next.setBounds (top.removeFromLeft (34).reduced (2, 3));
+        presets.setBounds (top.removeFromLeft (300).reduced (0, 3));
         save.setBounds (top.removeFromLeft (58).reduced (2, 3));
         clear.setBounds (top.removeFromLeft (62).reduced (2, 3));
         kitBox.setBounds (top.removeFromLeft (150).reduced (4, 3));
@@ -572,15 +608,15 @@ public:
 
     void refresh() override
     {
-        patternBox.clear (juce::dontSendNotification);
-        for (int i = 0; i < nb::numPatterns(); ++i) patternBox.addItem (juce::String (i + 1).paddedLeft ('0', 3) + "  " + nb::patternPreset (i).name, i + 1);
-        const auto user = ctx.proc.userPresets ("Pattern");
-        if (! user.isEmpty())
         {
-            patternBox.addSeparator();
-            for (int i = 0; i < user.size(); ++i) patternBox.addItem ("MINE | " + user[i], 1001 + i);
+            juce::StringArray names;
+            for (int i = 0; i < nb::numPatterns(); ++i) names.add (juce::String (i + 1).paddedLeft ('0', 3) + "  " + nb::patternPreset (i).name);
+            const auto user = ctx.proc.userPresets ("Pattern");
+            for (int i = 0; i < user.size(); ++i) names.add ("MINE | " + user[i]);
+            if (userLoaded >= user.size()) userLoaded = -1;
+            if (names != presetNames) { presetNames = names; presets.setItems (names, presetIndex()); }
+            else presets.setCurrent (presetIndex());
         }
-        patternBox.setSelectedId (ctx.proc.currentPreset.load() + 1, juce::dontSendNotification);
         kitBox.setSelectedId (ctx.proc.currentKit.load() + 1, juce::dontSendNotification);
         const int bars = std::max (1, (ctx.proc.pattern.length() + 15) / 16);
         barsBox.setSelectedId (bars, juce::dontSendNotification);
@@ -614,7 +650,8 @@ public:
         const int q = ctx.proc.queuedScene.load(), link = ctx.proc.playLink.load();
         if (s != lastStep || v != lastVersion) { if (s / 16 != lastStep / 16 || v != lastVersion) strip.repaint(); lastStep = s; lastVersion = v; steps.repaint(); }
         if (q != lastQueued || link != lastLink) { lastQueued = q; lastLink = link; repaint(); chainStrip.repaint(); }
-        if (ctx.proc.currentPreset.load() + 1 != patternBox.getSelectedId() && patternBox.getSelectedId() < 1000) patternBox.setSelectedId (ctx.proc.currentPreset.load() + 1, juce::dontSendNotification);
+        // a pattern loaded from elsewhere (the host's program list) shows here
+        if (ctx.proc.currentPreset.load() != seenPreset) { seenPreset = ctx.proc.currentPreset.load(); userLoaded = -1; presets.setCurrent (presetIndex()); }
     }
 
 private:
@@ -623,8 +660,12 @@ private:
     StepGrid steps;
     BarStrip strip;
     ChainStrip chainStrip;
-    juce::ComboBox patternBox, kitBox, barsBox;
-    Pill prev { "<" }, next { ">" }, save { "SAVE" }, clear { "CLEAR" }, chain { "CHAIN" }, followBtn { "FOLLOW" };
+    juce::ComboBox kitBox, barsBox;
+    bc::PresetBar presets;
+    juce::StringArray presetNames;
+    int userLoaded = -1, seenPreset = -1;      // a MINE pattern loaded through the bar, and the factory one last seen
+    int presetIndex() const { return userLoaded >= 0 ? nb::numPatterns() + userLoaded : ctx.proc.currentPreset.load(); }
+    Pill save { "SAVE" }, clear { "CLEAR" }, chain { "CHAIN" }, followBtn { "FOLLOW" };
     Segmented scenes, zoom, modes;
     Knob swing, tempo;
     int lastStep = -2, lastQueued = -2, lastLink = -2;

@@ -213,7 +213,7 @@ public:
                 if (m < n) { u.overdue += n - m; if (u.overdue > kTolerance) { release (engine, i); continue; } }
             }
             if (u.live) u.srcDone = u.fed > 0 && ! engine.routeBusy (i);
-            if (m > 0) feed (u, m, outL, outR, tap, tapPad, true);
+            if (m > 0) feed (u, m, outL, outR, tap, tapPad, true, engine.band);
             if (u.finished) release (engine, i);
         }
     }
@@ -357,7 +357,7 @@ private:
     }
 
     // m samples of the hit through the chain. outL == nullptr: fed ahead, nothing is heard.
-    void feed (Unit& u, int m, float* outL, float* outR, float* tap, int tapPad, bool fromBlock) noexcept
+    void feed (Unit& u, int m, float* outL, float* outR, float* tap, int tapPad, bool fromBlock, const BandSend& band = {}) noexcept
     {
         float* x = u.inL.data(); float* y = u.inR.data();
         if (! u.live)
@@ -424,6 +424,7 @@ private:
         if (upstreamDone) u.finished = true;
         if (outL == nullptr) return;
         const bool tapped = tap != nullptr && u.pad == tapPad;
+        const bool sends = band.to (u.pad);      // after the lane's effects: the effected sound goes through BANDS
         for (int i = 0; i < m; ++i)
         {
             if (u.tick-- <= 0) { u.tick = 31; if (u.mod.active()) { u.mod.update (32, sr); applyMod (u); } }
@@ -435,9 +436,10 @@ private:
                 if (u.fadeGain <= 0.0f) { u.finished = true; break; }
                 l *= u.fadeGain; r *= u.fadeGain;
             }
-            const float ol = l * u.gL, orr = r * u.gR;
-            outL[i] += ol; outR[i] += orr;
+            float ol = l * u.gL, orr = r * u.gR;
             if (tapped) tap[i] += 0.5f * (ol + orr);
+            if (sends) { band.L[i] += ol * band.send[u.pad]; band.R[i] += orr * band.send[u.pad]; ol *= band.duck[u.pad]; orr *= band.duck[u.pad]; }
+            outL[i] += ol; outR[i] += orr;
         }
     }
     // the latency of the effects after stage k

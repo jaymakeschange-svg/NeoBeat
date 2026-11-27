@@ -13,6 +13,7 @@
 
 #include "Engine.h"
 #include "../shared/JackCore.h"
+#include "../shared/Bands.h"
 #include "FxUnits.h"
 #include "LiveState.h"
 #include "MarkSynth.h"
@@ -45,6 +46,7 @@ public:
     Workstation() : engine (std::make_unique<Engine>()), players (std::make_unique<PlayerPool>()), marks (std::make_unique<MarkSynth>()),
                     renderer (std::make_unique<RenderService> (publisher)), units (std::make_unique<FxUnits>()), scenes ((size_t) kNumScenes)
     {
+        { bc::BandsState d; bandsDry = d.dsp.dry; d.dsp.dry = 0.0f; bandsFx.setState (d); }
         events.reserve (8192);
         seqEvents.reserve (4096);
     }
@@ -60,6 +62,9 @@ public:
         maxN = std::max (1, maxBlock);
         units->prepare (sr, kSegment);
         scratchL.assign ((size_t) maxN, 0.0f); scratchR.assign ((size_t) maxN, 0.0f); tapBuf.assign ((size_t) maxN, 0.0f);
+        bandsFx.prepare (sr, kSegment);
+        for (auto* v : { &bandBusL, &bandBusR, &bandWetL, &bandWetR }) v->assign ((size_t) kSegment, 0.0f);
+        bandsOn = false; bandsQuiet = 0;
         heldKeys = 0; internalPpq = 0.0; keyPpq = 0.0;
         for (auto& o : pendingOffs) o = {};
     }
@@ -176,6 +181,32 @@ public:
             jackMaskNow = jackMask.load (std::memory_order_relaxed);
             jackReplacing = jack.isHeld() && jack.settings().replace;
             jackState.store (jack.isHeld() ? 1 : (jack.isRecovering() ? 2 : 0), std::memory_order_relaxed);
+        }
+
+        // ---- BANDS: the bank's settings, and each lane's send for this block
+        {
+            bc::BandsState bs;
+            if (bandsSettings.read (bs))
+            {
+                // The lane's own direct level is the Dry (the duck below); the bank adds wet only,
+                // so the dry is never counted twice.
+                bandsDry = std::max (0.0f, std::min (1.0f, bs.dsp.dry));
+                bs.dsp.dry = 0.0f;
+                bandsFx.setState (bs);
+            }
+            const float all = std::max (0.0f, std::min (1.0f, bandsAll.load (std::memory_order_relaxed)));
+            bandsAny = false;
+            for (int p = 0; p < kNumPads; ++p)
+            {
+                const float s = std::max (0.0f, std::min (1.0f, std::max (engine->pads[(size_t) p].bands, all)));
+                bandSendNow[(size_t) p] = s;
+                bandDuckNow[(size_t) p] = 1.0f - s * (1.0f - bandsDry);
+                bandsAny = bandsAny || s > 0.0f;
+            }
+            if (bandsAny) { bandsOn = true; bandsQuiet = 0; }
+            bandsPpq0 = ppq0; bandsPps = ppqPerSample;
+            bandsBeat.store (ppq0, std::memory_order_relaxed);
+            bandsRunning.store (bandsOn, std::memory_order_relaxed);
         }
 
         // the scene: a change waits for the next bar while the sequencer runs
@@ -327,6 +358,14 @@ public:
     std::atomic<int> jackBursts { 0 };                 // bursts fired since it was engaged
     std::atomic<int> jackSeized { 0 };                 // hits that carried offsets since it was engaged
 
+    // ---- BANDS, the spectral delay on a send. Decisions: docs/DECISIONS.md, "BANDS in NeoBeat"
+    // and "Next in the same build". The window writes the bank's settings; each lane's send is its
+    // PadSettings::bands, and `bandsAll` sends every lane at least that much.
+    nsr::TripleBuffer<bc::BandsState> bandsSettings;
+    std::atomic<float> bandsAll { 0.0f };
+    std::atomic<bool> bandsRunning { false };          // for the window: is the bank processing
+    std::atomic<double> bandsBeat { 0.0 };             // for the window: where the bands' travel is
+
     // UI feedback
     std::atomic<int> playStep { -1 }, gridCol { -1 }, playScene { 0 }, queuedScene { -1 }, playLink { -1 };
     std::atomic<double> seqBeat { -1.0 };
@@ -346,6 +385,23 @@ private:
     };
     void addEvent (const Ev& e) noexcept { if (events.size() < events.capacity()) events.push_back (e); }
 
+    // The bank on this segment's bus, into the mix ahead of the master. With no send left it keeps
+    // running until its tail has died - half a second of silence - then stops costing anything.
+    void renderBands (int start, int m) noexcept
+    {
+        std::fill (bandWetL.begin(), bandWetL.begin() + m, 0.0f);
+        std::fill (bandWetR.begin(), bandWetR.begin() + m, 0.0f);
+        bandsFx.process (bandWetL.data(), bandWetR.data(), bandBusL.data(), bandBusR.data(), m, bandsPpq0 + start * bandsPps);
+        float pk = 0.0f;
+        for (int i = 0; i < m; ++i)
+        {
+            scratchL[(size_t) i] += bandWetL[(size_t) i]; scratchR[(size_t) i] += bandWetR[(size_t) i];
+            pk = std::max (pk, std::max (std::fabs (bandWetL[(size_t) i]), std::fabs (bandWetR[(size_t) i])));
+        }
+        if (bandsAny || pk > 1.0e-6f) bandsQuiet = 0;
+        else if ((bandsQuiet += m) > (int) (0.5f * sr)) { bandsOn = false; bandsFx.reset(); engine->band = {}; }
+    }
+
     void renderSegment (float* L, float* R, int start, int len, int tapPad) noexcept
     {
         while (len > 0)
@@ -353,11 +409,19 @@ private:
             const int m = std::min (len, kSegment);
             std::fill (scratchL.begin(), scratchL.begin() + m, 0.0f);
             std::fill (scratchR.begin(), scratchR.begin() + m, 0.0f);
-            players->render (scratchL.data(), scratchR.data(), m, tapBuf.data() + start, tapPad);
+            if (bandsOn)
+            {
+                std::fill (bandBusL.begin(), bandBusL.begin() + m, 0.0f);
+                std::fill (bandBusR.begin(), bandBusR.begin() + m, 0.0f);
+                engine->band = { bandSendNow.data(), bandDuckNow.data(), bandBusL.data(), bandBusR.data(), kNumPads };
+            }
+            else engine->band = {};
+            players->render (scratchL.data(), scratchR.data(), m, tapBuf.data() + start, tapPad, engine->band);
             marks->render (scratchL.data(), scratchR.data(), m);
             units->begin (*engine, m);
             engine->renderVoices (m, tapBuf.data() + start, tapPad);
             units->render (*engine, scratchL.data(), scratchR.data(), m, tapBuf.data() + start, tapPad);
+            if (bandsOn) renderBands (start, m);
             engine->finishMix (L + start, R + start, m, scratchL.data(), scratchR.data());
             start += m; len -= m;
         }
@@ -1068,6 +1132,15 @@ private:
     std::atomic<float> pendingNoteVel { 0.8f };
     struct PendingOff { int note = -1; int channel = 1; int samplesLeft = 0; };
     std::array<PendingOff, 128> pendingOffs {};
+
+    // ---- BANDS, audio thread only
+    bc::BandsEngine bandsFx;
+    std::array<float, kNumPads> bandSendNow {}, bandDuckNow {};
+    std::vector<float> bandBusL, bandBusR, bandWetL, bandWetR;
+    float bandsDry = 0.4f;
+    bool bandsOn = false, bandsAny = false;      // on: processing (a send, or a tail still ringing)
+    int bandsQuiet = 0;                          // samples with no send and nothing coming out
+    double bandsPpq0 = 0.0, bandsPps = 0.0;      // the block's start and pace, for the bands' travel
 
     // ---- IDM Jack, audio thread only
     nsr::JackCore jack;

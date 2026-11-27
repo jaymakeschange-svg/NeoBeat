@@ -2,6 +2,7 @@
 // with random edits everywhere, MIDI, transport jumps, sample-rate and block-size changes, state
 // round trips and the editor opened, used and closed while it plays. Usage: NeoBeatHostTest [seconds]
 #include <typeinfo>
+#include "../Source/shared/PresetBar.h"
 #include <cstdlib>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Source/plugin/PluginProcessor.h"
@@ -82,8 +83,11 @@ static void randomEdit (NeoBeatProcessor& p, juce::Random& r)
 {
     auto& P = p.project;
     nb::Pattern pat; p.snapshotPattern (pat);
-    switch (r.nextInt (17))
+    switch (r.nextInt (19))
     {
+        // BANDS: a lane's send, and ALL
+        case 17: p.setParam (p.paramId (r.nextInt (16), "bands"), r.nextBool() ? 0.0f : r.nextFloat()); break;
+        case 18: p.setParam ("bands_all", r.nextInt (3) == 0 ? r.nextFloat() : 0.0f); break;
         // the randomiser, IDM Jack held or let go, and its settings and lanes
         case 14: p.roll(); break;
         case 15: p.jackSetHeld (r.nextBool()); break;
@@ -189,7 +193,7 @@ int main (int argc, char** argv)
                 case 2: ctx.room = 1; proc->project.matrix.view = host.rnd.nextInt (3); ctx.select ({ ui::Sel::None, 0 }, host.rnd.nextInt (3)); break;
                 case 3: if (! proc->project.matrix.oneShot.cells.empty()) { ctx.room = 1; proc->project.matrix.view = 1; ctx.select ({ ui::Sel::Cell, host.rnd.nextInt ((int) proc->project.matrix.oneShot.cells.size()) }, host.rnd.nextInt (3)); } break;
                 case 4: ctx.openWindow (host.rnd.nextBool(), host.rnd.nextInt (8)); break;
-                case 5: ctx.fsOpen = ctx.bdOpen = false; ctx.listOpen = host.rnd.nextBool(); ctx.refreshNow(); break;
+                case 5: ctx.fsOpen = ctx.bdOpen = false; ctx.listOpen = host.rnd.nextBool(); ctx.bandsOpen = ! ctx.listOpen && host.rnd.nextBool(); ctx.refreshNow(); break;
                 case 6: if (! proc->project.keymap.zones.empty()) { ctx.room = 3; ctx.select ({ ui::Sel::Zone, host.rnd.nextInt ((int) proc->project.keymap.zones.size()) }, host.rnd.nextInt (3)); } break;
                 case 7: randomEdit (*proc, host.rnd); ctx.refreshNow(); break;
                 default: ctx.dockSrc = (nb::ModSrc) host.rnd.nextInt ((int) nb::ModSrc::Count); ctx.room = 2; ctx.select ({ ui::Sel::Grid, 0 }, host.rnd.nextInt (3)); break;
@@ -245,6 +249,21 @@ int main (int argc, char** argv)
     if (old) { while (auto* c = old->getChildByName ("PROJECT")) old->removeChildElement (c, true); juce::MemoryBlock ob; juce::AudioProcessor::copyXmlToBinary (*old, ob); proc2->setStateInformation (ob.getData(), (int) ob.getSize()); }
     CHECK (true, "a build-1 state loads");
 
+    std::printf ("4b. the preset bar's item mode (NeoBeat's patterns are not files)\n");
+    {
+        bc::PresetBar bar;
+        int loaded = -1, loads = 0;
+        bar.onLoadItem = [&] (int i) { loaded = i; ++loads; return i != 2; };     // item 2 refuses
+        bar.setItems ({ "one", "two", "three", "four" }, 0);
+        CHECK (bar.count() == 4 && bar.currentName() == "one", "items listed, the current one named");
+        bar.step (+1); CHECK (loaded == 1 && bar.currentName() == "two", "the arrow steps to the next and loads it");
+        bar.step (+1); CHECK (loaded == 2 && bar.currentName().contains ("would not open"), "a load that fails says so");
+        bar.setCurrent (3); bar.step (+1); CHECK (loaded == 0, "stepping past the end wraps round");
+        bar.step (-1); CHECK (loaded == 3, "and back the other way");
+        bar.setItems ({}, -1); bar.step (+1); CHECK (bar.currentName() == "nothing to load", "an empty list says so");
+        juce::ignoreUnused (loads);
+    }
+
     std::printf ("5. user presets: save and load every section\n");
     int okCount = 0;
     for (auto s : { "Pattern", "Kit", "OneShot", "Sample", "Sequencer", "Grid", "KeyMap", "Mod" })
@@ -277,6 +296,10 @@ int main (int argc, char** argv)
                         if (t.contains ("LOAD") || t.contains ("FOLDER") || t.contains ("SAVE") || t.contains ("FILE") || t.contains ("SOURCE")) continue;
                     }
                     if (dynamic_cast<juce::ComboBox*> (ch) != nullptr) continue;
+                    // The preset bar's list opens as a desktop window, as a combo box's does, and the
+                    // test's virtual display has no window manager to take one (X BadAtom, the
+                    // process exits). Its arrows are still clicked; its wiring is tested in 6b.
+                    if (dynamic_cast<bc::PresetBar*> (ch) != nullptr) { walk (ch); continue; }
                     all.push_back (ch);
                     walk (ch);
                 }
@@ -323,6 +346,38 @@ int main (int argc, char** argv)
         juce::MemoryBlock st; proc->getStateInformation (st);
         CHECK (st.getSize() > 100, "the state still saves");
     }
+    std::printf ("6b. the preset bar in the SEQUENCER room: load, browse and put back, audition\n");
+    {
+        auto ed = std::unique_ptr<juce::AudioProcessorEditor> (proc->createEditor());
+        auto* shell = dynamic_cast<ui::Shell*> (ed->getChildComponent (0));
+        bc::PresetBar* bar = nullptr;
+        std::function<void (juce::Component*)> find = [&] (juce::Component* c)
+        { for (auto* ch : c->getChildren()) { if (auto* b = dynamic_cast<bc::PresetBar*> (ch)) bar = b; else find (ch); } };
+        if (shell != nullptr) { shell->ctx.room = 0; shell->ctx.refreshNow(); find (shell); }
+        CHECK (bar != nullptr, "the SEQUENCER room has the preset bar");
+        if (bar != nullptr)
+        {
+            CHECK (bar->count() >= nb::numPatterns(), "it lists every factory pattern");
+            proc->loadPreset (0);
+            nb::Pattern before; proc->snapshotPattern (before);
+            const float swingBefore = proc->getParam ("swing");
+            auto snap = bar->onSnapshot();
+            const int other = nb::numPatterns() - 1;
+            CHECK (bar->onLoadItem (other) && proc->currentPreset.load() == other, "a row loads its pattern");
+            nb::Pattern during; proc->snapshotPattern (during);
+            bar->onRestore (*snap);
+            nb::Pattern after; proc->snapshotPattern (after);
+            bool same = after.length == before.length;
+            for (int t = 0; t < nb::kNumPads && same; ++t)
+                for (int st = 0; st < after.length && same; ++st)
+                    same = after.steps[(size_t) t][(size_t) st].vel == before.steps[(size_t) t][(size_t) st].vel;
+            CHECK (same && proc->currentPreset.load() == 0 && std::abs (proc->getParam ("swing") - swingBefore) < 1.0e-4f,
+                   "moving off the list puts back the pattern, swing and number that were there");
+            bar->onAudition(); CHECK (proc->auditionRun.load(), "an audition runs NeoBeat's own transport");
+            bar->onAuditionStop(); CHECK (! proc->auditionRun.load(), "and stops it");
+        }
+    }
+
     std::printf ("7. rapid sample-rate and block-size changes while the renderer works (pluginval's audio test, 150 times)\n");
     {
         const double rates[] = { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 };

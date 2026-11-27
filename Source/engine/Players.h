@@ -60,9 +60,10 @@ public:
     void startChoke() noexcept { choking = true; }
 
     // adds into the outputs
-    void render (float* outL, float* outR, int n, float* tap, int tapPad) noexcept
+    void render (float* outL, float* outR, int n, float* tap, int tapPad, const BandSend& band = {}) noexcept
     {
         if (! active) return;
+        const bool sends = band.to (pad);
         for (int i = 0; i < n; ++i)
         {
             if (tick-- <= 0) { tick = 31; if (mod.active()) { mod.update (32, sr); applyMod(); } }
@@ -80,9 +81,10 @@ public:
                 if (chokeGain <= 0.0f) { finish(); return; }
                 l *= chokeGain; r *= chokeGain;
             }
-            const float ol = l * gL, orr = r * gR;
-            outL[i] += ol; outR[i] += orr;
+            float ol = l * gL, orr = r * gR;
             if (tap != nullptr && pad == tapPad) tap[i] += 0.5f * (ol + orr);
+            if (sends) { band.L[i] += ol * band.send[pad]; band.R[i] += orr * band.send[pad]; ol *= band.duck[pad]; orr *= band.duck[pad]; }
+            outL[i] += ol; outR[i] += orr;
         }
     }
 
@@ -131,9 +133,9 @@ public:
     void chokePad (int pad) noexcept { for (auto& v : voices) if (v.active && v.pad == pad) v.startChoke(); }
     void allOff() noexcept { for (auto& v : voices) if (v.active) v.startChoke(); }
 
-    void render (float* L, float* R, int n, float* tap, int tapPad) noexcept
+    void render (float* L, float* R, int n, float* tap, int tapPad, const BandSend& band = {}) noexcept
     {
-        for (auto& v : voices) if (v.active) v.render (L, R, n, tap, tapPad);
+        for (auto& v : voices) if (v.active) v.render (L, R, n, tap, tapPad, band);
     }
     int activeCount() const noexcept { int c = 0; for (auto& v : voices) c += v.active ? 1 : 0; return c; }
 

@@ -47,7 +47,10 @@ set (NEOBEAT_UI_SOURCES
     Source/ui/GridKeyMap.cpp
     Source/ui/Windows.cpp
     Source/ui/Panels.cpp
-    Source/ui/JackRoom.cpp)
+    Source/ui/JackRoom.cpp
+    Source/ui/BandsWindow.cpp
+    Source/shared/BandsRoomUi.cpp
+    Source/shared/PresetBar.cpp)
 
 target_sources (NeoBeat PRIVATE
     Source/plugin/PluginProcessor.cpp

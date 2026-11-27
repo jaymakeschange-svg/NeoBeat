@@ -1,5 +1,5 @@
-// IDM Jack through the real workstation, offline, with checks.
-//   test_jack [outdir]     (writes WAVs of a held pass to outdir when given)
+// IDM Jack and BANDS through the real workstation, offline, with checks.
+//   test_jack [outdir]     (writes WAVs of a held pass, and of BANDS, to outdir when given)
 //
 // Spec: docs/PROPOSED-FEATURES.md, "IDM Jack". What this proves, and what it cannot:
 //   - offsets are an overlay: the stored kit is the same after a held pass as before it
@@ -133,10 +133,12 @@ int main (int argc, char** argv)
     CHECK (finite (plain) && peak (plain) > 0.05f, "the kit plays");
     CHECK (r0.w->jackBursts.load() == 0 && r0.w->jackSeized.load() == 0, "nothing fires while it is off");
 
+    int bursts = 0, seized = 0;      // section 4 compares against these
+    {
     std::printf ("2. held over the pattern, every lane in\n");
     Rig r1; r1.w->jackSettings.write (settings());
     const Out held = play (r1, 4.0, { 0.0 });
-    const int bursts = r1.w->jackBursts.load(), seized = r1.w->jackSeized.load();
+    bursts = r1.w->jackBursts.load(); seized = r1.w->jackSeized.load();
     std::printf ("     %d bursts, %d hits seized, peak %.3f, limiter worst %.1f dB\n", bursts, seized, peak (held), r1.w->kit().limiter.worstReductionDb());
     CHECK (bursts > 10, "bursts fire on the lattice");
     CHECK (seized > bursts, "burst hits and pattern hits both carry offsets");
@@ -145,6 +147,8 @@ int main (int argc, char** argv)
     CHECK (sameKit (r1.w->kit(), r1.in), "the stored kit is untouched after a held pass - an overlay, never written back");
     if (! outdir.empty()) { writeWav (outdir + "/jack_held.wav", held); writeWav (outdir + "/jack_plain.wav", plain); }
 
+    }
+    {
     std::printf ("3. a pass is its seed\n");
     Rig r2a; r2a.w->jackSettings.write (settings (7)); const Out a = play (r2a, 3.0, { 0.0 });
     Rig r2b; r2b.w->jackSettings.write (settings (7)); const Out b = play (r2b, 3.0, { 0.0 });
@@ -152,6 +156,8 @@ int main (int argc, char** argv)
     CHECK (maxDiff (a, b) == 0.0f, "the same seed plays the same pass, sample for sample");
     CHECK (maxDiff (a, c) > 0.05f, "a different seed plays a different pass");
 
+    }
+    {
     std::printf ("4. the include list\n");
     Rig r3; r3.w->jackSettings.write (settings()); r3.w->jackMask.store (0u);
     const Out none = play (r3, 4.0, { 0.0 });
@@ -162,6 +168,8 @@ int main (int argc, char** argv)
     std::printf ("     lane 1 alone: %d bursts, %d seized (all lanes: %d, %d)\n", r4.w->jackBursts.load(), r4.w->jackSeized.load(), bursts, seized);
     CHECK (r4.w->jackBursts.load() > 0 && r4.w->jackSeized.load() < seized, "one lane in: it fires, on less");
 
+    }
+    {
     std::printf ("5. replace\n");
     auto rep = settings(); rep.replace = true;
     Rig r5; r5.w->jackSettings.write (rep); r5.w->jackMask.store (0u);
@@ -173,6 +181,8 @@ int main (int argc, char** argv)
     CHECK (rms (jackOnly, S, 4 * S) > rms (plain, S, 4 * S) * 0.1, "replace with every lane in: the kit runs on Jack alone");
     if (! outdir.empty()) writeWav (outdir + "/jack_replace.wav", jackOnly);
 
+    }
+    {
     std::printf ("6. release\n");
     Rig r7; r7.w->jackSettings.write (settings());
     std::vector<int> st7;
@@ -195,6 +205,8 @@ int main (int argc, char** argv)
     CHECK (st8[(size_t) blockAfter] == 2, "recovery: recovering after release");
     CHECK (st8[(size_t) ((2.0 + barSec + 0.1) * SR) / BLOCK] == 0, "recovery: idle once its bar has run out");
 
+    }
+    {
     std::printf ("7. the transport\n");
     Rig r9; r9.w->jackSettings.write (settings());
     play (r9, 2.0, { 0.0, 1.0e9, false });
@@ -207,6 +219,8 @@ int main (int argc, char** argv)
     std::printf ("     looping one bar: %d bursts in 2 s, then %d more in 4 s\n", firstLoops, r10.w->jackBursts.load() - firstLoops);
     CHECK (r10.w->jackBursts.load() - firstLoops > firstLoops, "looping: the lattice keeps up with the jump back");
 
+    }
+    {
     std::printf ("8. as hard as it goes\n");
     auto hard = settings(); hard.density = 1.0f; hard.extremity = 1.0f; hard.maxRetriggers = 8;
     Rig r11; r11.w->jackSettings.write (hard);
@@ -215,6 +229,45 @@ int main (int argc, char** argv)
     CHECK (finite (loud), "full density and extremity: finite");
     CHECK (peak (loud) <= 1.0f, "full density and extremity: under full scale");
     if (! outdir.empty()) writeWav (outdir + "/jack_hard.wav", loud);
+
+    }
+    std::printf ("9. BANDS: the spectral delay on a send (docs/DECISIONS.md, \"BANDS in NeoBeat\")\n");
+    {
+        Rig rb; for (int p = 0; p < kNumPads; ++p) rb.w->kit().pads[(size_t) p].bands = 0.0f;
+        const Out off = play (rb, 4.0, {});
+        CHECK (maxDiff (off, plain) == 0.0f && ! rb.w->bandsRunning.load(), "every send at 0: the plain kit, sample for sample, and the bank never runs");
+
+        // one lane at full send. Which lanes play in preset 0 is the preset's business, so send
+        // the busiest: the one the plain render is loudest without
+        Rig r1b; r1b.w->kit().pads[0].bands = 1.0f;
+        const Out one = play (r1b, 4.0, {});
+        std::printf ("     lane 1 at full send: peak %.3f, rms %.5f (plain %.5f), max diff from plain %.3f\n", peak (one), rms (one, 0, 4 * S), rms (plain, 0, 4 * S), maxDiff (one, plain));
+        CHECK (r1b.w->bandsRunning.load(), "a lane sending: the bank runs");
+        CHECK (finite (one) && peak (one) <= 1.0f, "one lane through BANDS: finite, under full scale");
+        CHECK (maxDiff (one, plain) > 0.01f, "one lane through BANDS sounds different");
+
+        Rig ra; ra.w->bandsAll.store (1.0f);
+        const Out all = play (ra, 4.0, {});
+        std::printf ("     ALL at full: peak %.3f, rms %.5f\n", peak (all), rms (all, 0, 4 * S));
+        CHECK (finite (all) && peak (all) <= 1.0f, "ALL through BANDS: finite, under full scale");
+        CHECK (maxDiff (all, one) > 0.01f, "ALL is more than one lane");
+
+        // the duck: wet off, send full - each lane is left at the Dry level, so quieter, never louder
+        Rig rd; { bc::BandsState bs; bs.dsp.wet = 0.0f; rd.w->bandsSettings.write (bs); } rd.w->bandsAll.store (1.0f);
+        const Out duck = play (rd, 4.0, {});
+        std::printf ("     wet 0, ALL full: rms %.5f against plain %.5f (Dry 0.4: expected about %.5f)\n", rms (duck, 0, 4 * S), rms (plain, 0, 4 * S), 0.4 * rms (plain, 0, 4 * S));
+        CHECK (std::fabs (rms (duck, 0, 4 * S) - 0.4 * rms (plain, 0, 4 * S)) < 0.1 * rms (plain, 0, 4 * S), "a lane at full send keeps the Dry level of itself");
+
+        // let go of the send: the tail rings out, then the bank stops costing anything
+        Rig rt; rt.w->bandsAll.store (1.0f);
+        play (rt, 2.0, {});
+        rt.w->bandsAll.store (0.0f);
+        play (rt, 6.0, {});
+        CHECK (! rt.w->bandsRunning.load(), "sends back to 0: the bank stops once its tail has died");
+
+        // an export hears it: renderSong with the sends set
+        if (! outdir.empty()) { writeWav (outdir + "/bands_lane1.wav", one); writeWav (outdir + "/bands_all.wav", all); }
+    }
 
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

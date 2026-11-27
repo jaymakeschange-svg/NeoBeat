@@ -276,17 +276,20 @@ private:
                 if (soundParam) soundParam->setValueNotifyingHost (soundParam->convertTo0to1 ((float) i));
                 ctx.proc.clearSample (p); ctx.proc.audition (p, 0.85f); if (ctx.refreshAll) ctx.refreshAll();
             });
-            const char* ids[] = { "tune", "decay", "tone", "drive", "hollow", "evolve", "pan", "level", "width" };
-            const char* labels[] = { "TUNE", "DECAY", "TONE", "DRIVE", "HOLLOW", "EVOLVE", "PAN", "LEVEL", "WIDTH" };
-            for (int i = 0; i < 9; ++i)
+            const char* ids[] = { "tune", "decay", "tone", "drive", "hollow", "evolve", "pan", "level", "width", "bands" };
+            const char* labels[] = { "TUNE", "DECAY", "TONE", "DRIVE", "HOLLOW", "EVOLVE", "PAN", "LEVEL", "WIDTH", "BANDS" };
+            for (int i = 0; i < 10; ++i)
             {
                 auto* prm = ctx.proc.apvts.getParameter (ctx.proc.paramId (p, ids[i]));
-                auto& k = f.knob (labels[i], 0, 1, 0, false, nullptr, dp + ids[i]);
+                // BANDS is a send, not a sound parameter: no modulation destination for it (yet)
+                auto& k = f.knob (labels[i], 0, 1, 0, false, nullptr, i == 9 ? juce::String() : dp + ids[i]);
                 k.attach (prm);
                 k.toText = [prm] (float v) { return prm != nullptr ? prm->getText (prm->convertTo0to1 (v), 8) + (prm->getLabel().isEmpty() ? "" : " " + prm->getLabel()) : juce::String (v); };
                 if (i == 1) k.setRange (0.25f, 4.0f, true);
                 if (i == 7) k.setTooltip ("Up to +24 dB, so a quiet recording can sit beside the stock sounds");
                 if (i == 8) k.setTooltip ("Stereo: 0 is mono, 100 % is the sound as it is, 200 % is wide (the widening disappears in mono, it never thins the sound)");
+                if (i == 9) k.setTooltip ("How much of this lane goes through BANDS, the spectral delay (open it from the header). "
+                                          "At full the lane sounds as BANDS is set: its own sound at the Dry level, the bank over it at Wet. At 0 it is untouched.");
             }
             if (ctx.proc.padUsesSample (p))
             {

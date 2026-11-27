@@ -11,6 +11,7 @@
 // are heard as soon as their render lands. Replaced audio is kept two minutes before it is freed.
 #pragma once
 
+#include "../shared/Bands.h"
 #include "Engine.h"
 #include "Kits.h"
 #include "LiveState.h"
@@ -78,6 +79,9 @@ struct RenderInputs
     double bpm = 120.0;
     float swing = 0.62f;
     std::map<std::string, std::shared_ptr<const SampleData>> files;   // loaded by the editor
+    // BANDS, so an export hears it: the bank as the window set it, and the ALL send
+    bc::BandsState bands;
+    float bandsAll = 0.0f;
 };
 
 // What the editor draws (the windows' sonograms and rooms, the Sample view's before/after).

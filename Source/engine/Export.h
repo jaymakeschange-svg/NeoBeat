@@ -58,6 +58,8 @@ inline Rendered renderSong (const RenderInputs& input, float sr, const ExportRan
     ws->publishLive (buildLiveState (in.project));
     ws->render().renderNow (in, sr);
     ws->masterBase = 0.35f * std::pow (10.0f, masterDb / 20.0f);
+    ws->bandsSettings.write (in.bands);
+    ws->bandsAll.store (in.bandsAll);
 
     const double bpm = std::max (20.0, in.bpm);
     const int body = (int) std::ceil (beats * 60.0 / bpm * sr);

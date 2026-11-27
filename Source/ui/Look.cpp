@@ -337,6 +337,7 @@ nb::SlotSource sourceFromMenu (int r, int base)
 void Ctx::openWindow (bool fs, int slot, int cell)
 {
     winCell = cell;
+    bandsOpen = false;
     if (fs) { fsSlot = juce::jlimit (0, nb::kNumSlots - 1, slot); fsOpen = true; bdOpen = false; }
     else { bdSlot = juce::jlimit (0, nb::kNumSlots - 1, slot); bdOpen = true; fsOpen = false; }
     if (refreshAll) refreshAll();

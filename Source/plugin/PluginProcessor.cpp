@@ -31,6 +31,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeoBeatProcessor::createLayo
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "run", 1 }, "Run (standalone)", false));
     // IDM Jack, held: on while it is on. A host parameter so it can be mapped and automated.
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "jack", 1 }, "IDM Jack", false));
+    // BANDS: every lane through the spectral delay at least this much, whatever its own send says
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "bands_all", 1 }, "Bands All", NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f,
+                                                       AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "scene", 1 }, "Scene", StringArray { "A", "B", "C", "D" }, 0));
 
     StringArray soundNames;
@@ -60,6 +63,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeoBeatProcessor::createLayo
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { pre + "mute", 1 }, nm + "Mute", false));
         layout.add (std::make_unique<AudioParameterFloat> (ParameterID { pre + "width", 1 }, nm + "Width", NormalisableRange<float> (0.0f, 2.0f, 0.001f), 1.0f,
                                                            AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 0.005f ? String ("mono") : String (roundToInt (v * 100.0f)) + "%"; })));
+        // BANDS send: how much of this lane goes through the spectral delay. 0: untouched.
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { pre + "bands", 1 }, nm + "Bands", NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f, pct));
     }
     return layout;
 }
@@ -76,12 +81,13 @@ NeoBeatProcessor::NeoBeatProcessor()
     modeParam = apvts.getRawParameterValue ("mode");
     runParam = apvts.getRawParameterValue ("run");
     jackParam = apvts.getRawParameterValue ("jack");
+    bandsAllParam = apvts.getRawParameterValue ("bands_all");
     sceneParam = apvts.getRawParameterValue ("scene");
     for (int p = 0; p < kPads; ++p)
     {
         auto get = [&] (const char* n) { return apvts.getRawParameterValue (paramId (p, n)); };
         padParams[(size_t) p] = { get ("sound"), get ("tune"), get ("decay"), get ("tone"), get ("drive"), get ("hollow"),
-                                  get ("evolve"), get ("pan"), get ("level"), get ("choke"), get ("mute"), get ("width") };
+                                  get ("evolve"), get ("pan"), get ("level"), get ("choke"), get ("mute"), get ("width"), get ("bands") };
         useSample[(size_t) p].store (false);
         sampleRms[(size_t) p].store (0.05f);
     }
@@ -91,6 +97,7 @@ NeoBeatProcessor::NeoBeatProcessor()
     midiOut.reserve (2048);
     registerPadTargets();
     jackNextPass();
+    bandsApply();
     publishLive();
     startTimer (30);
 }
@@ -298,7 +305,7 @@ void NeoBeatProcessor::readParameters() noexcept
         ps.sound = juce::jlimit (0, numSounds - 1, (int) pp.sound->load());
         ps.tune = pp.tune->load(); ps.decay = pp.decay->load(); ps.tone = pp.tone->load(); ps.drive = pp.drive->load();
         ps.hollow = pp.hollow->load(); ps.evolve = pp.evolve->load(); ps.pan = pp.pan->load(); ps.levelDb = pp.level->load();
-        ps.choke = (int) pp.choke->load(); ps.width = pp.width->load();
+        ps.choke = (int) pp.choke->load(); ps.width = pp.width->load(); ps.bands = pp.bands->load();
         ps.useSample = useSample[(size_t) p].load();
         ps.sample = ps.useSample ? std::atomic_load (&liveSamples[(size_t) p]) : nullptr;
         ps.sampleRms = sampleRms[(size_t) p].load();
@@ -316,7 +323,7 @@ std::array<nb::PadSettings, NeoBeatProcessor::kPads> NeoBeatProcessor::padSettin
         ps.sound = juce::jlimit (0, numSounds - 1, (int) pp.sound->load());
         ps.tune = pp.tune->load(); ps.decay = pp.decay->load(); ps.tone = pp.tone->load(); ps.drive = pp.drive->load();
         ps.hollow = pp.hollow->load(); ps.evolve = pp.evolve->load(); ps.pan = pp.pan->load(); ps.levelDb = pp.level->load();
-        ps.choke = (int) pp.choke->load(); ps.width = pp.width->load();
+        ps.choke = (int) pp.choke->load(); ps.width = pp.width->load(); ps.bands = pp.bands->load();
         ps.useSample = useSample[(size_t) p].load() && samples[(size_t) p] != nullptr;
         ps.sample = ps.useSample ? samples[(size_t) p] : nullptr;
         ps.sampleRms = sampleRms[(size_t) p].load();
@@ -360,8 +367,9 @@ void NeoBeatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     nb::BlockParams bp;
     bp.mode = (int) modeParam->load();
-    bp.run = runParam->load() > 0.5f;
+    bp.run = runParam->load() > 0.5f || auditionRun.load (std::memory_order_relaxed);
     ws->jackHold.store (jackParam->load() > 0.5f, std::memory_order_relaxed);
+    ws->bandsAll.store (bandsAllParam->load(), std::memory_order_relaxed);
     bp.swing = swingParam->load();
     bp.tapPad = selectedPad.load();
     bp.scene = juce::jlimit (0, nb::kNumScenes - 1, (int) std::lround (sceneParam->load()));
@@ -414,6 +422,8 @@ std::unique_ptr<nb::RenderInputs> NeoBeatProcessor::renderInputs() const
     in->bpm = displayBpm.load();
     in->swing = swingParam->load();
     in->files = files;
+    in->bands = bandsState;
+    in->bandsAll = bandsAllParam->load();
     return in;
 }
 
@@ -1299,6 +1309,32 @@ void NeoBeatProcessor::getStateInformation (juce::MemoryBlock& destData)
         j->setAttribute ("axes", axes);
         j->setAttribute ("lanes", (int) jackMask());
     }
+    {
+        // BANDS: the bank and where each band stands. The sends are host parameters, saved with them.
+        const auto& d = bandsState.dsp;
+        auto* b = xml->createNewChildElement ("BANDS");
+        b->setAttribute ("startHz", d.startHz); b->setAttribute ("finishHz", d.finishHz); b->setAttribute ("q", d.q);
+        b->setAttribute ("length", d.length);
+        b->setAttribute ("startTime", d.startTimeMs); b->setAttribute ("finishTime", d.finishTimeMs);
+        b->setAttribute ("startFb", d.startFeedback); b->setAttribute ("finishFb", d.finishFeedback);
+        b->setAttribute ("startLevel", d.startLevel); b->setAttribute ("finishLevel", d.finishLevel);
+        b->setAttribute ("startLfoHz", d.startLfoHz); b->setAttribute ("finishLfoHz", d.finishLfoHz);
+        b->setAttribute ("startLfoMs", d.startLfoMs); b->setAttribute ("finishLfoMs", d.finishLfoMs);
+        b->setAttribute ("sideOffset", d.sideOffset); b->setAttribute ("sideFb", d.sideFeedback);
+        b->setAttribute ("startInter", d.startInterMs); b->setAttribute ("finishInter", d.finishInterMs);
+        b->setAttribute ("interLfoHz", d.interLfoHz); b->setAttribute ("interLfoAmt", d.interLfoAmt);
+        b->setAttribute ("dry", d.dry); b->setAttribute ("wet", d.wet);
+        b->setAttribute ("placed", bandsState.placed);
+        for (int i = 0; i < bc::BandsState::kBands; ++i)
+        {
+            const auto& pl = bandsState.place[(size_t) i];
+            auto* e = b->createNewChildElement ("BAND");
+            e->setAttribute ("i", i); e->setAttribute ("on", pl.on); e->setAttribute ("x", pl.x); e->setAttribute ("y", pl.y);
+            e->setAttribute ("width", pl.width); e->setAttribute ("locked", pl.locked); e->setAttribute ("travel", (int) pl.travel);
+            e->setAttribute ("bars", pl.bars); e->setAttribute ("depth", pl.depth); e->setAttribute ("phase", pl.phase);
+            e->setAttribute ("seed", (int) pl.seed);
+        }
+    }
     copyXmlToBinary (*xml, destData);
 }
 
@@ -1360,7 +1396,38 @@ void NeoBeatProcessor::setStateInformation (const void* data, int sizeInBytes)
         for (int p = 0; p < kPads && p < (int) list.size(); ++p) list[(size_t) p].on = (lanes >> p) & 1u;
         jackApply();
     }
-    for (auto* name : { "PATTERN", "SCENES", "META", "SAMPLES", "PROJECT", "JACK" })
+    if (auto* b = xml->getChildByName ("BANDS"))
+    {
+        bc::BandsState def;
+        auto& d = bandsState.dsp; const auto& dd = def.dsp;
+        auto f = [&] (const char* k, float v) { return (float) b->getDoubleAttribute (k, v); };
+        d.startHz = f ("startHz", dd.startHz); d.finishHz = f ("finishHz", dd.finishHz); d.q = f ("q", dd.q);
+        d.length = f ("length", dd.length);
+        d.startTimeMs = f ("startTime", dd.startTimeMs); d.finishTimeMs = f ("finishTime", dd.finishTimeMs);
+        d.startFeedback = f ("startFb", dd.startFeedback); d.finishFeedback = f ("finishFb", dd.finishFeedback);
+        d.startLevel = f ("startLevel", dd.startLevel); d.finishLevel = f ("finishLevel", dd.finishLevel);
+        d.startLfoHz = f ("startLfoHz", dd.startLfoHz); d.finishLfoHz = f ("finishLfoHz", dd.finishLfoHz);
+        d.startLfoMs = f ("startLfoMs", dd.startLfoMs); d.finishLfoMs = f ("finishLfoMs", dd.finishLfoMs);
+        d.sideOffset = b->getIntAttribute ("sideOffset", dd.sideOffset); d.sideFeedback = f ("sideFb", dd.sideFeedback);
+        d.startInterMs = f ("startInter", dd.startInterMs); d.finishInterMs = f ("finishInter", dd.finishInterMs);
+        d.interLfoHz = f ("interLfoHz", dd.interLfoHz); d.interLfoAmt = f ("interLfoAmt", dd.interLfoAmt);
+        d.dry = f ("dry", dd.dry); d.wet = f ("wet", dd.wet);
+        bandsState.placed = b->getBoolAttribute ("placed", def.placed);
+        for (auto* e : b->getChildWithTagNameIterator ("BAND"))
+        {
+            const int i = e->getIntAttribute ("i", -1);
+            if (i < 0 || i >= bc::BandsState::kBands) continue;
+            auto& pl = bandsState.place[(size_t) i]; const auto& dp = def.place[(size_t) i];
+            pl.on = e->getBoolAttribute ("on", dp.on); pl.x = (float) e->getDoubleAttribute ("x", dp.x); pl.y = (float) e->getDoubleAttribute ("y", dp.y);
+            pl.width = (float) e->getDoubleAttribute ("width", dp.width); pl.locked = e->getBoolAttribute ("locked", dp.locked);
+            pl.travel = (nsr::Travel) juce::jlimit (0, (int) nsr::Travel::Count - 1, e->getIntAttribute ("travel", (int) dp.travel));
+            pl.bars = (float) e->getDoubleAttribute ("bars", dp.bars); pl.depth = (float) e->getDoubleAttribute ("depth", dp.depth);
+            pl.phase = (float) e->getDoubleAttribute ("phase", dp.phase); pl.seed = (uint32_t) e->getIntAttribute ("seed", (int) dp.seed);
+        }
+        bandsApply();
+    }
+    else { bandsState = bc::BandsState(); bandsApply(); }
+    for (auto* name : { "PATTERN", "SCENES", "META", "SAMPLES", "PROJECT", "JACK", "BANDS" })
         while (auto* c = xml->getChildByName (name)) xml->removeChildElement (c, true);
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
     // IDM Jack is held through a host parameter, and host parameters are saved with the session, so

@@ -159,6 +159,13 @@ public:
     bool padIncluded (int pad) const noexcept;
     void includeAll (bool on);
 
+    // ---- BANDS, the spectral delay on a send. Decisions: docs/DECISIONS.md, "BANDS in NeoBeat"
+    // and "Next in the same build". Each lane's send is the host parameter p<N>_bands; ALL is
+    // "bands_all". The bank's own settings live here, set by the BANDS window.
+    bc::BandsState bandsState;
+    void bandsApply() { ws->bandsSettings.write (bandsState); }
+    bool bandsRunning() const noexcept { return ws->bandsRunning.load (std::memory_order_relaxed); }
+
     // ---- IDM Jack. Spec: docs/PROPOSED-FEATURES.md, "IDM Jack"; decisions: docs/DECISIONS.md.
     //
     // The engine is in the workstation, on the audio thread. Here: the panel's settings, and the
@@ -220,6 +227,7 @@ public:
     const nb::Library& library() const noexcept { return ws->kit().lib(); }
     std::atomic<int> currentPreset { 0 }, currentKit { 0 }, playStep { -1 }, playScene { 0 }, queuedScene { -1 }, playLink { -1 }, selectedPad { 0 };
     std::atomic<double> displayBpm { 120.0 };
+    std::atomic<bool> auditionRun { false };           // the preset bar's audition: NeoBeat's own transport, briefly
     std::atomic<bool> hostSynced { false };
     uint32_t hitCount (int pad) const noexcept { return ws->kit().hitCounter[(size_t) pad].load (std::memory_order_relaxed); }
     uint32_t lateHits() const noexcept { return ws->lateHits(); }
@@ -276,9 +284,9 @@ private:
     std::vector<std::shared_ptr<const nb::SampleData>> keepAlive;           // never freed on the audio thread
     juce::AudioFormatManager formats;
 
-    struct PadParams { std::atomic<float>* sound, * tune, * decay, * tone, * drive, * hollow, * evolve, * pan, * level, * choke, * mute, * width; };
+    struct PadParams { std::atomic<float>* sound, * tune, * decay, * tone, * drive, * hollow, * evolve, * pan, * level, * choke, * mute, * width, * bands; };
     std::array<PadParams, kPads> padParams {};
-    std::atomic<float>* masterParam = nullptr, * swingParam = nullptr, * tempoParam = nullptr, * modeParam = nullptr, * runParam = nullptr, * sceneParam = nullptr, * jackParam = nullptr;
+    std::atomic<float>* masterParam = nullptr, * swingParam = nullptr, * tempoParam = nullptr, * modeParam = nullptr, * runParam = nullptr, * sceneParam = nullptr, * jackParam = nullptr, * bandsAllParam = nullptr;
     int jackSeenState = 0;
     uint64_t jackPasses = 0;
     void jackNextPass();

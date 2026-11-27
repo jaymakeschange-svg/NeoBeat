@@ -125,6 +125,9 @@ public:
         block = std::max (1, maxBlock);
         bank.prepare (sampleRate, block);
         for (auto& s : strip) s.prepare (sampleRate, block);
+        // sized here so process() does not allocate on the audio thread the first time it runs
+        mixL.assign ((size_t) block, 0.0f); mixR.assign ((size_t) block, 0.0f);
+        sendScratchL.assign ((size_t) block, 0.0f); sendScratchR.assign ((size_t) block, 0.0f);
     }
 
     void setState (const BandsState& s)

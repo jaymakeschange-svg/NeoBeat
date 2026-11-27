@@ -44,6 +44,7 @@ struct PadSettings
     float bounceFlight = 0.35f;    // first flight (s)
     float restitution = 0.79f;     // each flight and impact speed times this (measured: 0.79; > 1 gains energy)
     float width = 1.0f;            // stereo: 0 mono, 1 as the sound is, 2 wide (the widening cancels in mono)
+    float bands = 0.0f;            // BANDS send, 0..1: how much of this lane goes through the spectral delay
 };
 
 // A sound's stereo width. Narrowing scales the side; widening adds a decorrelated copy of the middle
@@ -679,6 +680,13 @@ public:
                     if (float* rl = routeL[(size_t) v.fxRoute]) { rl[i] += l; routeR[(size_t) v.fxRoute][i] += r; }
                     continue;
                 }
+                if (band.to (v.pad))       // through its effects first, if it has any: then the unit sends
+                {
+                    const float s = band.send[v.pad], d = band.duck[v.pad];
+                    band.L[i] += l * s; band.R[i] += r * s;
+                    if (v.pad == tapPad) T += 0.5f * (l + r) * (1.0f - d);   // the tap hears the whole lane
+                    l *= d; r *= d;
+                }
                 L += l; R += r;
                 if (v.bus() >= 0) sends[(size_t) v.bus()] += v.roomSend;
                 if (v.pad == tapPad) T += 0.5f * (l + r);
@@ -739,6 +747,7 @@ public:
     std::array<Gesture, kNumPlaces + 1> gestures {};   // the strokes the pads can follow (editable: the Matrixxxer draws them)
     float master = 0.35f;  // -9 dB: kick, snare and hats landing together stay clear of the knee
     bool limiting = false;         // set by the workstation while IDM Jack is working
+    BandSend band;                 // set by the workstation, per segment
     nsr::PeakLimiter limiter;
     float glue = 0.4f;     // kit-bus glue compression and saturation
 

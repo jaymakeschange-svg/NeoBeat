@@ -13,13 +13,15 @@ public:
         addAndMakeVisible (rooms);
         rooms.onSelect = [this] (int i) { ctx.room = i; if (ctx.refreshAll) ctx.refreshAll(); };
         addAndMakeVisible (lcd);
-        for (auto* b : { &undo, &redo, &kit, &fsButton, &bdButton }) addAndMakeVisible (b);
+        for (auto* b : { &undo, &redo, &kit, &fsButton, &bdButton, &bandsButton }) addAndMakeVisible (b);
         undo.onClick = [this] { ctx.proc.undo (ctx.room); if (ctx.refreshAll) ctx.refreshAll(); };
         redo.onClick = [this] { ctx.proc.redo (ctx.room); if (ctx.refreshAll) ctx.refreshAll(); };
         kit.onClick = [this] { kitMenu(); };
         kit.setTooltip ("Kits and sequences (.NJQ), a folder of samples, export, MIDI out");
         fsButton.onClick = [this] { ctx.openWindow (true, ctx.fsSlot); };
         bdButton.onClick = [this] { ctx.openWindow (false, ctx.bdSlot); };
+        bandsButton.onClick = [this] { ctx.bandsOpen = ! ctx.bandsOpen; if (ctx.bandsOpen) ctx.fsOpen = ctx.bdOpen = false; if (ctx.refreshAll) ctx.refreshAll(); };
+        bandsButton.setTooltip ("BANDS: the spectral delay. Lanes reach it through their BANDS knob, or all at once through ALL");
         addAndMakeVisible (status);
         addAndMakeVisible (master);
         master.attach (ctx.proc.apvts.getParameter ("master"));
@@ -43,7 +45,7 @@ public:
         g.drawText ("NEOBEAT", brand.toNearestInt().withTrimmedLeft (28).withTrimmedBottom (14), juce::Justification::centredLeft);
         paintLabel (g, "3.0 | NJS WORKSTATION", brand.toNearestInt().withTrimmedLeft (28).withTrimmedTop (30), juce::Justification::centredLeft, 6.0f);
         paintLabel (g, "THIS ROOM", { 568, 4, 92, 12 }, juce::Justification::centred, 6.5f, C::dim());
-        paintLabel (g, "WINDOWS", { 968, 4, 120, 12 }, juce::Justification::centredLeft, 6.5f, C::dim());
+        paintLabel (g, "WINDOWS", { 954, 4, 120, 12 }, juce::Justification::centredLeft, 6.5f, C::dim());
     }
 
     void resized() override
@@ -51,12 +53,13 @@ public:
         rooms.setBounds (158, 18, 402, 36);
         undo.setBounds (568, 18, 44, 36); redo.setBounds (614, 18, 44, 36);
         lcd.setBounds (666, 12, 212, 48);
-        kit.setBounds (886, 18, 74, 36);
-        fsButton.setBounds (968, 18, 100, 36);
-        bdButton.setBounds (1072, 18, 100, 36);
-        status.setBounds (1180, 18, 122, 36);
-        master.setBounds (1306, 4, 64, 66);
-        play.setBounds (1384, 16, 40, 40);
+        kit.setBounds (884, 18, 66, 36);
+        fsButton.setBounds (954, 18, 88, 36);
+        bdButton.setBounds (1046, 18, 78, 36);
+        bandsButton.setBounds (1128, 18, 58, 36);
+        status.setBounds (1190, 18, 122, 36);
+        master.setBounds (1316, 4, 64, 66);
+        play.setBounds (1390, 16, 40, 40);
     }
 
     void refresh() override
@@ -69,6 +72,7 @@ public:
         bdButton.setButtonText ("BOUNCE " + juce::String (bdN));
         fsButton.setToggleState (ctx.fsOpen, juce::dontSendNotification);
         bdButton.setToggleState (ctx.bdOpen, juce::dontSendNotification);
+        bandsButton.setToggleState (ctx.bandsOpen, juce::dontSendNotification);
     }
 
     void tick() override
@@ -181,7 +185,7 @@ private:
     Ctx& ctx;
     Segmented rooms;   // the HOST / KEY / PADS modes live in the sequencer room's toolbar
     LcdBox lcd, status;
-    Pill undo { "UNDO" }, redo { "REDO" }, kit { "KIT / FILE" }, fsButton, bdButton, play;
+    Pill undo { "UNDO" }, redo { "REDO" }, kit { "KIT / FILE" }, fsButton, bdButton, bandsButton { "BANDS" }, play;
     Knob master;
     juce::Array<juce::File> njqList;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -598,16 +602,16 @@ Shell::Shell (NeoBeatProcessor& p) : ctx (p)
     setLookAndFeel (&look);
     header = makeHeader (ctx); tree = makeTree (ctx); inspector = makeInspector (ctx); dock = makeDock (ctx);
     rooms[0] = makeKitRoom (ctx); rooms[1] = makeMatrixRoom (ctx); rooms[2] = makeGridRoom (ctx); rooms[3] = makeKeyMapRoom (ctx); rooms[4] = makeJackRoom (ctx);
-    fsWindow = makeFrictionWindow (ctx); bdWindow = makeBounceWindow (ctx); routeList = makeRouteList (ctx);
+    fsWindow = makeFrictionWindow (ctx); bdWindow = makeBounceWindow (ctx); bandsWindow = makeBandsWindow (ctx); routeList = makeRouteList (ctx);
     overlays[0] = makeExportPanel (ctx); overlays[1] = makeMidiPanel (ctx); overlays[2] = makeImportPanel (ctx); overlays[3] = makeDefaultPrompt (ctx); overlays[4] = makeNotice (ctx);
     for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get() }) addAndMakeVisible (c);
     for (auto& r : rooms) addChildComponent (r.get());
-    for (auto* c : { fsWindow.get(), bdWindow.get(), routeList.get() }) addChildComponent (c);
+    for (auto* c : { fsWindow.get(), bdWindow.get(), bandsWindow.get(), routeList.get() }) addChildComponent (c);
     for (auto& o : overlays) { addChildComponent (o.get()); if (auto* part = dynamic_cast<Part*> (o.get())) parts.push_back (part); }
     addMouseListener (this, true);       // every child's mouse-up ends a gesture
     setWantsKeyboardFocus (true);
     lateSeen = ctx.proc.lateHits();
-    for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get(), rooms[0].get(), rooms[1].get(), rooms[2].get(), rooms[3].get(), rooms[4].get(), fsWindow.get(), bdWindow.get(), routeList.get() })
+    for (auto* c : { header.get(), tree.get(), inspector.get(), dock.get(), rooms[0].get(), rooms[1].get(), rooms[2].get(), rooms[3].get(), rooms[4].get(), fsWindow.get(), bdWindow.get(), bandsWindow.get(), routeList.get() })
         if (auto* part = dynamic_cast<Part*> (c)) parts.push_back (part);
     ctx.refreshAll = [this] { triggerAsyncUpdate(); };
     ctx.refreshNow = [this] { cancelPendingUpdate(); refresh(); };
@@ -637,6 +641,7 @@ void Shell::resized()
     dock->setBounds (16, 760, 1408, 124);
     fsWindow->setBounds (130, 60, 1180, 760);
     bdWindow->setBounds (130, 60, 1180, 760);
+    bandsWindow->setBounds (70, 52, 1300, 836);      // the shared BANDS panel is laid out at 1280 x 736
     routeList->setBounds (250, 120, 880, 560);
     overlays[0]->setBounds (390, 150, 660, 520);
     overlays[1]->setBounds (300, 96, 840, 700);
@@ -670,9 +675,11 @@ void Shell::refresh()
     for (int i = 0; i < (int) rooms.size(); ++i) rooms[(size_t) i]->setVisible (i == ctx.room);
     fsWindow->setVisible (ctx.fsOpen);
     bdWindow->setVisible (ctx.bdOpen);
+    bandsWindow->setVisible (ctx.bandsOpen);
     routeList->setVisible (ctx.listOpen);
     if (ctx.fsOpen) fsWindow->toFront (false);
     if (ctx.bdOpen) bdWindow->toFront (false);
+    if (ctx.bandsOpen) bandsWindow->toFront (false);
     if (ctx.listOpen) routeList->toFront (false);
     for (int i = 0; i < 4; ++i) { overlays[(size_t) i]->setVisible (ctx.overlay == i + 1); if (ctx.overlay == i + 1) overlays[(size_t) i]->toFront (false); }
     overlays[4]->setVisible (ctx.noticeText.isNotEmpty());

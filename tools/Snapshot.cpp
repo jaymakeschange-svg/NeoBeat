@@ -85,10 +85,14 @@ int main (int argc, char** argv)
         { "16_import_folder", [&] { ctx.overlay = 3; ctx.overlayFile = "D:\\Samples\\Field recordings\\Kitchen"; } },
         { "17_default_sequence", [&] { ctx.overlay = 4; ctx.overlayFile = "C:\\Users\\you\\Documents\\Marbelite\\NJQ\\Kitchen kit.NJQ"; } },
         { "18_notice", [&] { ctx.overlay = 0; ui::sendNode (ctx, 2, 4, 24); } },
-        { "19_jack", [&] { ctx.noticeText = {}; ctx.room = 4; ctx.select ({ ui::Sel::Pad, 0 }, 0); } },
+        { "19_jack", [&] { ctx.noticeText = {}; ctx.bandsOpen = false; ctx.room = 4; ctx.select ({ ui::Sel::Pad, 0 }, 0); } },
         { "20_jack_held", [&] { auto& t = proc->chaos.allTargets(); for (int q : { 3, 7, 11 }) t[(size_t) q].on = false;
                                 proc->jack.selfRandomise = 0.5f; proc->jackApply(); proc->jackSetHeld (true); } },
         { "21_jack_roll", [&] { proc->jackSetHeld (false); proc->roll(); ctx.room = 0; ctx.select ({ ui::Sel::Pad, 2 }, 0); } },
+        { "22_bands_lane", [&] { proc->setParam (proc->paramId (2, "bands"), 0.7f); proc->setParam (proc->paramId (0, "bands"), 1.0f); ctx.select ({ ui::Sel::Pad, 2 }, 0); } },
+        { "23_bands_window", [&] { ctx.bandsOpen = true; } },
+        { "24_bands_all", [&] { proc->setParam ("bands_all", 0.5f); } },
+        { "25_preset_bar", [&] { ctx.bandsOpen = false; proc->setParam ("bands_all", 0.0f); ctx.room = 0; ctx.select ({ ui::Sel::Pad, 2 }, 0); } },
     };
     for (auto& s : shots)
     {
