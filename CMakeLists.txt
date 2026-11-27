@@ -139,6 +139,10 @@ target_link_libraries (test_skin PRIVATE juce::juce_audio_utils juce::juce_recom
 add_executable (test_spectral tools/test_spectral.cpp)
 target_include_directories (test_spectral PRIVATE Source/neobeat/shared)
 
+# IDM Jack's engine, the one NeoBeat runs and MidiJaQ is to move onto: plain C++ as well.
+add_executable (test_jack_core tools/test_jack_core.cpp)
+target_include_directories (test_jack_core PRIVATE Source/neobeat/shared Source/neobeat)
+
 add_executable (test_bands tools/test_bands.cpp)
 target_include_directories (test_bands PRIVATE Source/neobeat/shared)
 

@@ -21,6 +21,7 @@
 
 #include "../gen/Rng.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -68,6 +69,20 @@ struct ChaosTarget
     bool isAction() const noexcept { return value == nullptr && apply != nullptr; }
     bool usable() const noexcept { return value != nullptr || apply != nullptr; }
 };
+
+// A visit: somewhere in [lo, hi], chosen outright. Reach narrows it to a window of that fraction of
+// the range, centred where the parameter already sits, so a parameter that only wants a nudge gets
+// one. Free so a plugin that rolls its own parameters - NeoBeat's go through its host parameters,
+// not through a float pointer - uses the same arithmetic as the engine rather than a copy of it.
+inline float chaosVisit (gen::Rng& rng, float from, float lo, float hi, float reach) noexcept
+{
+    if (hi < lo) std::swap (lo, hi);
+    if (reach >= 0.999f) return rng.unif (lo, hi);
+    const float half = (hi - lo) * std::max (0.0f, reach) * 0.5f;
+    const float a = std::max (lo, from - half);
+    const float b = std::min (hi, from + half);
+    return b > a ? rng.unif (a, b) : a;
+}
 
 // The three axes from the brief, plus the two the lattice adds. Each can be switched off, so a
 // pass can be made to seize parameters without retriggering anything, or the reverse.
@@ -317,12 +332,7 @@ private:
     // that only wants a nudge gets one even from a press rather than a seizure.
     float visited (gen::Rng& rng, const ChaosTarget& t) const noexcept
     {
-        if (t.reach >= 0.999f) return rng.unif (t.lo, t.hi);
-        const float half = (t.hi - t.lo) * t.reach * 0.5f;
-        const float from = t.value != nullptr ? *t.value : t.lo;
-        const float lo = std::max (t.lo, from - half);
-        const float hi = std::min (t.hi, from + half);
-        return hi > lo ? rng.unif (lo, hi) : lo;
+        return chaosVisit (rng, t.value != nullptr ? *t.value : t.lo, t.lo, t.hi, t.reach);
     }
 
     void fireStep (gen::Rng& rng, double at)

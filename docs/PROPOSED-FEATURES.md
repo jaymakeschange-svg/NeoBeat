@@ -19,7 +19,9 @@ loose pool sounds (save), BassMono (whole mix), and the IDM Jack spec.
 
 ## New this session
 
-### IDM Jack — NeoBeat and MidiJaQ, later JaqRack. Not Batchcut — *specced*
+### IDM Jack — NeoBeat and MidiJaQ, later JaqRack. Not Batchcut — *built in NeoBeat for testing, 27 Nov; MidiJaQ next*
+
+*How each item below was built, what was left out and why: [`DECISIONS.md`](DECISIONS.md), "27 November 2026 — the test build".*
 
 *Scope and the settings list were set on the evening of 26 Nov; everything else in this section is
 the earlier spec and stands.* Seven settings approved: seizure targets with a never-list, density,
