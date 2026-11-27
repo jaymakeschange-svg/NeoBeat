@@ -790,7 +790,7 @@ int main (int argc, char** argv)
                     ly.levelDb = r.nextFloat() * 60.0f - 36.0f; ly.offsetMs = r.nextFloat() * 250.0f - 50.0f; ly.semis = r.nextFloat() * 48.0f - 24.0f;
                     ly.start = r.nextFloat(); ly.end = r.nextFloat(); ly.fadeMs = r.nextFloat() * 300.0f; ly.reverse = r.nextBool();
                     proc->kitChanged (r.nextInt (17) - 1); proc->kitMark();
-                    if (r.nextInt (3) == 0) proc->kitSetPattern (r.nextInt (128), r.nextBool());
+                    if (r.nextInt (3) == 0) proc->kitSetPattern (r.nextInt (nb::numPatterns()), r.nextBool());
                     break;
                 }
                 case 34:
