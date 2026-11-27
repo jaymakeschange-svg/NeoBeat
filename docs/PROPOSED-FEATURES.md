@@ -253,8 +253,55 @@ PolyNodes, and what to build.md`, in the MidiJaQ tree, §3-4):
 | What does the search breed variants from? | **Everything, including the file itself**: the MaterialLab model, NeoBeat's patch voices and recipes, and transforms of the dropped audio (stretch, spectral, granular) - so some variants stay recognisably the recording |
 | How does a dropped file become a model? | **Port the learner's fitting** into Batchcut, then the search varies around what it fits. Needs the learner's source, which is on the user's computer (MaterialLab folder) |
 
-Not started. First step: read the learner's source and its fitting, with the user's permission to
-open that folder.
+**What the learner's source shows (read 27 Nov, from `MaterialLab.zip` in the user's Learner
+folder - nothing on their computer was changed):**
+
+- The objects the MATERIAL room plays come from `engine2.py` (the living modal body) fitted by
+  `fit2.py`: `partials.py` tracks every partial (Spectral Modeling Synthesis style), the tracks give
+  a starting body (frequency, strike, decay law, beating, swelling, sweeps, contact stop, the dense
+  noise layer by band), then **Adam refines it through the differentiable engine** - multi-resolution
+  log-spectral loss (256/1024/4096), an RMS envelope term, a 1 ms attack term and a log-frequency
+  optimal-transport term, with light regularisation so the laws stay playable.
+- **The refinement is the point**: on the six impacts it cuts the loss 2.5-6x from the analysis start
+  (tube clank 16.6 to 2.6; clank 5.8 to 1.5; pan 4.8 to 1.9). A port without it would be well short.
+- Each fit moves about **1,000-1,100 numbers** (128 modes x 8, ~25 body laws, 32 noise bands) and
+  took **2.5-31 minutes** in JAX.
+- **Licence**: the package is GPL-3.0-or-later because the version-1 engine (`physics.py`) builds
+  on jaxdiffmodal (GPL-3). Only `physics.py` imports it; `engine2.py`, `fit2.py` and `partials.py`
+  - the chain to port - do not, and are the user's own code.
+- JAX computes the gradients automatically; C++ has no equivalent built in, so the port needs the
+  gradients written out (or a C++ automatic-differentiation library).
+
+**Settled (the user, 27 Nov): write the gradients by hand** - the same loss and the same optimiser
+as the learner, checked against JAX, rather than a C++ autodiff library (slow and memory-hungry at
+this size) or calling the Python learner from Batchcut (needs Python and JAX on the PC).
+
+**The plan, each stage checked against the user's own learner running in the build container as the
+reference before the next starts:**
+
+1. The reference: the learner (engine2, fit2, partials) running here on one of the training clips.
+2. The engine in C++, rendering the same samples as `engine2.py` from the same parameters. (The
+   MATERIAL room's player leaves out the cascade, low-body rocking, the elastic term and the dense
+   noise layer, so it is not enough: a fit is only as good as the engine it fits.)
+3. The loss in C++, the same value as `make_loss`.
+4. The analysis and starting point (`partials.py`, `initial_params`), the same starting body.
+5. The gradients, by hand, checked against JAX's at random points.
+6. Adam, the same schedule: a fit whose final loss matches the learner's on the same clip.
+7. Into Batchcut: drop any file, it fits in the background, the material lands in the pool; then the
+   variant search across the material model, NeoBeat's voices and transforms of the file itself.
+
+**Progress, 27 Nov** (code: `Source/neobeat/shared/learner/` in Batchcut's tree; checks:
+`tools/test_learner.cpp`; the reference scripts: `tools/learner_ref/`):
+
+| Stage | Result |
+|---|---|
+| 1. The reference | The learner runs here unchanged. Re-scoring the user's fitted PVC pipe gives 0.66861 + 0.00213 regularisation = **0.67074, the recorded loss**. Refitting from scratch lands on **exactly the recorded losses**: PVC pipe 0.67074525 (36 s), tin can 1.38107181 (78 s). Deterministic, so the port can be held to these numbers |
+| 2. The body (`Body2.h`) | Renders the learner's samples from the same parameters and noise: relative rms difference 1.3e-5 (PVC, 27 modes) and 6.2e-5 (tin can, 124 modes) - float32's own precision |
+| 3. The loss (`Loss2.h`) | The learner's render scores the same here as in the learner to six decimals (PVC 3.155455 / 0.668609; tin can 5.208192 / 1.379871) |
+| 4. Analysis and starting point | next |
+| 5. Gradients by hand | next |
+| 6. Adam | after 5 |
+| 7. Into Batchcut | after 6 |
 
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
