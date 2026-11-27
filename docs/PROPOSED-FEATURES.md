@@ -304,7 +304,7 @@ reference before the next starts:**
 | 6. Adam (`Fit2.h`) | Level match, Adam with the learner's rates (0.04, logf 0.002), schedule, regularisation, freeze mask and best-point keeping. Step for step against the learner run in double precision: the first three steps agree to 1e-7 on all three clips. A whole 300-step fit: 60 s (PVC), 74 s (tin can), 210 s (tube), one core |
 | 6, finding | **The learner's fit is path-dependent.** Adam moves every parameter by about its rate however small its gradient, so parameters whose gradient is at roundoff level step whichever way roundoff says; any change of rounding parts the paths after 3-5 steps and the fits end in different places. Measured: the learner itself in double precision ends PVC at 0.672, or 1.096 with the window and start rounded to float32 (its recorded float32 run: 0.671). The port, nudging the start by 1e-7 six times: PVC 0.583-1.073 (three runs near 0.58, three near 1.0; recorded 0.671), tin can 1.166-1.422 (recorded 1.381), tube clank 2.420-2.538 over four runs (recorded 2.644). So the port fits as well as the learner, and the learner's recorded results are one draw each. **Decided by the user, 27 Nov:** *"Several, all into the pool"* - Batchcut runs several fits of a dropped file side by side (e.g. 4, one per core), each nudged at the start, and every one lands in the pool as its own material, ranked by loss, the closest the default. The spread becomes variants |
 | 7a. Into Batchcut | **Built 27 Nov (evening).** Drop any audio file on the MATERIAL room, or press Fit on a pool sound: four fits side by side, each saved as a learner-format material and struck into the pool, closest first. With it, a step is 4-5x faster (tube clank: 0.66 s to 0.14 s) and every check above still holds. Record below |
-| 7b. The variant search | **First build 27 Nov (night):** Wander and Grow in the MATERIAL room - material children moved and crossed, the sound stretched, through spectral and granular effects and through a material; a strip of eight to hear and Keep; only kept children go into the pool. NeoBeat's voices next, as decided. Record below |
+| 7b. The variant search | **Built 27 Nov (evening):** Wander, Grow and Scratch in the MATERIAL room - material children moved and crossed, the sound stretched, through spectral and granular effects and through a material, and materials from scratch (eight physical shapes, WILD past physics); a strip of eight to hear and Keep; only kept children go into the pool. NeoBeat's voices dropped by the user in favour of Scratch. Record below |
 
 **Stage 7a, built 27 Nov (evening, in a second chat - the first handed over to save usage).** The handoff's
 five steps, in its order. The reference data was rebuilt here from the user's `MaterialLab.zip` and the three
@@ -519,7 +519,39 @@ estimate allowed for the reference data and the JUCE build (already in place fro
 transforms (the Matrixxxer's effects were already in the tree; only the stretch was new) and for tuning Grow
 (one problem, solved by adding the fit's own steps).
 
-**Next for 7b:** NeoBeat's voices as children (the user: after this build works).
+**Next for 7b:** ~~NeoBeat's voices as children (the user: after this build works).~~ Replaced, see below.
+
+### 7b, children from scratch - asked and built 27 Nov (evening)
+
+**Asked (the user, 20:27):** *"Skip neobeats voices, I want to make children from scratch. Send some examples of
+it"* - then, having heard them, *"continue"* (20:32) to the proposed Scratch button.
+
+**What it is.** A material with no parent (`scratchBody` in `Breed.h`): one of eight physical shapes with its own
+partial ratios - a free-free metal bar (beam ratios 1, 2.757, 5.404...), a simply supported plate (m^2 + n^2 x
+aspect^2), an ideal circular drum skin (Bessel zeros: 1, 1.593, 2.136...), a stiff tube (n x sqrt (1 + B n^2)), a
+closed tube (odd harmonics), a church bell (hum, prime, tierce, quint, nominal...), a cluster of metal junk, and a
+rubber body that drops in pitch - with the learner's laws drawn around what its fits found in the user's real
+objects (`engine_v3_materials`: base damping 13-65, cascade 0.4-1.0, a click 0.1-1% of the loudest mode, beating
+mostly under 1 Hz; the damping law by what the shape is made of: metal rings, rubber and skins die fast). WILD
+(REACH, for Scratch) pushes past physics: partials stretched up to 35% and jittered, shared glides up to 1.6
+octaves, the elastic tension bending pitch with energy, beating to 30 Hz, swelling, and highs that ring longer
+than lows. Every one passes through the learner's bounds, so it fits, grows, saves and opens like any material.
+
+**Examples sent first** (20:30, three files of 8 + 8 + 4 strikes): the eight shapes near physical, eight wild,
+and a journey - metal junk from scratch grown toward the PVC pipe clip, closeness 13.9, then 11.5 after 3
+generations of Grow, 3.7 after 12 (the pipe's own fit: about 0.7).
+
+**In the room:** **Scratch**, beside Wander and Grow, makes eight - one of each shape, in an order of its own -
+scored against the fitted sound when there is one. A kept one goes into the pool as `scratch g<n> <i>`, its
+material in `Materials/scratch/`, and becomes a parent: Grow then climbs from it toward the sound (Petri's
+"takes climb toward it" from a random seed).
+
+**Checks.** `test_learner` 7b: 96 of 96 playable (every shape at WILD 0, 0.5 and 1, four each); not wild, a shape
+keeps its own partials (bar 2.7566, drum skin 1.5934, closed tube 3.0000); a Scratch generation is one of each
+shape, closest first, identical on one thread or two. Host test 11b: Scratch by its button (eight, one of each
+shape), Keep one (pool and `Materials/scratch`), Grow from the kept materials comes out closer than the scratch
+one was (0.57 against 3.80 on seed 1); the random session presses Scratch too. Seeds 1, 7, 2026, and 5 on the
+final code: all pass. Snapshot 24 (a Scratch generation) looked at. Not yet in a Batchcut download.
 
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
