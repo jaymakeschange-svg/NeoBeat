@@ -551,7 +551,12 @@ keeps its own partials (bar 2.7566, drum skin 1.5934, closed tube 3.0000); a Scr
 shape, closest first, identical on one thread or two. Host test 11b: Scratch by its button (eight, one of each
 shape), Keep one (pool and `Materials/scratch`), Grow from the kept materials comes out closer than the scratch
 one was (0.57 against 3.80 on seed 1); the random session presses Scratch too. Seeds 1, 7, 2026, and 5 on the
-final code: all pass. Snapshot 24 (a Scratch generation) looked at. Not yet in a Batchcut download.
+final code: all pass. Snapshot 24 (a Scratch generation) looked at.
+
+**In a Batchcut download, 27 Nov 20:54** (asked: *"Go ahead"*): GitHub Actions run 46059893245 on `63212e1`,
+artifact `Batchcut-Windows` (the VST3, the standalone app, the README) - everything from stage 7a (fitting any
+sound) and 7b (Wander, Grow, Scratch). Windows built it after one fix (MSVC would not let a lambda use a local
+constant uncaptured, C3493); every Windows test passed and pluginval at strictness 10 passed on 3 of 3 seeds.
 
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
