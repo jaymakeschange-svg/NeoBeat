@@ -15,6 +15,7 @@ answering from recollection instead of opening them has already produced wrong a
 | [`DECISIONS.md`](DECISIONS.md) | ongoing | Every decision, who made it, and where it is recorded. Append-only. |
 | [`house-rules.md`](house-rules.md) | 16 Nov 2026 | How to work on this project: the division of labour, what must never be done, the house style, the shared-header convention. |
 | [`research/neosystem-build-list.md`](research/neosystem-build-list.md) | 19 Nov 2026 | What changes in each plugin and in what order. **Source of the randomiser spec** (one press randomises everything; right-click opens the box: speed, swing, extremity, cycling rhythmically and landing back on the original), the Orb design, and the stereo room. |
+| [`DECISIONS.md`](DECISIONS.md), "27 November 2026 — the test build" | 27 Nov 2026 | How the randomiser (ROLL) and IDM Jack were built in NeoBeat, the five calls made without being asked, the tests, and the pre-existing body-sound NaN found on the way. Code: `Source/shared/JackCore.h`, `Source/ui/JackRoom.cpp`, `Source/engine/Workstation.h` (search "IDM Jack"), `tools/test_jack.cpp`. |
 | [`research/materiallab-research-log.md`](research/materiallab-research-log.md) | 5 Nov 2026 | The learner: impacts, friction, liquids, gestures, and the models fitted to recordings. |
 
 ## Demos and visual studies, by link

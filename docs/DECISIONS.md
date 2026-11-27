@@ -327,9 +327,139 @@ Restored from the 16:09 version (`875ad01`) with the evening's decisions re-appl
 lesson is the same one this file exists for, one level down: the newest version of a document has
 to be found by asking git which commit is last, not by remembering which one was read first.
 
+## 27 November 2026 — the test build: the randomiser and IDM Jack in NeoBeat
+
+**Asked (the user, 27 Nov):** both today, to test. *"Do rando first, and after that do jack. Do not
+give two separate downloads. Only ship when both are finished."* The repo is made public so the
+Windows build runs. On Jack's targets: *"per pad. So in the jack room, there should be an option to
+choose which pads are going in. Meaning, if I choose the kick, all its parameters are affected."*
+On the panel: *"no need for a fancy UI, just make it usable for a test."*
+
+Both live in a fifth NeoBeat room, **JACK** (`Source/ui/JackRoom.cpp`). MidiJaQ is not in this
+build — see the end of this section.
+
+### B — the global randomiser: ROLL
+
+`NeoBeatProcessor::roll()` → `nsr::Chaos::rollOnce()` over sixteen lane targets → `rollPad()`.
+One press, every included lane once: its own parameters, through the host parameters so the host
+sees them, and the parameters of every effect already on that lane (library effects, Bounce Delay,
+Friction Stretch). It **writes** - a destination, not a visit - and each press is **one undo step
+in the JACK room**. Left alone, deliberately: which sound is on a lane, which effects are on it,
+choke, mute. Changing those is rebuilding the kit, not auditioning it.
+
+| Parameter | How far one press moves it |
+|---|---|
+| tune | half its range (±12 st of travel) from where it is |
+| decay, drive, hollow | 80 % of range, from where it is |
+| tone, evolve | anywhere |
+| pan / width | 60 % / 70 %, from where it is |
+| level | **a fixed window, −9 to +1 dB, picked fresh each press** (see below) |
+| lane effects | library effects 80 % of each declared range; Bounce and Friction across set ranges |
+
+**Changed during testing — level.** First built as a walk (reach 0.2, about ±6 dB from wherever it
+was). The first snapshot landed a lane on +6.0 dB, the ceiling, at the first press; a walk drifts
+some lanes towards silence and pins others over a dozen presses. Claude's call, recorded here.
+
+### C — IDM Jack, built to the spec in `PROPOSED-FEATURES.md`
+
+**Where it runs.** On the audio thread, in the workstation (`Source/engine/Workstation.h`), with
+the engine in `Source/shared/JackCore.h` (`nsr::JackCore`: lattice, windows, figure buffer, per-hit
+offsets; realtime-safe, no allocation). Not on `nsr::Chaos`, which was ruled out for Jack on 26
+Nov because it writes parameters back.
+
+| Spec item | How it is built |
+|---|---|
+| Parameter chaos is an overlay, never written back | Offsets go onto the copy of a hit's settings `hitPad` already makes. Nothing stored is touched; release is the return to the original by construction. **Tested** (below). |
+| Each repeat its own offsets | Every hit of a burst carries its own drawn offsets. Pattern hits of an included lane get offsets too, keyed on where they fall, so a pass replays the same from its seed |
+| The lattice: 16th-triplet swung, invisible | `division` per beat (1/4, 1/6, 1/8, 1/12; 1/6 default), swing within the group. Bursts are planned when their step is reached and fire sample-accurately, however a step falls across blocks |
+| Density, extremity, repeat probability, windows | As specced: a window of steps shares a seed; repeat decides whether the next window reuses it |
+| Figure buffer (motifs need a memory) | RECALL: how often a burst replays a stored figure instead of a new one; MEMORY: how many it keeps (1–16). Recalled figures drop lanes no longer included |
+| Overlay or replace — both, as a toggle | OVERLAY / REPLACE. Replace silences the written pattern (sequencer, Layermax, follows) while held. KEY MAP marks keep playing: they are held notes with their own endings, and cutting them could leave one sounding |
+| Held primary | ON. Chaos while on; let go, the original back on the next block |
+| Recovery | 0 = hard cut. Above that: no new bursts, and pattern-hit offsets fade out over that many bars. Without a transport there is nothing to fade over, so it cuts |
+| Self-randomise, with depth | Rolls Jack's own settings at switch-on, at that depth, **seeded by the pass** - so a locked seed replays the same rolled settings too. Never reaches itself, the lanes or the seed |
+| Seizure targets — per pad | LANES: sixteen toggles, ALL, NONE. A lane in is all of its parameters in. Nothing in + overlay = the plain kit, sample for sample (tested) |
+| Never-list | The lane toggles plus the axes. Never seized at all: which sound, which effects, choke, mute |
+| Micro-timing 1–100 ms | TIMING sets the latest a hit may land |
+| Capture in Ableton | ON is also the host parameter **"IDM Jack"** - map it to a pad or a key, or automate it, and record the output |
+
+**What reaches which lane.** Pitch, pan and level reach every hit. Decay, tone, drive, hollow,
+evolve and width shape the synthesis, so they reach live voices only: a lane whose effects need its
+sound **prepared ahead** (Friction Stretch, the spectral library effects) hears pitch, pan and level
+from Jack and not the rest. Said in the PARAM axis's tooltip.
+
+**Burst hits enter as played hits, not as pattern hits.** Two consequences. A burst hit on a lane
+whose spectral effect has no prepared copy of the sound yet can be late by up to 43 ms per effect,
+and NeoBeat's existing notice about that ("ONE HIT NEEDED A SHORT BUFFER") may appear once - the
+same as for a key press. And hits played by hand (KEY, PADS) get their offsets keyed on the hit
+count as well as the position: they all arrive at the block's position, so without it every press
+on a lane would get the same offsets (found reading the code, 27 Nov, before testing).
+
+**The EFFECT axis is off in NeoBeat.** Lane effects are prepared ahead of the hit, so there is no
+per-hit effect parameter for Jack to move; the switch is left off the panel rather than shown doing
+nothing. In MidiJaQ it has things to act on.
+
+**Output limiting** (asked 26 Nov: *"Limiting on the output"*): `nsr::PeakLimiter` in
+`Ceiling.h` - zero latency, instant attack, 120 ms release - sits in front of the safety knee in
+`Engine::finishMix`, in only while Jack works and for a second after. Off, it multiplies by exactly
+1. At full density and extremity on the test kit it never acted (peak 0.60): it is a guard.
+
+### Claude's calls in this build — for the user to keep or overrule
+
+1. **A new seed at every switch-on**, shown on the panel; **LOCK** keeps it, so a take worth keeping
+   can be played again. The spec says "seeded so a pass can be recovered" and nothing about when the
+   seed changes.
+2. **Self-randomise does not move the knobs.** The panel keeps the user's settings; what the pass is
+   actually using is shown on the status line. Moving the knobs would make the settings drift
+   further with every switch-on.
+3. **ON as a host parameter.** For mapping and for capture. It is saved with the session like any
+   host parameter, so **loading a state lets it go** - a session saved mid-seizure would otherwise
+   open seizing (found by the host test, below).
+4. **Jack's lane list is ROLL's lane list.** One list of which lanes are in, for both. The user
+   asked for per-pad choice in the Jack room; sharing it with ROLL was not asked.
+5. **Burst hits play through the same path as any played hit**, so they advance the per-hit random
+   seed the kit's own variation uses. After a release the stored parameters are exactly as they
+   were; the hits after it are not sample-identical to a run that never engaged Jack, in the same
+   way any extra played note makes them differ.
+
+### Tests
+
+| Test | Result |
+|---|---|
+| Jack off vs the engine before any of this work (`7a3835b`), three presets, and kit 3 (14 body lanes) | **Bit-identical** |
+| `tools/test_jack.cpp` - the real workstation: overlay never written back (after a held pass, after release); nothing included = the plain kit, sample for sample; replace silences the pattern; same seed = same pass, sample for sample, and a different seed differs; hard cut idle next block; recovery idle after its bar; no transport = no bursts; one-bar loop keeps firing; full density and extremity under full scale | **All pass**, added to the Windows CI |
+| `NeoBeatHostTest` with ROLL, Jack held/let go, random Jack settings and lanes in its random edits, the JACK room in its room tour and monkey, and a check that a held state opens let go. Now takes a seed (`NeoBeatHostTest 20 <seed>`) and replays a saved state (`--state file`) | Seeds 7, 2026, 31337, 5, 1234 on the final code: **all pass**. Seed 7 failed before the body fix below |
+| The existing engine tests: `test_sequencer`, `test_room`, `test_analysis`, `test_livefx`, `test_fx`, `test_workstation` | **All pass** |
+| `NeoBeatSnapshot` 19–21: the room idle, held (bursts and seizures counting, three lanes out, self-rolled settings shown), and a lane after ROLL | Looked at |
+
+### Found and fixed on the way
+
+- **Pre-existing: MaterialLab body sounds went NaN at +72 st and above.** Found by the host test on
+  seed 7, in KEY mode: a high MIDI note transposes a lane by up to about +67 st on its own. Eleven of
+  the forty body and rubber sounds broke (Clank and PVC Pipe variants). Cause: the body model
+  (`Source/dsp/MaterialBody.h`) scales an elastic pitch term by energy relative to frame 1; that far
+  up every mode is damped to nothing by frame 1, the ratio runs to 1e19, and `log1p` is handed less
+  than −1. Bounded both; all forty finite at every transposition tried; output **bit-identical** to
+  before on the kit with fourteen body lanes. Jack made it easier to reach (its pitch axis adds up to
+  ±12 st), which is how it surfaced. A NaN in a DAW can silence the track it sits on until reload.
+- **A one-bar loop stalled the lattice** (mine): a jump back re-aimed only when more than four
+  beats out. Now any jump back re-aims. Test 7.
+- **A test of mine was wrong**: its "plain kit" reference had Jack held from −1 s, which made three
+  checks fail against a corrupted reference. Fixed before any result was used.
+
+### Not in this build
+
+- **MidiJaQ's Jack** still runs on `nsr::Chaos`, which writes back - the flaw recorded above. It is
+  to move onto `JackCore` next; not touched here, so MidiJaQ is unchanged by this build.
+- The EFFECT axis in NeoBeat, and offsets on lanes with prepared effects beyond pitch, pan and level.
+- The panel is a test panel, per the user.
+
+---
+
 ## Still open — questions asked and not yet answered
 
 | Question | Asked | Where it blocks |
 |---|---|---|
 | IDM Jack's third axis (micro-timing 1–100 ms) — confirmed? | 26 Nov | It came from research, not from the brief |
+| The five calls in "Claude's calls in this build" (27 Nov): seed per switch-on with LOCK, self-randomise not moving the knobs, ON as a host parameter, one lane list for Jack and ROLL, burst hits advancing the per-hit seed | 27 Nov | Nothing - built that way for the test; any can change |
 | NeoBeat's flat `Source/shared/` vs the other two trees' nested `Source/neobeat/shared/rooms/` | 26 Nov | Byte-identity across trees is impossible by construction; has produced two unbuildable headers so far |

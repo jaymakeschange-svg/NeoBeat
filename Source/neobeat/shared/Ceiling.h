@@ -128,4 +128,37 @@ private:
     int look = 1, write = 0;
 };
 
+// Zero latency, one sample at a time, for use inside an engine's mix.
+//
+// The lookahead Limiter above delays its output, which is fine as the last thing in a chain and
+// wrong inside one: everything after it, and everything it is summed with, would be late. This one
+// takes the gain down on the very sample that needs it - instant attack, so nothing overshoots the
+// ceiling - and lets it back up slowly. What that costs is some distortion on the fastest overs,
+// where a lookahead limiter would have eased in. Set its ceiling just under the safety knee, so
+// while it is working the knee never has to.
+struct PeakLimiter
+{
+    float ceiling = 0.88f;
+    float env = 1.0f, release = 0.9998f, worst = 1.0f;
+
+    void prepare (double sampleRate, float releaseMs = 120.0f) noexcept
+    {
+        release = std::exp (-1.0f / (releaseMs * 0.001f * (float) std::max (8000.0, sampleRate)));
+        env = 1.0f; worst = 1.0f;
+    }
+
+    float gain (float peak) noexcept
+    {
+        const float want = peak > ceiling ? ceiling / peak : 1.0f;
+        env = want < env ? want : want + (env - want) * release;
+        if (env < worst) worst = env;
+        return env;
+    }
+
+    float worstReductionDb() const noexcept
+    {
+        return worst >= 0.999f ? 0.0f : 20.0f * std::log10 (std::max (1.0e-6f, worst));
+    }
+};
+
 } // namespace nsr
