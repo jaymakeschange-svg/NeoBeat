@@ -437,6 +437,26 @@ twenty generations of Grow about half a minute.
    and the fits?
 3. Grow and Wander both in the first build, or one first?
 
+**Settled (the user, 27 Nov, 19:46):** *"1. After 2. Does it affect performance? If yes, then take the alternative
+3. Both, but how much time will it take?"*
+
+| Question | Answer |
+|---|---|
+| NeoBeat's voices | **After** body and file children work. The first build of 7b breeds bodies, crosses and the file |
+| Every child into the pool? | **It does affect performance, so the alternative: only kept children (and the fits) go into the pool.** Measured: each pool sound is 0.4-2.3 MB in memory (1-6 s, stereo) and 30-45 ms of analysis on the message thread (`bc::analyseItem`, which every pool sound gets). One Grow of 20 generations would add 160 sounds: 60-370 MB, and 5-7 s of the window not answering; the kit room's auto-fill and RANDOM also go through the whole pool. Projects are not affected (they keep only the sounds on kit lanes). So a generation's eight children live in the room only, replaced by the next; **Keep** puts one in the pool and saves it as a material file |
+| Grow and Wander | **Both** in the first build |
+
+**Found while answering:** the File children need not be written from scratch. Batchcut's tree already has the
+Matrixxxer's effect library (`Source/neobeat/dsp/MatrixFx.h`: 24 offline spectral and time-domain effects on one
+phase-vocoder engine), which covers the transforms the user named - Spectral Blurring (smear), Freezing,
+Granulation, Idee Fixer and the Grain Streamer (granular). A time stretch that keeps the pitch is a small addition
+to that engine.
+
+**Estimate given (27 Nov, 19:50):** about 3-4 hours of work, in two halves - the engine first (children, scoring
+on a fresh noise draw, Grow and Wander on worker threads, its checks in `test_learner`), then the room (the
+generation of eight, Keep, REACH, Grow and Wander with progress and Cancel, the host test, snapshots, docs).
+Waiting for the user's go.
+
 ## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
 **Asked (the user, 27 Nov):** *"did you include the techno and house new presets for batchcut and
