@@ -99,18 +99,16 @@ instruction: open extremely short, reach echoes by turning one knob.
 Fixed at 0.7–10 ms, which is what the research document specifies. An earlier build used 12 ms,
 which was unjustified.
 
-### IDM Jack — the two open questions, answered
+### IDM Jack — the two questions were answered on the morning of 26 Nov
 
-Both were recorded in [`research/transferable-mechanisms.md`](research/transferable-mechanisms.md)
-on 26 Nov, and both were still listed as open in `PROPOSED-FEATURES.md`, written two hours
-earlier. The features list has been corrected.
+~~An entry here previously claimed the answers were "held, non-destructive takeover" and
+"whatever is sounding".~~ That was written from a stale copy of `PROPOSED-FEATURES.md`: the file had
+been overwritten that evening with its 09:15 version, erasing the commits that recorded the real
+answers. See *Restored 27 Nov* below. The answers, from the spec:
 
-- **Overlay or replace** → neither: a **held, non-destructive takeover**. Chaos while held, the
-  original pattern restored the moment it is released. The written pattern is never altered.
-- **What it repeats** → whatever is sounding. The brief was *rapidly and randomly repeat drum
-  parts* while each sound's parameters get pitched up, down, driven and hollowed.
-- **Still open**: the third randomisation axis (micro-timing, 1–100 ms) came from the Density
-  study, not from the brief.
+- **Overlay or replace — both, as a toggle.** Keep the written pattern and glitch over it, or clear
+  it and run on kit sounds alone.
+- **Source — everything in the kit.** Any lane is fair game; a burst picks from the whole kit.
 
 ### The randomiser and IDM Jack are different things
 
@@ -258,6 +256,27 @@ fails identically at the commit before any of this work. Notes not sending, acce
 undo and redo, two lines on their own channels. Unrelated to Jack, and it means pushes have been
 going out with it red.
 
+#### Where `nsr::Chaos` conflicts with the IDM Jack spec
+
+Found 27 Nov, once the spec was restored. The engine was built the evening before against the stale
+file and gets four things wrong. **The spec is the user's and wins.**
+
+| The spec says | `nsr::Chaos` does |
+|---|---|
+| Parameter chaos **must be an overlay applied at playback — per-hit offsets over the stored values, never written back.** "Cheap to get right at design time and expensive afterwards." | **Writes back** to the live values and restores them on release. Saving a project while held saves the scrambled values; editing a parameter while held is clobbered on release; closing the editor while held (it is driven by the panel's timer) leaves them scrambled |
+| **Each repeat in a burst gets its own parameter offsets** — what separates it from an ordinary stutter | Seizes globally at a lattice step; every hit until the next step shares one value |
+| **Motifs need a memory, not just a seed.** Per-position randomness gives texture. A **figure buffer** stores which lanes, which positions, how many retriggers *and the parameter moves*, and replays stored figures with some probability | Seed plus repeat probability only. The claim made that evening — that repeat probability "is what makes motifs rather than noise" — is contradicted by the spec |
+| **Overlay or replace, as a toggle** | Not built |
+
+What survives unchanged: the lattice, the seed per window, density, extremity, the never-list,
+self-randomise, and the global randomiser's `rollOnce()` — which **should** write back, because the
+randomiser is a destination and the spec's overlay rule is about Jack.
+
+**Consequence for the architecture.** An overlay applied per hit belongs where hits happen: in the
+engine, on the audio thread, at voice trigger. That also removes the message-thread driving, the
+save-while-held problem and the editor-closed problem in one move — they all came from writing
+back.
+
 #### C — IDM Jack. A room. NeoBeat and MidiJaQ, later JaqRack. Not Batchcut.
 
 Switch it on and it takes over: continuous, uncontrollable seizures of every parameter and feature
@@ -295,6 +314,18 @@ randomiser.
 | **Implemented** | This file, [`REFERENCES.md`](REFERENCES.md), provenance headers in each module naming the spec it was built to, and the research documents committed as markdown |
 
 ---
+
+### Restored 27 Nov — `PROPOSED-FEATURES.md`
+
+On the evening of 26 Nov, rebuilding the docs, the file was taken from its 09:15 commit and copied
+over all three trees. That erased five later commits: the answered IDM Jack spec (849e695,
+db02512), the three settled decisions (eed01a7), interiority and detector-driven placement
+(6851506). It is why the user had to say "I already answered those questions" while the answers
+could not be found — they had been deleted.
+
+Restored from the 16:09 version (`875ad01`) with the evening's decisions re-applied on top. The
+lesson is the same one this file exists for, one level down: the newest version of a document has
+to be found by asking git which commit is last, not by remembering which one was read first.
 
 ## Still open — questions asked and not yet answered
 
