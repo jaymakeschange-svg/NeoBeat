@@ -246,17 +246,30 @@ PolyNodes, and what to build.md`, in the MidiJaQ tree, §3-4):
 - Related and already listed: the learner's 16-band dense-noise layer (above), without which a
   fitted body is cleaner than anything physical.
 
-Open, to settle with the user before building: which engines the search breeds (the material model
-only, or NeoBeat's patch voices and samples too), and whether the learner's own fitting is ported
-or replaced by the search.
+**Settled (the user, 27 Nov, ~16:00):**
 
-## Batchcut: house and techno presets — asked 27 Nov, not built
+| Question | Answer |
+|---|---|
+| What does the search breed variants from? | **Everything, including the file itself**: the MaterialLab model, NeoBeat's patch voices and recipes, and transforms of the dropped audio (stretch, spectral, granular) - so some variants stay recognisably the recording |
+| How does a dropped file become a model? | **Port the learner's fitting** into Batchcut, then the search varies around what it fits. Needs the learner's source, which is on the user's computer (MaterialLab folder) |
+
+Not started. First step: read the learner's source and its fitting, with the user's permission to
+open that folder.
+
+## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
 
 **Asked (the user, 27 Nov):** *"did you include the techno and house new presets for batchcut and
 neobeat?"* - they were in neither. NeoBeat's sixteen were written the same day (NeoBeat table
 above). Batchcut's are still to do: its patterns come from the same pattern bank file as NeoBeat's
 (`PatternBank.h`, which its Kit room uses to audition a kit), so carrying the sixteen across is the
 first step; whether Batchcut also needs loop or KEYS presets in these genres is a question for the
-user. Earlier record of the wish: the plugin-family notes, "techno and house pattern presets in
+user.
+
+**Done, 27 Nov:** the same pattern bank file carried into Batchcut's tree, and MidiJaQ's (it shares
+the file, and the rule is that shared files stay identical across the family). The sixteen appear
+in Batchcut's Kit room pattern list and the Loops room's rhythm list, as 129-144; the first 128 are
+unchanged (checked). Batchcut's host test now draws random patterns from all 144 and passes, the
+Kit room section and the long random session included. Loop and KEYS presets in these genres: not
+made, and not asked yet. Earlier record of the wish: the plugin-family notes, "techno and house pattern presets in
 Batchcut and NeoBeat too ... while everything stays grounded in new jack swing".
 

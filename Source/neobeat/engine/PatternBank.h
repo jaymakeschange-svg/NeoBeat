@@ -1,5 +1,6 @@
-// NeoBeat — the pattern bank: the 128 patterns of the sequencer (50 written by hand in Presets.h and 78
-// variations of them), and the lanes' roles. Depends on nothing but the sequencer, so Batchcut's Kit
+// NeoBeat — the pattern bank: the patterns of the sequencer - 50 new jack swing patterns written by
+// hand in Presets.h, 78 variations of them, then 16 house and techno patterns (from 129) - and the
+// lanes' roles. Depends on nothing but the sequencer, so Batchcut's Kit
 // room uses the same file to audition a kit.
 #pragma once
 
@@ -17,12 +18,18 @@ inline const char* roleName (int lane)
     return n[std::max (0, std::min (lane, 15))];
 }
 
-// ------------------------------------------------------------------ main sequencer: 128 patterns
+// ------------------------------------------------------------------ main sequencer: 144 patterns
 // The 50 hand-written presets, then 78 variations of them (ghost-note fills, triplet hat rolls,
-// pushed kicks, open-hat lifts), named after their parents.
-inline int numPatterns() { return 128; }
+// pushed kicks, open-hat lifts), named after their parents, then the 16 house and techno patterns.
+constexpr int kSwingPatterns = 128;        // the new jack swing patterns and their variations
+inline int numPatterns() { return kSwingPatterns + (int) clubPresets().size(); }
 inline Preset patternPreset (int index)
 {
+    if (index >= kSwingPatterns)
+    {
+        const auto& club = clubPresets();
+        return club[(size_t) std::min (index - kSwingPatterns, (int) club.size() - 1)];
+    }
     const auto& base = presets();
     if (index < (int) base.size()) return base[(size_t) std::max (0, index)];
     const int v = index - (int) base.size();
