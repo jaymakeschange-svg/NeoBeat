@@ -17,7 +17,12 @@ for t in start fitted; do                                                       
   python3 -I grad_y.py PKG_DIR OUTDIR $t
   X64=1 python3 -I grad_terms.py PKG_DIR OUTDIR $t
 done
+for t in start fitted; do python3 -I grad_u64.py PKG_DIR OUTDIR $t; done                # stage 5b
+python3 -I -c "import numpy as np; d=np.load('OUTDIR/fit.npz'); open('OUTDIR/fit_history.txt','w').write(' '.join(repr(float(v)) for v in d['history']))"
+AS_PORT=1 STEPS=6 python3 -I fit64.py PKG_DIR OUTDIR                                  # stage 6a
 g++ -std=c++17 -O2 -o test_learner ../test_learner.cpp && ./test_learner OUTDIR
+LEARNER_FIT=1 ./test_learner OUTDIR                     # stage 6b: one whole fit, minutes
+TEST=./test_learner REF=REFDIR ./spread.sh CLIP 3       # one whole fit, nudged by 1e-7 (index 3)
 ```
 
 Precision. The learner runs in single precision; the port runs in double. Where that matters the
@@ -36,3 +41,10 @@ rounding, and report the single-precision numbers beside them:
 `ref1.py` re-scores an existing fitted material with the learner's own loss: the first check that
 the reference reproduces the learner as it ran for the user (PVC pipe: 0.66861 + regularisation
 0.00213 = 0.67074, the recorded loss).
+
+Path dependence (stage 6). Adam moves every parameter by about its rate whatever the size of its
+gradient, so a parameter whose gradient is at roundoff level takes a full step in whichever
+direction the roundoff says. Different rounding - float32 against double, or a 1e-7 nudge of the
+start - parts the paths after three or four steps, and the fits end in different places. The checks
+hold the first three steps to the learner's (fit64.py with AS_PORT=1) and report whole fits beside
+the learner's recorded ones without a pass mark on where one run ends.

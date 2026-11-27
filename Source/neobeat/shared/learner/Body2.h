@@ -74,7 +74,8 @@ inline std::array<double, kBands> bandCentres (double fs)
 // and the dense layer's. `phases` holds the two start phases of each mode's pair (2 x k); the
 // learner starts every mode at pi/2, a cosine phase, so a strike is coherent.
 //
-// `ctl` receives the control-rate state for the gradient pass to reuse (may be null).
+// `tr` receives the control-rate state for the gradient pass to reuse (may be null). `out` is float
+// for playing, double for fitting.
 struct BodyTrace
 {
     int nf = 0, k = 0;
@@ -82,8 +83,9 @@ struct BodyTrace
     std::vector<double> sigma, gain, low;
 };
 
+template <typename Out>
 inline void render (const Body& p, int n, double fs, const float* bands, const float* body,
-                    const double* phases, float* out, BodyTrace* tr = nullptr)
+                    const double* phases, Out* out, BodyTrace* tr = nullptr)
 {
     const int k = p.modes();
     const int nf = n / kHop + 2;
@@ -187,7 +189,7 @@ inline void render (const Body& p, int n, double fs, const float* bands, const f
             const double envB = std::exp (-sigB[(size_t) b] * t - cxB[(size_t) b] * held) * att;
             bodyS += p.dn[(size_t) b] * envB * body[(size_t) b * n + s];
         }
-        out[s] = (float) (y + click * envN + bodyS);
+        out[s] = (Out) (y + click * envN + bodyS);
     }
 
     if (tr != nullptr)

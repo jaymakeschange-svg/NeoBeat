@@ -117,7 +117,8 @@ public:
     }
 
     // The loss of a render (same length as the target).
-    double value (const float* y) const
+    template <typename T>
+    double value (const T* y) const
     {
         double total = 0.0;
         for (int i = 0; i < 3; ++i)

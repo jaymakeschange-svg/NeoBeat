@@ -6,9 +6,13 @@
 #include "../Source/neobeat/shared/learner/Body2.h"
 #include "../Source/neobeat/shared/learner/Loss2.h"
 #include "../Source/neobeat/shared/learner/Analysis2.h"
+#include "../Source/neobeat/shared/learner/Fit2.h"
+#include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <map>
+#include <random>
 #include <sstream>
 #include <string>
 #include <cstdlib>
@@ -242,6 +246,169 @@ static void stage5a (const std::string& g, const char* tag)
     CHECK (c > 0.9995, "%s: points the same way as the learner's own gradient", tag);
 }
 
+static std::map<std::string, std::vector<double>> readKeyed (const std::string& path)
+{
+    std::map<std::string, std::vector<double>> kv;
+    std::ifstream f (path); std::string line;
+    while (std::getline (f, line))
+    {
+        std::istringstream is (line); std::string key; size_t n = 0; is >> key >> n;
+        std::vector<double> v (n); for (auto& x : v) is >> x;
+        kv[key] = v;
+    }
+    return kv;
+}
+
+// a keyed file (u.txt, gu.txt, gu64.txt) as flat Params
+static ml::Params readParams (const std::string& path)
+{
+    auto kv = readKeyed (path);
+    ml::Params u ((int) kv["logf"].size());
+    for (int key = 0; key < ml::kModeKeys; ++key) for (int m = 0; m < u.k; ++m) u.mode (key)[m] = kv[ml::modeKeyName (key)].at ((size_t) m);
+    for (int key = 0; key < ml::kGlobalKeys; ++key) u.global (key) = kv[ml::globalKeyName (key)].at (0);
+    for (int key = 0; key < ml::kBandKeys; ++key) for (int b = 0; b < ml::kBands; ++b) u.band (key)[b] = kv[ml::bandKeyName (key)].at ((size_t) b);
+    return u;
+}
+
+static void stage5b (const std::string& g, const char* tag)
+{
+    const std::string dir = g + "/" + tag;
+    const auto x = readRaw<float> (g + "/x.f32");
+    std::ifstream mf (g + "/meta.json"); std::string meta ((std::istreambuf_iterator<char> (mf)), {});
+    const auto at = meta.find ("\"noise_floor_db\":");
+    bool has = false; double floor = 0.0;
+    if (at != std::string::npos) { const auto v = meta.substr (at + 17); if (v.find ("null") > 2) { has = true; floor = std::atof (v.c_str()); } }
+    const ml::Loss2 loss (x.data(), (int) x.size(), 48000.0, has, floor);
+    const auto bands = readRaw<float> (dir + "/bands.f32"), bodyb = readRaw<float> (dir + "/bodyb.f32");
+    const auto phases = readRaw<double> (dir + "/phases.f64");
+    ml::Scene sc; sc.n = (int) x.size(); sc.bands = bands.data(); sc.body = bodyb.data(); sc.phases = phases.data();
+    const auto u = readParams (dir + "/u.txt");
+    ml::Params gu;
+    const auto t0 = std::chrono::steady_clock::now();
+    const double v = ml::objective (u, loss, sc, &gu);
+    const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    const double want = std::ifstream (dir + "/loss64.txt") ? readNumber (dir + "/loss64.txt") : v;
+    std::printf ("  %s: objective %.9f here, %.9f in the learner (double); value and gradient in %.2f s\n", tag, v, want, secs);
+    CHECK (std::fabs (v - want) < 1e-7 * std::fabs (want), "%s: the objective at u is the learner's", tag);
+
+    auto ref = readParams (dir + "/gu64.txt");
+    double worst = 0.0; std::string worstKey;
+    auto cmp = [&] (const char* name, const double* a, const double* b, int len)
+    {
+        double d2 = 0, b2 = 0;
+        for (int i = 0; i < len; ++i) { d2 += (a[i] - b[i]) * (a[i] - b[i]); b2 += b[i] * b[i]; }
+        const double r = std::sqrt (d2 / (b2 + 1e-300));
+        if (b2 > 0 && r > worst) { worst = r; worstKey = name; }
+        if (std::getenv ("LEARNER_VERBOSE")) std::printf ("    %-7s rel %.2e  |ref| %.3e\n", name, r, std::sqrt (b2));
+    };
+    for (int key = 0; key < ml::kModeKeys; ++key) cmp (ml::modeKeyName (key), gu.mode (key), ref.mode (key), u.k);
+    for (int key = 0; key < ml::kGlobalKeys; ++key) cmp (ml::globalKeyName (key), &gu.global (key), &ref.global (key), 1);
+    for (int key = 0; key < ml::kBandKeys; ++key) cmp (ml::bandKeyName (key), gu.band (key), ref.band (key), ml::kBands);
+    std::printf ("    every parameter's gradient against JAX's in double precision: worst relative difference %.1e (%s)\n", worst, worstKey.c_str());
+    CHECK (worst < 1e-5, "%s: the gradient with respect to all %zu parameters is JAX's", tag, u.size());
+    if (std::ifstream (dir + "/gu.txt"))
+    {
+        double c, r; compareGrad (gu.v, readParams (dir + "/gu.txt").v, c, r);
+        std::printf ("    against the learner's own float32 gradient: cosine %.6f\n", c);
+    }
+}
+
+static void stage6 (const std::string& g)
+{
+    const std::string dir = g + "/start";
+    const auto xf = readRaw<float> (g + "/x.f32");
+    const std::vector<double> x (xf.begin(), xf.end());
+    std::ifstream mf (g + "/meta.json"); std::string meta ((std::istreambuf_iterator<char> (mf)), {});
+    const auto at = meta.find ("\"noise_floor_db\":");
+    bool has = false; double floor = 0.0;
+    if (at != std::string::npos) { const auto v = meta.substr (at + 17); if (v.find ("null") > 2) { has = true; floor = std::atof (v.c_str()); } }
+    const ml::Loss2 loss (xf.data(), (int) xf.size(), 48000.0, has, floor);
+    const auto bands = readRaw<float> (dir + "/bands.f32"), bodyb = readRaw<float> (dir + "/bodyb.f32");
+    const auto phases = readRaw<double> (dir + "/phases.f64");
+    ml::Scene sc; sc.n = (int) xf.size(); sc.bands = bands.data(); sc.body = bodyb.data(); sc.phases = phases.data();
+
+    // the whole pipeline: this port's analysis, starting body and freeze mask, then the fit
+    ml::FitOptions opt;
+    const auto p0 = ml::an::initialBody (x, 48000, &opt.keepGlide);
+    std::vector<double> hist;
+    { std::ifstream hf (g + "/fit_history.txt"); double v; while (hf >> v) hist.push_back (v); }
+    if (const char* pe = std::getenv ("LEARNER_PERTURB"))
+    {
+        // a nudge of the starting point at float32's resolution (1e-7), different for each index:
+        // how far the outcome moves with it is how path-dependent the fit is
+        const int idx = std::atoi (pe);
+        opt.adjustStart = [idx] (ml::Params& u)
+        {
+            std::mt19937 rng ((unsigned) idx);
+            for (auto& v : u.v) v += idx == 0 ? 0.0 : 1e-7 * (rng() % 2 ? 1.0 : -1.0);
+        };
+        opt.progress = nullptr;
+    }
+    opt.everyStepUntil = std::getenv ("LEARNER_EVERY") ? std::atoi (std::getenv ("LEARNER_EVERY")) : 0;
+    opt.steps = std::getenv ("LEARNER_STEPS") ? std::atoi (std::getenv ("LEARNER_STEPS")) : 300;
+    if (! opt.adjustStart) opt.progress = [&] (int i, int steps, double v)
+    { std::printf ("    step %3d/%d  %.4f   learner %.4f\n", i, steps, v, i - 1 < (int) hist.size() ? hist[(size_t) i - 1] : 0.0); std::fflush (stdout); };
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto r = ml::fit (xf.data(), loss, sc, p0, opt);
+    const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    if (std::getenv ("LEARNER_DUMP"))
+    {
+        // the fit's best point, keyed like u.txt, for checking the gradient there against JAX
+        if (std::system (("mkdir -p '" + g + "/cppfit'").c_str()) != 0) std::printf ("  (could not make cppfit)\n");
+        std::ofstream o (g + "/cppfit/u.txt");
+        o << std::setprecision (17);
+        auto line = [&] (const char* name, const double* v, int len) { o << name << " " << len; for (int i = 0; i < len; ++i) o << " " << v[i]; o << "\n"; };
+        for (int key = 0; key < ml::kModeKeys; ++key) line (ml::modeKeyName (key), r.best.mode (key), r.best.k);
+        for (int key = 0; key < ml::kGlobalKeys; ++key) { const double v = r.best.global (key); line (ml::globalKeyName (key), &v, 1); }
+        for (int key = 0; key < ml::kBandKeys; ++key) line (ml::bandKeyName (key), r.best.band (key), ml::kBands);
+    }
+    if (std::getenv ("LEARNER_DUMP")) { std::ofstream o (g + "/cpp_fit_history.txt"); for (double v : r.history) o << std::setprecision (17) << v << " "; }
+    const double lStart = hist.front(), lBest = *std::min_element (hist.begin(), hist.end());
+    std::printf ("  %d modes, 300 steps in %.0f s: start %.6f (learner %.6f), best %.6f (learner %.6f)\n",
+                 p0.modes(), secs, r.startLoss, lStart, r.loss, lBest);
+    CHECK (std::fabs (r.startLoss - lStart) < 2e-3 * lStart, "the fit starts where the learner's does (float32 against double: 2e-3)");
+    // No pass mark on where one run ends: the learner's fit is path-dependent. Nudging the start by
+    // float32's resolution moves the final loss by up to 40%% in the port and in the learner alike
+    // (docs/PROPOSED-FEATURES.md, stage 6); stage 6a checks the steps themselves.
+    CHECK (r.loss < 0.5 * r.startLoss, "the fit learns (best under half the start)");
+}
+
+// stage 6a: the optimiser step for step. Six steps of the learner's fit2.fit in double precision with
+// the port's two choices (window and starting point rounded to float32: fit64b.py, AS_PORT=1 STEPS=6)
+// against six steps here. The paths agree until roundoff-level gradients on parameters that barely
+// matter flip Adam's sign (Adam moves every parameter by about its rate whatever the gradient's
+// size, so a gradient of 1e-16 either way is a full step either way). That shows from step 4 or 5;
+// the first three (two updates, bias correction and schedule included) are held to 1e-6.
+static void stage6a (const std::string& g)
+{
+    const std::string dir = g + "/start";
+    const auto xf = readRaw<float> (g + "/x.f32");
+    const std::vector<double> x (xf.begin(), xf.end());
+    std::ifstream mf (g + "/meta.json"); std::string meta ((std::istreambuf_iterator<char> (mf)), {});
+    const auto at = meta.find ("\"noise_floor_db\":");
+    bool has = false; double floor = 0.0;
+    if (at != std::string::npos) { const auto v = meta.substr (at + 17); if (v.find ("null") > 2) { has = true; floor = std::atof (v.c_str()); } }
+    const ml::Loss2 loss (xf.data(), (int) xf.size(), 48000.0, has, floor);
+    const auto bands = readRaw<float> (dir + "/bands.f32"), bodyb = readRaw<float> (dir + "/bodyb.f32");
+    const auto phases = readRaw<double> (dir + "/phases.f64");
+    ml::Scene sc; sc.n = (int) xf.size(); sc.bands = bands.data(); sc.body = bodyb.data(); sc.phases = phases.data();
+    ml::FitOptions opt;
+    opt.steps = 6;
+    const auto r = ml::fit (xf.data(), loss, sc, ml::an::initialBody (x, 48000, &opt.keepGlide), opt);
+    std::vector<double> ref;
+    { std::ifstream hf (g + "/fit64port6_history.txt"); double v; while (hf >> v) ref.push_back (v); }
+    double worst4 = 0.0;
+    std::printf ("  step:");
+    for (size_t i = 0; i < std::min (r.history.size(), ref.size()); ++i)
+    {
+        const double d = std::fabs (r.history[i] - ref[i]) / ref[i];
+        if (i < 3) worst4 = std::max (worst4, d);
+        std::printf ("  %zu %.1e", i + 1, d);
+    }
+    std::printf ("  (relative difference from the learner)\n");
+    CHECK (r.history.size() == 6 && ref.size() == 6 && worst4 < 1e-6, "the first three steps are the learner's (Adam, rates, schedule, regularisation, freeze, level match)");
+}
+
 int main (int argc, char** argv)
 {
     const std::string g = argc > 1 ? argv[1] : "/tmp/mlref/pvc";
@@ -256,6 +423,20 @@ int main (int argc, char** argv)
     stage4b (g);
     std::printf ("stage 5a: the loss's gradient, against jax.grad (make_loss)\n");
     if (std::ifstream (g + "/start/gy_spec_x64.f64")) { stage5a (g, "start"); stage5a (g, "fitted"); }
+    std::printf ("stage 5b: back through the body to the parameters, against jax.grad (objective)\n");
+    for (const char* tag : { "start", "fitted" })
+        if (std::ifstream (g + "/" + tag + "/gu64.txt")) stage5b (g, tag);
+    if (const char* at = std::getenv ("LEARNER_AT")) stage5b (g, at);      // any other point (tests)
+    if (std::ifstream (g + "/fit64port6_history.txt"))
+    {
+        std::printf ("stage 6a: the optimiser, step for step, against fit2.fit in double precision\n");
+        stage6a (g);
+    }
+    if (std::getenv ("LEARNER_FIT") && std::ifstream (g + "/fit_history.txt"))
+    {
+        std::printf ("stage 6b: a whole fit, beside fit2.fit from scratch\n");
+        stage6 (g);
+    }
     std::printf ("\n%s: %d failure(s)\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
 }
