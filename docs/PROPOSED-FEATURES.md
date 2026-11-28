@@ -6,8 +6,9 @@ shared tree; Batchcut appears only where a change touches it.
 Status key: **proposed** (not specced), **specced** (design settled, not built), **building**,
 **done**, **open question** (needs a decision before it can be specced).
 
-Last updated 26 November 2026. Four decisions settled this session: MIDI export (baked),
-loose pool sounds (save), BassMono (whole mix), and the IDM Jack spec.
+Last updated 28 November 2026 (two entries corrected: the dense-noise layer, the house and techno presets).
+Settled 26 November: MIDI export (baked), loose pool sounds (save), BassMono (whole mix), and the IDM Jack
+spec.
 
 > **Restored 27 Nov.** On the evening of 26 Nov this file was overwritten with its 09:15 version,
 > erasing five later commits: the answered IDM Jack spec, the three settled decisions, interiority,
@@ -208,7 +209,7 @@ on VCV Rack (GPLv3). See the generative-engines doc §6.
 | `.njqloop` round-trip loop preset | shared |
 | Audio import and drag-and-drop fixes | MidiJaQ |
 
-## Learner: the 16-band dense-noise layer — requested 26 Nov, not started
+## Learner: the 16-band dense-noise layer — requested 26 Nov, *partly done 27 Nov*
 
 MaterialLab's resonator form carried the modes across from the learner but not the 16-band dense
 noise layer that sits under them. Struck bodies are not only modes: the strike itself is broadband,
@@ -219,6 +220,19 @@ Wanted: the learner's 16-band noise restored, so generated sounds are accurate r
 tonally correct. Shares its band layout with `nsr::SpectralDelay`, which already splits 16 log
 spaced bands and is now in the shared tree — the split is the same piece of maths and should not
 be written twice.
+
+**Where it stands (corrected 28 Nov, asked: "What's left on the to do list?", then "Yes" to correcting
+it).** *Done for what the learner port renders:* the port in Batchcut (`learner/Body2.h`, stage 2 above)
+renders the learner's whole engine, the 16-band dense layer (`dn`, `dn_rho`) and the strike click
+included, held to the learner's own render at 2.6e-8 - so every fit (stage 7a), every bred child and
+every material from scratch (7b) has it, in the pool, in its saved WAV and in its material file.
+*Not done:* the MATERIAL room's own player (`nsr::Material` - Strike, Render 8 hits, Send through) still
+plays the modes only; it reads none of the noise parameters from a material file. NeoBeat and MidiJaQ
+have the same player. *A correction to the note above:* the two splits share the formula (16 bands, log
+spaced), not the bands. The learner's are fixed at 60 Hz - 20 kHz, and a material's noise numbers mean
+those bands and no others; `nsr::SpectralDelay`'s span is a control (90 Hz - 9 kHz by default). So the
+player can share the formula, but must use the learner's fixed edges (`ml::bandEdges`) for a material's
+noise to sound as it was fitted.
 
 ## Batchcut: generate pools of variants from any file — requested 27 Nov, after the current NeoBeat build
 
@@ -585,7 +599,7 @@ sent there. The random session saves and sends too. (The right-click menu itself
 virtual display, which has no window manager; the tests drive the same actions the menu calls.) Seeds 1, 7 and
 2026: all pass. Built for Windows by the push that added it (see the Actions run for `batchcut-3.0`).
 
-## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov (in the repo, not yet in a Batchcut download)*
+## Batchcut: house and techno presets — asked 27 Nov, *built 27 Nov; in the Batchcut downloads of 27 Nov*
 
 **Asked (the user, 27 Nov):** *"did you include the techno and house new presets for batchcut and
 neobeat?"* - they were in neither. NeoBeat's sixteen were written the same day (NeoBeat table
@@ -601,4 +615,8 @@ unchanged (checked). Batchcut's host test now draws random patterns from all 144
 Kit room section and the long random session included. Loop and KEYS presets in these genres: not
 made, and not asked yet. Earlier record of the wish: the plugin-family notes, "techno and house pattern presets in
 Batchcut and NeoBeat too ... while everything stays grounded in new jack swing".
+
+**In a download (corrected 28 Nov):** both Windows builds of 27 Nov were made from `batchcut-3.0` with the sixteen
+already in it (Actions runs 46059893245 and 46069560742; `PatternBank.h`: 128 swing patterns plus the sixteen,
+144 in all).
 
